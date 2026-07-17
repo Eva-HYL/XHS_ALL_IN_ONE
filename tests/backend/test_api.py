@@ -6461,3 +6461,97 @@ def test_run_monitoring_refresh_for_all_users_refreshes_active_targets(tmp_path)
             db.close()
     finally:
         app.dependency_overrides.pop(db_dependency, None)
+
+
+def test_illustration_pipeline_models_persist(tmp_path):
+    from decimal import Decimal
+    from backend.app.models import IllustrationAsset, Character, UsageRecord
+
+    db_dependency = _override_database(tmp_path)
+    try:
+        session_factory = app.dependency_overrides[db_dependency]
+        session = next(session_factory())
+        inspector = inspect(session.bind)
+        assert "illustration_assets" in inspector.get_table_names()
+        assert "characters" in inspector.get_table_names()
+        assert "usage_records" in inspector.get_table_names()
+
+        register = client.post("/api/auth/register", json={"username": "modeltest", "password": "pw123456"})
+        user_id = register.json()["user"]["id"]
+
+        session = next(session_factory())
+
+        # Character with empty anchors (Phase 0 verified: fully usable text-only)
+        char = Character(
+            user_id=user_id,
+            name="小猫",
+            slug="xiaomao",
+            ip_definition="chubby lazy tortoiseshell cat",
+            reference_image_asset_ids=[],
+            created_via="text_only",
+        )
+        session.add(char)
+        session.commit()
+        session.refresh(char)
+        assert char.id is not None
+        assert char.reference_image_asset_ids == []
+
+        # IllustrationAsset as an anchor
+        anchor = IllustrationAsset(
+            user_id=user_id,
+            character_id=char.id,
+            role="character_anchor",
+            pipeline_run_id=None,
+            shot_seq=None,
+            prompt="anchor prompt",
+            model="doubao-seedream-5-0-260128",
+            size="1024x1024",
+            reference_asset_ids=[],
+            file_path="https://example.invalid/anchor.png",
+            provider_raw={"usage": {"generated_images": 1}},
+        )
+        session.add(anchor)
+        session.commit()
+        session.refresh(anchor)
+        assert anchor.id is not None
+        assert anchor.role == "character_anchor"
+
+        # IllustrationAsset as a pipeline-produced illustration
+        illust = IllustrationAsset(
+            user_id=user_id,
+            character_id=char.id,
+            role="illustration",
+            pipeline_run_id="run-abc",
+            shot_seq=1,
+            prompt="shot prompt",
+            model="doubao-seedream-5-0-260128",
+            size="3:4",
+            reference_asset_ids=[anchor.id],
+            file_path="https://example.invalid/shot1.png",
+            provider_raw=None,
+        )
+        session.add(illust)
+        session.commit()
+        session.refresh(illust)
+        assert illust.reference_asset_ids == [anchor.id]
+
+        # UsageRecord
+        rec = UsageRecord(
+            user_id=user_id,
+            pipeline_run_id="run-abc",
+            step="image_gen",
+            model="doubao-seedream-5-0-260128",
+            image_count=1,
+            unit_price_snapshot={"yuan_per_image": "0.26"},
+            cost_yuan=Decimal("0.2600"),
+        )
+        session.add(rec)
+        session.commit()
+        session.refresh(rec)
+        assert rec.cost_yuan == Decimal("0.2600")
+
+        # Legacy AiGeneratedAsset must still exist and be independent
+        from backend.app.models import AiGeneratedAsset
+        assert "ai_generated_assets" in inspector.get_table_names()
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
