@@ -6623,3 +6623,73 @@ def test_usage_recording_persists_text_and_image_records(tmp_path):
         assert sum((r.cost_yuan for r in totals), Decimal("0")) == Decimal("1.5775")
     finally:
         app.dependency_overrides.pop(db_dependency, None)
+
+
+def test_characters_crud_end_to_end(tmp_path):
+    db_dependency = _override_database(tmp_path)
+    try:
+        register = client.post("/api/auth/register", json={"username": "chartest", "password": "pw123456"})
+        token = register.json()["access_token"]
+        h = {"Authorization": f"Bearer {token}"}
+
+        # Create — nurse, text-only (Phase 0: text-based IP is the primary lock)
+        r = client.post("/api/characters", headers=h, json={
+            "name": "小护士", "slug": "nurse",
+            "ip_definition": "warm efficient nurse in white coat with clipboard",
+            "reference_image_asset_ids": [],
+            "created_via": "text_only",
+        })
+        assert r.status_code == 201, r.text
+        created = r.json()
+        char_id = created["id"]
+        assert created["reference_image_asset_ids"] == []
+
+        # List
+        r = client.get("/api/characters", headers=h)
+        assert r.status_code == 200
+        items = r.json()["items"]
+        assert len(items) == 1
+        assert items[0]["slug"] == "nurse"
+
+        # Get
+        r = client.get(f"/api/characters/{char_id}", headers=h)
+        assert r.status_code == 200
+        assert r.json()["name"] == "小护士"
+
+        # Patch
+        r = client.patch(f"/api/characters/{char_id}", headers=h, json={
+            "ip_definition": "warm efficient nurse in scrubs",
+            "reference_image_asset_ids": [7, 8, 9],
+        })
+        assert r.status_code == 200
+        patched = r.json()
+        assert "scrubs" in patched["ip_definition"]
+        assert patched["reference_image_asset_ids"] == [7, 8, 9]
+
+        # Delete
+        r = client.delete(f"/api/characters/{char_id}", headers=h)
+        assert r.status_code == 204
+        r = client.get(f"/api/characters/{char_id}", headers=h)
+        assert r.status_code == 404
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+
+
+def test_characters_are_owner_scoped(tmp_path):
+    db_dependency = _override_database(tmp_path)
+    try:
+        rA = client.post("/api/auth/register", json={"username": "ownerAA", "password": "pw123456"})
+        hA = {"Authorization": f"Bearer {rA.json()['access_token']}"}
+        c = client.post("/api/characters", headers=hA, json={
+            "name": "A猫", "slug": "cat-a", "ip_definition": "x",
+        }).json()
+
+        rB = client.post("/api/auth/register", json={"username": "userBB", "password": "pw123456"})
+        hB = {"Authorization": f"Bearer {rB.json()['access_token']}"}
+
+        # Cross-user access returns 404 (never 403 — don't leak existence)
+        assert client.get(f"/api/characters/{c['id']}", headers=hB).status_code == 404
+        assert client.patch(f"/api/characters/{c['id']}", headers=hB, json={"name": "hacked"}).status_code == 404
+        assert client.delete(f"/api/characters/{c['id']}", headers=hB).status_code == 404
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
