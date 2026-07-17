@@ -6771,8 +6771,7 @@ def test_generate_illustration_image_persists_asset_and_usage(tmp_path, monkeypa
         app.dependency_overrides.pop(db_dependency, None)
 
 
-def test_generate_illustration_image_rejects_other_users_character(tmp_path, monkeypatch):
-    from backend.app.services import ai_service
+def test_generate_illustration_image_rejects_other_users_character(tmp_path):
     from backend.app.models import Character, ModelConfig
     from backend.app.core.security import encrypt_text
 

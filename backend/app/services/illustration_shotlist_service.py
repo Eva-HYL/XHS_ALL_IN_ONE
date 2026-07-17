@@ -46,15 +46,29 @@ def _call_text_model_json(
         "temperature": temperature,
         "response_format": {"type": "json_object"},
     }
-    resp = requests.post(
-        endpoint,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json=body,
-        timeout=180,
-    )
-    resp.raise_for_status()
-    payload = resp.json()
-    content = payload["choices"][0]["message"]["content"]
+    try:
+        resp = requests.post(
+            endpoint,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=body,
+            timeout=180,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        detail = ""
+        try:
+            if getattr(exc, "response", None) is not None:
+                err = exc.response.json()
+                if isinstance(err, dict):
+                    detail = err.get("error", {}).get("message", "") or str(err)[:200]
+        except Exception:
+            pass
+        raise ValueError(f"Shotlist generation failed: {detail or exc}") from exc
+    try:
+        payload = resp.json()
+        content = payload["choices"][0]["message"]["content"]
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise ValueError("Text response missing choices[0].message.content") from exc
     usage = payload.get("usage", {}) or {}
     return content, usage
 
