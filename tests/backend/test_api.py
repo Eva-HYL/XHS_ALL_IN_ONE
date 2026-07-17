@@ -6555,3 +6555,30 @@ def test_illustration_pipeline_models_persist(tmp_path):
         assert "ai_generated_assets" in inspector.get_table_names()
     finally:
         app.dependency_overrides.pop(db_dependency, None)
+
+
+def test_pricing_service_calculates_text_and_image_costs():
+    from decimal import Decimal
+    from backend.app.services.pricing_service import (
+        calculate_text_cost,
+        calculate_image_cost,
+        get_pricing,
+    )
+    # Text: 1000 in + 2000 out of qwen3.7-max
+    # = (1000 * 2.5 + 2000 * 7.5) / 1_000_000 = 0.0175
+    assert calculate_text_cost("qwen3.7-max", 1000, 2000) == Decimal("0.0175")
+
+    # Image: 6 doubao seedream 5.0 images
+    assert calculate_image_cost("doubao-seedream-5-0-260128", 6) == Decimal("1.5600")
+
+    # Loud failure on unknown model
+    import pytest
+    with pytest.raises(KeyError, match="unknown-model"):
+        calculate_text_cost("unknown-model", 100, 100)
+    with pytest.raises(KeyError, match="also-unknown"):
+        calculate_image_cost("also-unknown", 1)
+
+    pricing = get_pricing()
+    assert "qwen3.7-max" in pricing["text_models"]
+    assert "doubao-seedream-4-0" in pricing["image_models"]
+    assert pricing["meta"]["last_verified"] == "2026-07-17"
