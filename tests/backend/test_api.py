@@ -6808,3 +6808,92 @@ def test_generate_illustration_image_rejects_other_users_character(tmp_path, mon
         assert r.status_code == 404
     finally:
         app.dependency_overrides.pop(db_dependency, None)
+
+
+def test_generate_shotlist_endpoint(tmp_path, monkeypatch):
+    from backend.app.models import Character, ModelConfig, UsageRecord
+    from backend.app.core.security import encrypt_text
+    import backend.app.services.illustration_shotlist_service as ss
+
+    db_dependency = _override_database(tmp_path)
+    try:
+        register = client.post("/api/auth/register", json={"username": "shot1", "password": "pw123456"})
+        user_id = register.json()["user"]["id"]
+        token = register.json()["access_token"]
+        h = {"Authorization": f"Bearer {token}"}
+
+        session_factory = app.dependency_overrides[db_dependency]
+        session = next(session_factory())
+
+        session.add(ModelConfig(
+            user_id=user_id, name="txt", model_type="text", provider="openai-compatible",
+            model_name="qwen3.7-max",
+            base_url="https://example.invalid/v1",
+            encrypted_api_key=encrypt_text("sk-t"),
+            is_default=True,
+        ))
+        char = Character(
+            user_id=user_id, name="小猫", slug="xiaomao",
+            ip_definition="chubby tortoiseshell cat, deadpan slit eyes",
+            reference_image_asset_ids=[], created_via="text_only",
+        )
+        session.add(char)
+        session.commit()
+        session.refresh(char)
+
+        fake_json = (
+            '{"core_thesis":"test thesis",'
+            '"cognitive_anchors":["a1"],'
+            '"shots":[{"seq":1,"purpose":"封面","anchor_paragraph":"§1",'
+            '"theme":"t","structure_type":"方法分层","character_action":"蹲",'
+            '"elements":["e"],"chinese_labels":["l"]}]}'
+        )
+
+        def fake_call(*, model_config, api_key, system_prompt, user_prompt, temperature=0.5):
+            return fake_json, {"prompt_tokens": 800, "completion_tokens": 1500}
+        monkeypatch.setattr(ss, "_call_text_model_json", fake_call)
+
+        resp = client.post("/api/illustrations/generate-shotlist", headers=h, json={
+            "essay": "这是一段用于测试的中文正文。" * 10,
+            "character_id": char.id,
+            "pipeline_run_id": "run-42",
+        })
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["core_thesis"] == "test thesis"
+        assert body["shots"][0]["character_action"] == "蹲"
+
+        records = session.query(UsageRecord).filter_by(pipeline_run_id="run-42").all()
+        assert len(records) == 1
+        assert records[0].step == "crack_and_shotlist"
+        assert records[0].input_tokens == 800
+        assert records[0].output_tokens == 1500
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+
+
+def test_generate_shotlist_rejects_other_users_character(tmp_path):
+    from backend.app.models import Character
+
+    db_dependency = _override_database(tmp_path)
+    try:
+        rA = client.post("/api/auth/register", json={"username": "shotOwnerA", "password": "pw123456"})
+        session_factory = app.dependency_overrides[db_dependency]
+        session = next(session_factory())
+        char = Character(
+            user_id=rA.json()["user"]["id"], name="A", slug="a", ip_definition="x",
+            reference_image_asset_ids=[], created_via="text_only",
+        )
+        session.add(char)
+        session.commit()
+        session.refresh(char)
+
+        rB = client.post("/api/auth/register", json={"username": "shotOwnerB", "password": "pw123456"})
+        hB = {"Authorization": f"Bearer {rB.json()['access_token']}"}
+
+        resp = client.post("/api/illustrations/generate-shotlist", headers=hB, json={
+            "essay": "essay body", "character_id": char.id,
+        })
+        assert resp.status_code == 404
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
