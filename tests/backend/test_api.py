@@ -6582,3 +6582,44 @@ def test_pricing_service_calculates_text_and_image_costs():
     assert "qwen3.7-max" in pricing["text_models"]
     assert "doubao-seedream-4-0" in pricing["image_models"]
     assert pricing["meta"]["last_verified"] == "2026-07-17"
+
+
+def test_usage_recording_persists_text_and_image_records(tmp_path):
+    from decimal import Decimal
+    from backend.app.services.usage_recording_service import record_text_usage, record_image_usage
+    from backend.app.models import UsageRecord
+
+    db_dependency = _override_database(tmp_path)
+    try:
+        register = client.post("/api/auth/register", json={"username": "urec", "password": "pw123456"})
+        user_id = register.json()["user"]["id"]
+        session_factory = app.dependency_overrides[db_dependency]
+        session = next(session_factory())
+
+        text_rec = record_text_usage(
+            db=session,
+            user_id=user_id,
+            pipeline_run_id="run-1",
+            step="crack_and_shotlist",
+            model="qwen3.7-max",
+            input_tokens=1000,
+            output_tokens=2000,
+        )
+        assert text_rec.cost_yuan == Decimal("0.0175")
+        assert text_rec.unit_price_snapshot["input_yuan_per_million_tokens"] == 2.5
+
+        img_rec = record_image_usage(
+            db=session,
+            user_id=user_id,
+            pipeline_run_id="run-1",
+            step="image_gen",
+            model="doubao-seedream-5-0-260128",
+            image_count=6,
+        )
+        assert img_rec.cost_yuan == Decimal("1.5600")
+
+        totals = session.query(UsageRecord).filter_by(pipeline_run_id="run-1").all()
+        assert len(totals) == 2
+        assert sum((r.cost_yuan for r in totals), Decimal("0")) == Decimal("1.5775")
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
