@@ -595,6 +595,10 @@ export async function updateIllustrationCharacter(characterId: number, payload: 
   return response.data;
 }
 
+export async function deleteIllustrationCharacter(characterId: number): Promise<void> {
+  await http.delete(`/characters/${characterId}`);
+}
+
 export async function generateIllustrationShotList(payload: {
   essay: string;
   character_id: number;

@@ -1,7 +1,5 @@
 import {
   CheckCircleOutlined,
-  PlusOutlined,
-  PictureOutlined,
   RobotOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
@@ -15,7 +13,6 @@ import {
   Empty,
   Image,
   Input,
-  Modal,
   Row,
   Select,
   Space,
@@ -24,24 +21,18 @@ import {
   Steps,
   Tag,
   Typography,
-  Upload,
 } from "antd";
 import { useEffect, useState } from "react";
 
 import {
-  createIllustrationCharacter,
   createIllustrationRun,
   fetchIllustrationAssets,
   fetchIllustrationCharacters,
   fetchIllustrationModelQuotas,
   fetchIllustrationRuns,
   fetchIllustrationUsageSummary,
-  generateIllustrationImage,
   generateIllustrationRunShot,
-  importIllustrationAsset,
-  updateIllustrationCharacter,
   updateIllustrationRun,
-  uploadAssetFile,
 } from "../../lib/api";
 import type {
   IllustrationAsset,
@@ -51,32 +42,17 @@ import type {
   IllustrationShotList,
   IllustrationUsageSummary,
 } from "../../types";
+import { IllustrationQuotaCard } from "./illustration-quota-card";
+import { buildIllustrationPrompt, isCharacterConfirmed } from "./illustration-utils";
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
 
-function slugify(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, "-") || `character-${Date.now()}`;
-}
+type IllustrationWorkflowPanelProps = {
+  onManageCharacters?: () => void;
+};
 
-function buildPrompt(shot: IllustrationShot, character: IllustrationCharacter): string {
-  return `Generate one standalone 3:4 vertical Chinese Xiaohongshu illustration.
-
-Pure white background. Minimalist black hand-drawn line art with slightly wobbly pen lines. At least 35% empty white space. Sparse red (#D9432F), orange (#FFB37A), and blue handwritten annotations. No gradients, shadows, paper texture, PPT look, or cute mascot poster.
-
-Character definition:
-${character.ip_definition}
-
-Theme: ${shot.theme}
-Structure: ${shot.structure_type}
-Core character action: ${shot.character_action}
-Elements: ${shot.elements.join("、")}
-Chinese labels: ${shot.chinese_labels.join("、")}
-
-One image explains one core idea. The character performs the core action rather than decorating the scene. Main subject occupies 40-60% of the canvas. Do not put a formal title in the top-left corner.`;
-}
-
-export function IllustrationWorkflowPanel() {
+export function IllustrationWorkflowPanel({ onManageCharacters }: IllustrationWorkflowPanelProps) {
   const [characters, setCharacters] = useState<IllustrationCharacter[]>([]);
   const [characterId, setCharacterId] = useState<number>();
   const [essay, setEssay] = useState("");
@@ -89,16 +65,12 @@ export function IllustrationWorkflowPanel() {
   const [usage, setUsage] = useState<IllustrationUsageSummary>();
   const [quotas, setQuotas] = useState<IllustrationModelQuota[]>([]);
   const [error, setError] = useState<string>();
-  const [createOpen, setCreateOpen] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [newDefinition, setNewDefinition] = useState("");
-  const [creating, setCreating] = useState(false);
-  const [anchoring, setAnchoring] = useState(false);
 
   async function loadCharacters() {
     const result = await fetchIllustrationCharacters();
-    setCharacters(result.items);
-    setCharacterId((current) => current ?? result.items[0]?.id);
+    const confirmed = result.items.filter(isCharacterConfirmed);
+    setCharacters(confirmed);
+    setCharacterId((current) => confirmed.some((item) => item.id === current) ? current : confirmed[0]?.id);
   }
 
   async function refreshUsage(currentRunId = runId) {
@@ -129,26 +101,6 @@ export function IllustrationWorkflowPanel() {
     void loadQuotas().catch(() => setError("模型额度加载失败"));
     void restoreLatestRun().catch(() => undefined);
   }, []);
-
-  async function handleCreateCharacter() {
-    if (!newName.trim() || !newDefinition.trim()) return;
-    setCreating(true);
-    try {
-      const created = await createIllustrationCharacter({
-        name: newName.trim(),
-        slug: slugify(newName),
-        ip_definition: newDefinition.trim(),
-        created_via: "text_only",
-      });
-      setCharacters((items) => [created, ...items]);
-      setCharacterId(created.id);
-      setCreateOpen(false);
-      setNewName("");
-      setNewDefinition("");
-    } finally {
-      setCreating(false);
-    }
-  }
 
   async function handleAnalyze() {
     if (!characterId || !essay.trim()) return;
@@ -185,7 +137,7 @@ export function IllustrationWorkflowPanel() {
     try {
       if (shotList) await updateIllustrationRun(runId, { shots: shotList.shots, selected_shot_seqs: selected });
       const result = await generateIllustrationRunShot(runId, shot.seq, {
-        prompt: buildPrompt(shot, character),
+        prompt: buildIllustrationPrompt(shot, character),
         size: "3:4",
         reference_asset_ids: character.reference_image_asset_ids,
       });
@@ -194,47 +146,6 @@ export function IllustrationWorkflowPanel() {
       await Promise.all([refreshUsage(), loadQuotas()]);
     } finally {
       setGenerating((items) => items.filter((seq) => seq !== shot.seq));
-    }
-  }
-
-  async function attachAnchorAsset(asset: IllustrationAsset) {
-    const character = characters.find((item) => item.id === characterId);
-    if (!character) return;
-    const ids = [...new Set([...character.reference_image_asset_ids, asset.id])];
-    const updated = await updateIllustrationCharacter(character.id, { reference_image_asset_ids: ids });
-    setCharacters((items) => items.map((item) => item.id === updated.id ? updated : item));
-  }
-
-  async function handleUploadAnchor(file: File) {
-    if (!characterId) return false;
-    setAnchoring(true);
-    try {
-      const uploaded = await uploadAssetFile(file);
-      const asset = await importIllustrationAsset(uploaded.file_name, characterId);
-      await attachAnchorAsset(asset);
-    } finally {
-      setAnchoring(false);
-    }
-    return false;
-  }
-
-  async function handleGenerateAnchor() {
-    const character = characters.find((item) => item.id === characterId);
-    if (!character) return;
-    setAnchoring(true);
-    try {
-      const asset = await generateIllustrationImage({
-        prompt: `Create a clean 3:4 character reference sheet on white background. Preserve this character exactly for future illustrations: ${character.ip_definition}`,
-        size: "3:4",
-        character_id: character.id,
-        role: "character_anchor",
-        pipeline_run_id: `character-${character.id}-${Date.now()}`,
-        shot_seq: 0,
-      });
-      await attachAnchorAsset(asset);
-      await loadQuotas();
-    } finally {
-      setAnchoring(false);
     }
   }
 
@@ -273,26 +184,28 @@ export function IllustrationWorkflowPanel() {
           />
         </Col>
         <Col xs={24} lg={9}>
-          <Text strong>主角形象</Text>
-          <Space.Compact style={{ width: "100%", marginTop: 8 }}>
-            <Select
-              value={characterId}
-              onChange={setCharacterId}
-              style={{ width: "100%" }}
-              placeholder="先创建一个形象"
-              options={characters.map((item) => ({ value: item.id, label: item.name }))}
+          <Text strong>已确认主角形象</Text>
+          <Select
+            value={characterId}
+            onChange={setCharacterId}
+            style={{ width: "100%", marginTop: 8 }}
+            placeholder="先去主角形象页确认一个形象"
+            options={characters.map((item) => ({ value: item.id, label: item.name }))}
+          />
+          {characters.length === 0 ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="需要先生成并确认主角形象"
+              description="主角拥有至少 1 张锚定图后，流水线才会使用它生成整组文章配图。"
+              action={<Button size="small" onClick={onManageCharacters}>去管理</Button>}
+              style={{ marginTop: 12 }}
             />
-            <Button icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建</Button>
-          </Space.Compact>
-          <Text type="secondary" style={{ display: "block", marginTop: 10 }}>
-            已绑定 {characters.find((item) => item.id === characterId)?.reference_image_asset_ids.length ?? 0} 张锚定图，后续配图会自动引用。
-          </Text>
-          <Space wrap style={{ marginTop: 10 }}>
-            <Upload accept="image/*" showUploadList={false} beforeUpload={handleUploadAnchor} disabled={!characterId || anchoring}>
-              <Button icon={<PictureOutlined />} loading={anchoring}>上传参考图</Button>
-            </Upload>
-            <Button icon={<RobotOutlined />} loading={anchoring} disabled={!characterId} onClick={handleGenerateAnchor}>在线生成形象</Button>
-          </Space>
+          ) : (
+            <Text type="secondary" style={{ display: "block", marginTop: 10 }}>
+              已绑定 {characters.find((item) => item.id === characterId)?.reference_image_asset_ids.length ?? 0} 张锚定图，后续配图会自动引用。
+            </Text>
+          )}
           <Button
             type="primary"
             icon={<RobotOutlined />}
@@ -308,28 +221,7 @@ export function IllustrationWorkflowPanel() {
         </Col>
       </Row>
 
-      {quotas.length > 0 && (
-        <Card className="illustration-quota-card" size="small" title="免费额度监控与自动切换" style={{ marginTop: 16 }}>
-          <Row gutter={[12, 12]}>
-            {quotas.map((quota) => (
-              <Col xs={24} md={12} xl={8} key={quota.model_config_id}>
-                <Space direction="vertical" size={2} style={{ width: "100%" }}>
-                  <Space wrap>
-                    <Text strong>{quota.model}</Text>
-                    <Tag color={quota.model_type === "text" ? "blue" : "orange"}>{quota.model_type === "text" ? "拆文" : "生图"}</Tag>
-                    {quota.is_default && <Tag>默认</Tag>}
-                  </Space>
-                  <Text type={quota.free_remaining > 0 ? undefined : "secondary"}>
-                    免费剩余 {quota.free_remaining.toLocaleString()} / {quota.free_ceiling.toLocaleString()} {quota.model_type === "text" ? "tokens" : "张"}
-                  </Text>
-                  <Text type="secondary">用尽后按优先级自动切换 · 标价 ¥{quota.unit_price_yuan}</Text>
-                </Space>
-              </Col>
-            ))}
-          </Row>
-          <Alert type="info" showIcon message="这里统计本平台已记录用量；最终账单以模型服务商控制台为准。" style={{ marginTop: 12 }} />
-        </Card>
-      )}
+      <IllustrationQuotaCard quotas={quotas} />
 
       {analyzing && <div style={{ padding: 40, textAlign: "center" }}><Spin tip="正在提炼认知锚点…" /></div>}
 
@@ -377,11 +269,6 @@ export function IllustrationWorkflowPanel() {
           </Button>
         </>
       )}
-
-      <Modal title="新建形象" open={createOpen} onCancel={() => setCreateOpen(false)} onOk={handleCreateCharacter} confirmLoading={creating} okButtonProps={{ disabled: !newName.trim() || !newDefinition.trim() }}>
-        <Input value={newName} onChange={(event) => setNewName(event.target.value)} placeholder="形象名称，如：小猫、小护士" style={{ marginBottom: 12 }} />
-        <TextArea value={newDefinition} onChange={(event) => setNewDefinition(event.target.value)} rows={8} placeholder="外形 + 性格态度 + 动作习惯 + 禁忌。例：圆胖玳瑁猫，懒但会把活干完，默认眯眼，不卖萌。" />
-      </Modal>
     </Card>
   );
 }

@@ -16,7 +16,6 @@ import {
   Card,
   Checkbox,
   Col,
-  Divider,
   Empty,
   Image,
   Input,
@@ -32,7 +31,9 @@ import {
 import { useEffect, useState } from "react";
 
 import { PageHeader } from "../../../components/layout/app-shell";
+import { IllustrationCharacterManager } from "../../../components/illustrations/illustration-character-manager";
 import { IllustrationWorkflowPanel } from "../../../components/illustrations/illustration-workflow-panel";
+import { SingleIllustrationPanel } from "../../../components/illustrations/single-illustration-panel";
 import {
   deleteGeneratedImageAsset,
   deleteUserImage,
@@ -72,6 +73,7 @@ export function XhsImageStudioPage() {
   const [refPickerOpen, setRefPickerOpen] = useState(false);
   const [saveToAssets, setSaveToAssets] = useState(true);
   const [generatedPreview, setGeneratedPreview] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState("workflow");
 
   // For the reference picker modal: which callback mode
   const [pickerMode, setPickerMode] = useState<"reference" | "describe">(
@@ -226,11 +228,30 @@ export function XhsImageStudioPage() {
         />
       )}
 
-      <IllustrationWorkflowPanel />
-
-      <Divider>通用生图（原有功能）</Divider>
-
-      {/* ---- Top Row: Two tool cards ---- */}
+      <Tabs
+        activeKey={activeTab}
+        onChange={setActiveTab}
+        items={[
+          {
+            key: "workflow",
+            label: <Space><RobotOutlined /> 文章配图流水线</Space>,
+            children: <IllustrationWorkflowPanel onManageCharacters={() => setActiveTab("characters")} />,
+          },
+          {
+            key: "single",
+            label: <Space><PictureOutlined /> 单图生成</Space>,
+            children: <SingleIllustrationPanel onManageCharacters={() => setActiveTab("characters")} />,
+          },
+          {
+            key: "characters",
+            label: <Space><StarOutlined /> 主角形象</Space>,
+            children: <IllustrationCharacterManager />,
+          },
+          {
+            key: "general",
+            label: <Space><RobotOutlined /> 通用生图</Space>,
+            children: (
+              <>
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         {/* Left Card: AI Image Generation */}
         <Col xs={24} md={14}>
@@ -660,6 +681,11 @@ export function XhsImageStudioPage() {
                     ))}
                   </Row>
                 )}
+              </>
+            ),
+          },
+        ]}
+      />
               </>
             ),
           },
