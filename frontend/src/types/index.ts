@@ -416,6 +416,7 @@ export type IllustrationShot = {
   character_action: string;
   elements: string[];
   chinese_labels: string[];
+  image_prompt?: string;
 };
 
 export type IllustrationShotList = {
