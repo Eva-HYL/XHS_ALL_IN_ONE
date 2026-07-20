@@ -26,6 +26,7 @@ import { useEffect, useState } from "react";
 
 import {
   createIllustrationCharacter,
+  deleteIllustrationAsset,
   deleteIllustrationCharacter,
   fetchIllustrationAssets,
   fetchIllustrationCharacters,
@@ -162,6 +163,19 @@ export function IllustrationCharacterManager() {
     setCharacters((items) => items.filter((item) => item.id !== character.id));
   }
 
+  async function removeAnchorAsset(character: IllustrationCharacter, asset: IllustrationAsset) {
+    try {
+      await deleteIllustrationAsset(asset.id);
+      setAssets((items) => items.filter((item) => item.id !== asset.id));
+      setCharacters((items) => items.map((item) => item.id === character.id
+        ? { ...item, reference_image_asset_ids: item.reference_image_asset_ids.filter((id) => id !== asset.id) }
+        : item,
+      ));
+    } catch {
+      setError("锚定图删除失败。");
+    }
+  }
+
   function anchorAssets(character: IllustrationCharacter) {
     const ids = new Set(character.reference_image_asset_ids);
     return assets.filter((asset) => ids.has(asset.id));
@@ -204,14 +218,33 @@ export function IllustrationCharacterManager() {
                   >
                     <Paragraph ellipsis={{ rows: 3 }} style={{ minHeight: 66 }}>{character.ip_definition}</Paragraph>
                     <Space wrap style={{ marginBottom: 12 }}>
-                      {anchors.slice(0, 3).map((asset) => (
-                        <Image
-                          key={asset.id}
-                          src={asset.file_path}
-                          width={58}
-                          height={78}
-                          style={{ objectFit: "cover", borderRadius: 4 }}
-                        />
+                      {anchors.map((asset) => (
+                        <div key={asset.id} style={{ position: "relative", width: 58, height: 78 }}>
+                          <Image
+                            src={asset.file_path}
+                            width={58}
+                            height={78}
+                            style={{ objectFit: "cover", borderRadius: 4 }}
+                          />
+                          <Popconfirm title="删除这张主角锚定图？" onConfirm={() => void removeAnchorAsset(character, asset)}>
+                            <Button
+                              type="text"
+                              size="small"
+                              danger
+                              icon={<DeleteOutlined />}
+                              style={{
+                                position: "absolute",
+                                top: 2,
+                                right: 2,
+                                width: 20,
+                                height: 20,
+                                minWidth: 20,
+                                padding: 0,
+                                background: "rgba(0,0,0,0.55)",
+                              }}
+                            />
+                          </Popconfirm>
+                        </div>
                       ))}
                       {!anchors.length && <Text type="secondary">还没有锚定图</Text>}
                     </Space>

@@ -629,6 +629,11 @@ export async function fetchIllustrationAssets(pipelineRunId?: string): Promise<P
   return response.data;
 }
 
+export async function deleteIllustrationAsset(assetId: number): Promise<{ id: number; status: string }> {
+  const response = await http.delete<{ id: number; status: string }>(`/illustrations/assets/${assetId}`);
+  return response.data;
+}
+
 export async function fetchIllustrationUsageSummary(pipelineRunId?: string): Promise<IllustrationUsageSummary> {
   const response = await http.get<IllustrationUsageSummary>("/illustrations/usage-summary", {
     params: pipelineRunId ? { pipeline_run_id: pipelineRunId } : undefined,

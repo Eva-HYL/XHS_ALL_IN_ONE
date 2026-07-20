@@ -6847,6 +6847,50 @@ def test_illustration_assets_and_usage_summary_are_owner_scoped(tmp_path):
         app.dependency_overrides.pop(db_dependency, None)
 
 
+def test_delete_illustration_asset_requires_owner_and_unlinks_character_anchor(tmp_path):
+    from backend.app.models import Character, IllustrationAsset
+
+    db_dependency = _override_database(tmp_path)
+    try:
+        owner = client.post("/api/auth/register", json={"username": "anchor-owner", "password": "pw123456"}).json()
+        other = client.post("/api/auth/register", json={"username": "anchor-other", "password": "pw123456"}).json()
+        session = next(app.dependency_overrides[db_dependency]())
+        asset = IllustrationAsset(
+            user_id=owner["user"]["id"], role="character_anchor", pipeline_run_id="character-1",
+            shot_seq=0, prompt="anchor", model="upload", size="original", reference_asset_ids=[],
+            file_path="https://example.invalid/anchor.png",
+        )
+        session.add(asset)
+        session.flush()
+        character = Character(
+            user_id=owner["user"]["id"], name="小护士", slug="nurse", ip_definition="nurse",
+            reference_image_asset_ids=[asset.id, 999], created_via="text_only",
+        )
+        session.add(character)
+        session.commit()
+        asset_id = asset.id
+        character_id = character.id
+
+        other_response = client.delete(
+            f"/api/illustrations/assets/{asset_id}",
+            headers={"Authorization": f"Bearer {other['access_token']}"},
+        )
+        assert other_response.status_code == 404
+
+        owner_response = client.delete(
+            f"/api/illustrations/assets/{asset_id}",
+            headers={"Authorization": f"Bearer {owner['access_token']}"},
+        )
+        assert owner_response.status_code == 200
+        assert owner_response.json() == {"id": asset_id, "status": "deleted"}
+
+        session.expire_all()
+        assert session.get(IllustrationAsset, asset_id) is None
+        assert session.get(Character, character_id).reference_image_asset_ids == [999]
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+
+
 def test_model_selector_prefers_free_quota_then_falls_back(tmp_path):
     from decimal import Decimal
     from backend.app.models import ModelConfig, UsageRecord

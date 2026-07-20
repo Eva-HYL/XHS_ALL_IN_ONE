@@ -123,6 +123,27 @@ def list_illustration_assets(
     return paginated([_serialize_asset(asset) for asset in items], page=page, page_size=page_size)
 
 
+@router.delete("/assets/{asset_id}")
+def delete_illustration_asset(
+    asset_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    asset = db.get(IllustrationAsset, asset_id)
+    if asset is None or asset.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Illustration asset not found")
+
+    characters = db.scalars(select(Character).where(Character.user_id == current_user.id)).all()
+    for character in characters:
+        ids = list(character.reference_image_asset_ids or [])
+        if asset_id in ids:
+            character.reference_image_asset_ids = [item for item in ids if item != asset_id]
+
+    db.delete(asset)
+    db.commit()
+    return {"id": asset_id, "status": "deleted"}
+
+
 @router.post("/assets/import", status_code=status.HTTP_201_CREATED)
 def import_illustration_asset(
     payload: ImportIllustrationAssetRequest,
