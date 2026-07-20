@@ -6733,6 +6733,7 @@ def test_generate_illustration_image_persists_asset_and_usage(tmp_path, monkeypa
             captured["size"] = size
             return {"url": "https://example.invalid/out.png", "raw": {"data": [{"url": "https://example.invalid/out.png", "size": size}]}}
         monkeypatch.setattr(iis.IllustrationImageClient, "generate_image", fake_generate_image)
+        monkeypatch.setattr(iis, "download_asset_to_local", lambda url, user_id, asset_type: "xhs-asset-u1-saved.png", raising=False)
 
         resp = client.post("/api/illustrations/generate-image", headers=h, json={
             "prompt": "test prompt",
@@ -6748,7 +6749,7 @@ def test_generate_illustration_image_persists_asset_and_usage(tmp_path, monkeypa
         assert body["size"] == "3:4"
         assert body["pipeline_run_id"] == "run-99"
         assert body["shot_seq"] == 2
-        assert body["file_path"] == "https://example.invalid/out.png"
+        assert body["file_path"] == "/api/files/media/xhs-asset-u1-saved.png"
 
         # Friendly aspect ratio is normalized to a provider-legal 3:4 size.
         assert captured["size"] == "1728x2304"

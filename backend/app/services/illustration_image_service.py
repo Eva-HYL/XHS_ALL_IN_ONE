@@ -9,7 +9,9 @@ import requests
 from sqlalchemy.orm import Session
 
 from backend.app.core.security import decrypt_text
+from backend.app.core.config import get_settings
 from backend.app.models import IllustrationAsset, ModelConfig, User
+from backend.app.services.asset_downloader import download_asset_to_local
 from backend.app.services.illustration_size_service import normalize_illustration_size
 from backend.app.services.usage_recording_service import record_image_usage
 
@@ -100,7 +102,10 @@ def _resolve_reference_urls(db: Session, user_id: int, asset_ids: list[int]) -> 
     for row in rows:
         if not row.file_path:
             continue
-        path = Path(row.file_path)
+        file_path = row.file_path
+        if file_path.startswith("/api/files/media/"):
+            file_path = str(Path(get_settings().storage_dir) / "media" / Path(file_path).name)
+        path = Path(file_path)
         if path.is_file():
             mime = mimetypes.guess_type(path.name)[0] or "image/png"
             encoded = base64.b64encode(path.read_bytes()).decode("ascii")
@@ -136,7 +141,9 @@ def generate_and_persist_illustration(
         size=provider_size,
         reference_urls=reference_urls or None,
     )
-    file_path = result.get("url") or ""
+    remote_url = result.get("url") or ""
+    local_name = download_asset_to_local(remote_url, current_user.id, "image")
+    file_path = f"/api/files/media/{local_name}" if local_name else remote_url
     raw = result.get("raw")
 
     asset = IllustrationAsset(
