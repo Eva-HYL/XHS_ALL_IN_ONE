@@ -29,12 +29,12 @@ image_models:
     priority: 50
     capabilities: ["text_to_image", "reference_image"]
   # Seeded here for the Phase 1.5 quota-fallback plan; not called yet.
-  doubao-seedream-4-0:
+  doubao-seedream-4-0-250828:
     yuan_per_image: 0.20
     free_images: 200
     priority: 10
     capabilities: ["text_to_image", "reference_image"]
-  doubao-seedream-4-5:
+  doubao-seedream-4-5-251128:
     yuan_per_image: 0.25
     free_images: 200
     priority: 30
@@ -44,7 +44,7 @@ image_models:
     free_images: 50
     priority: 20
     capabilities: ["text_to_image", "reference_image"]
-  doubao-seedream-3-0-t2i:
+  doubao-seedream-3-0-t2i-250415:
     yuan_per_image: 0.259
     free_images: 200
     priority: 40
