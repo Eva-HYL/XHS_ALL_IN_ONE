@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.security import decrypt_text
 from backend.app.models import IllustrationAsset, ModelConfig, User
+from backend.app.services.illustration_size_service import normalize_illustration_size
 from backend.app.services.usage_recording_service import record_image_usage
 
 
@@ -113,11 +114,12 @@ def generate_and_persist_illustration(
     reference_urls = _resolve_reference_urls(db, current_user.id, reference_asset_ids)
 
     client = client or IllustrationImageClient()
+    provider_size = normalize_illustration_size(model_config.model_name, size)
     result = client.generate_image(
         model_config=model_config,
         api_key=api_key,
         prompt=prompt,
-        size=size,
+        size=provider_size,
         reference_urls=reference_urls or None,
     )
     file_path = result.get("url") or ""

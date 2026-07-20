@@ -6750,8 +6750,8 @@ def test_generate_illustration_image_persists_asset_and_usage(tmp_path, monkeypa
         assert body["shot_seq"] == 2
         assert body["file_path"] == "https://example.invalid/out.png"
 
-        # Provider was called with the size we asked for
-        assert captured["size"] == "3:4"
+        # Friendly aspect ratio is normalized to a provider-legal 3:4 size.
+        assert captured["size"] == "1728x2304"
 
         # One IllustrationAsset row created
         asset_rows = session.query(IllustrationAsset).filter_by(pipeline_run_id="run-99").all()
@@ -6767,6 +6767,40 @@ def test_generate_illustration_image_persists_asset_and_usage(tmp_path, monkeypa
         # Legacy AiGeneratedAsset table must remain untouched (isolation invariant)
         from backend.app.models import AiGeneratedAsset
         assert session.query(AiGeneratedAsset).count() == 0
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+
+
+def test_generate_illustration_image_returns_502_on_provider_error(tmp_path, monkeypatch):
+    from backend.app.models import ModelConfig
+    from backend.app.core.security import encrypt_text
+    import backend.app.services.illustration_image_service as iis
+
+    db_dependency = _override_database(tmp_path)
+    try:
+        register = client.post("/api/auth/register", json={"username": "illu-error", "password": "pw123456"})
+        user_id = register.json()["user"]["id"]
+        token = register.json()["access_token"]
+        session = next(app.dependency_overrides[db_dependency]())
+        session.add(ModelConfig(
+            user_id=user_id, name="img", model_type="image", provider="openai-compatible",
+            model_name="doubao-seedream-5-0-260128", base_url="https://example.invalid",
+            encrypted_api_key=encrypt_text("sk"), is_default=True,
+        ))
+        session.commit()
+
+        def fail_generate(self, **kwargs):
+            raise ValueError("minimum pixel count is 3686400")
+
+        monkeypatch.setattr(iis.IllustrationImageClient, "generate_image", fail_generate)
+        response = client.post(
+            "/api/illustrations/generate-image",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"prompt": "test", "size": "3:4"},
+        )
+
+        assert response.status_code == 502
+        assert "minimum pixel count" in response.json()["detail"]
     finally:
         app.dependency_overrides.pop(db_dependency, None)
 

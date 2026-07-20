@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 class GenerateIllustrationRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=2000)
-    size: str = Field(default="1024x1024", max_length=32)
+    size: str = Field(default="3:4", max_length=32)
     reference_asset_ids: list[int] = Field(default_factory=list, max_length=20)
     character_id: Optional[int] = None
     role: Literal["character_anchor", "illustration"] = "illustration"

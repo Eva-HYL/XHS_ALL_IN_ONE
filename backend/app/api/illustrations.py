@@ -72,18 +72,21 @@ def generate_image(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Character not found")
 
     model_config = _default_image_model(db, current_user)
-    asset = generate_and_persist_illustration(
-        db=db,
-        current_user=current_user,
-        model_config=model_config,
-        prompt=payload.prompt,
-        size=payload.size,
-        reference_asset_ids=list(payload.reference_asset_ids),
-        character_id=payload.character_id,
-        role=payload.role,
-        pipeline_run_id=payload.pipeline_run_id,
-        shot_seq=payload.shot_seq,
-    )
+    try:
+        asset = generate_and_persist_illustration(
+            db=db,
+            current_user=current_user,
+            model_config=model_config,
+            prompt=payload.prompt,
+            size=payload.size,
+            reference_asset_ids=list(payload.reference_asset_ids),
+            character_id=payload.character_id,
+            role=payload.role,
+            pipeline_run_id=payload.pipeline_run_id,
+            shot_seq=payload.shot_seq,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     return _serialize_asset(asset)
 
 
