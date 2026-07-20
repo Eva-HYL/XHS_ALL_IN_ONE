@@ -1,5 +1,7 @@
 import { Card, Col, Row, Space, Tag, Typography, Alert } from "antd";
 
+import { useAuth } from "../../hooks/use-auth";
+import { canViewInternalBilling } from "../../lib/billing";
 import type { IllustrationModelQuota } from "../../types";
 
 const { Text } = Typography;
@@ -9,7 +11,8 @@ type IllustrationQuotaCardProps = {
 };
 
 export function IllustrationQuotaCard({ quotas }: IllustrationQuotaCardProps) {
-  if (!quotas.length) return null;
+  const auth = useAuth();
+  if (!quotas.length || !canViewInternalBilling(auth.user)) return null;
 
   return (
     <Card className="illustration-quota-card" size="small" title="免费额度监控与自动切换" style={{ marginTop: 16 }}>
