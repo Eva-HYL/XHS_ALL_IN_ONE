@@ -35,6 +35,7 @@ import type {
   ImageUtilityFile,
   IllustrationAsset,
   IllustrationCharacter,
+  IllustrationModelQuota,
   IllustrationShotList,
   IllustrationUsageSummary,
   KeywordGroup,
@@ -617,6 +618,11 @@ export async function fetchIllustrationUsageSummary(pipelineRunId: string): Prom
   const response = await http.get<IllustrationUsageSummary>("/illustrations/usage-summary", {
     params: { pipeline_run_id: pipelineRunId },
   });
+  return response.data;
+}
+
+export async function fetchIllustrationModelQuotas(): Promise<{ items: IllustrationModelQuota[] }> {
+  const response = await http.get<{ items: IllustrationModelQuota[] }>("/illustrations/model-quotas");
   return response.data;
 }
 

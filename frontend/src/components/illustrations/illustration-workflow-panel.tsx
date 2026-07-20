@@ -29,6 +29,7 @@ import { useEffect, useState } from "react";
 import {
   createIllustrationCharacter,
   fetchIllustrationCharacters,
+  fetchIllustrationModelQuotas,
   fetchIllustrationUsageSummary,
   generateIllustrationImage,
   generateIllustrationShotList,
@@ -36,6 +37,7 @@ import {
 import type {
   IllustrationAsset,
   IllustrationCharacter,
+  IllustrationModelQuota,
   IllustrationShot,
   IllustrationShotList,
   IllustrationUsageSummary,
@@ -80,6 +82,7 @@ export function IllustrationWorkflowPanel() {
   const [analyzing, setAnalyzing] = useState(false);
   const [runId, setRunId] = useState(makeRunId());
   const [usage, setUsage] = useState<IllustrationUsageSummary>();
+  const [quotas, setQuotas] = useState<IllustrationModelQuota[]>([]);
   const [error, setError] = useState<string>();
   const [createOpen, setCreateOpen] = useState(false);
   const [newName, setNewName] = useState("");
@@ -96,8 +99,14 @@ export function IllustrationWorkflowPanel() {
     setUsage(await fetchIllustrationUsageSummary(currentRunId));
   }
 
+  async function loadQuotas() {
+    const result = await fetchIllustrationModelQuotas();
+    setQuotas(result.items);
+  }
+
   useEffect(() => {
     void loadCharacters().catch(() => setError("形象库加载失败"));
+    void loadQuotas().catch(() => setError("模型额度加载失败"));
   }, []);
 
   async function handleCreateCharacter() {
@@ -164,7 +173,7 @@ export function IllustrationWorkflowPanel() {
         shot_seq: shot.seq,
       });
       setGenerated((items) => ({ ...items, [shot.seq]: asset }));
-      await refreshUsage();
+      await Promise.all([refreshUsage(), loadQuotas()]);
     } finally {
       setGenerating((items) => items.filter((seq) => seq !== shot.seq));
     }
@@ -229,11 +238,32 @@ export function IllustrationWorkflowPanel() {
           >
             拆文并生成配图方案
           </Button>
-          {usage && (
-            <Statistic title="本次实际花费" value={Number(usage.total_cost_yuan)} precision={4} prefix="¥" style={{ marginTop: 18 }} />
-          )}
+          {usage && <Statistic title="本次按定价估算" value={Number(usage.total_cost_yuan)} precision={4} prefix="¥" style={{ marginTop: 18 }} />}
         </Col>
       </Row>
+
+      {quotas.length > 0 && (
+        <Card size="small" title="免费额度监控与自动切换" style={{ marginTop: 16, background: "#faf8f1" }}>
+          <Row gutter={[12, 12]}>
+            {quotas.map((quota) => (
+              <Col xs={24} md={12} xl={8} key={quota.model_config_id}>
+                <Space direction="vertical" size={2} style={{ width: "100%" }}>
+                  <Space wrap>
+                    <Text strong>{quota.model}</Text>
+                    <Tag color={quota.model_type === "text" ? "blue" : "orange"}>{quota.model_type === "text" ? "拆文" : "生图"}</Tag>
+                    {quota.is_default && <Tag>默认</Tag>}
+                  </Space>
+                  <Text type={quota.free_remaining > 0 ? undefined : "secondary"}>
+                    免费剩余 {quota.free_remaining.toLocaleString()} / {quota.free_ceiling.toLocaleString()} {quota.model_type === "text" ? "tokens" : "张"}
+                  </Text>
+                  <Text type="secondary">用尽后按优先级自动切换 · 标价 ¥{quota.unit_price_yuan}</Text>
+                </Space>
+              </Col>
+            ))}
+          </Row>
+          <Alert type="info" showIcon message="这里统计本平台已记录用量；最终账单以模型服务商控制台为准。" style={{ marginTop: 12 }} />
+        </Card>
+      )}
 
       {analyzing && <div style={{ padding: 40, textAlign: "center" }}><Spin tip="正在提炼认知锚点…" /></div>}
 
@@ -256,7 +286,10 @@ export function IllustrationWorkflowPanel() {
                     extra={<Tag>{shot.structure_type}</Tag>}
                   >
                     {asset ? (
-                      <Image src={asset.file_path} style={{ width: "100%", aspectRatio: "3 / 4", objectFit: "cover" }} />
+                      <>
+                        <Image src={asset.file_path} style={{ width: "100%", aspectRatio: "3 / 4", objectFit: "cover" }} />
+                        <Tag color="green" style={{ marginTop: 8 }}>实际模型：{asset.model}</Tag>
+                      </>
                     ) : (
                       <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={busy ? "生成中…" : "尚未生成"} />
                     )}

@@ -13,6 +13,11 @@ from backend.app.schemas.illustrations import GenerateIllustrationRequest, Gener
 from backend.app.services.illustration_image_service import generate_and_persist_illustration
 from backend.app.services.illustration_shotlist_service import generate_shotlist
 from backend.app.services.usage_recording_service import record_text_usage
+from backend.app.services.model_selector_service import (
+    get_model_quota_statuses,
+    is_quota_error,
+    select_model_config,
+)
 
 router = APIRouter(prefix="/illustrations", tags=["illustrations"])
 
@@ -59,6 +64,14 @@ def _serialize_asset(asset: IllustrationAsset) -> dict:
         "file_path": asset.file_path,
         "created_at": asset.created_at.isoformat(),
     }
+
+
+@router.get("/model-quotas")
+def list_model_quotas(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return {"items": [status.serialize() for status in get_model_quota_statuses(db, current_user.id)]}
 
 
 @router.get("/assets")
@@ -115,20 +128,41 @@ def generate_image(
         if char is None or char.user_id != current_user.id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Character not found")
 
-    model_config = _default_image_model(db, current_user)
+    capability = "reference_image" if payload.reference_asset_ids else "text_to_image"
+    model_config = select_model_config(db, current_user.id, "image", capability)
     try:
-        asset = generate_and_persist_illustration(
-            db=db,
-            current_user=current_user,
-            model_config=model_config,
-            prompt=payload.prompt,
-            size=payload.size,
-            reference_asset_ids=list(payload.reference_asset_ids),
-            character_id=payload.character_id,
-            role=payload.role,
-            pipeline_run_id=payload.pipeline_run_id,
-            shot_seq=payload.shot_seq,
-        )
+        try:
+            asset = generate_and_persist_illustration(
+                db=db,
+                current_user=current_user,
+                model_config=model_config,
+                prompt=payload.prompt,
+                size=payload.size,
+                reference_asset_ids=list(payload.reference_asset_ids),
+                character_id=payload.character_id,
+                role=payload.role,
+                pipeline_run_id=payload.pipeline_run_id,
+                shot_seq=payload.shot_seq,
+            )
+        except ValueError as exc:
+            if not is_quota_error(exc):
+                raise
+            fallback = select_model_config(
+                db, current_user.id, "image", capability,
+                excluded_model_names={model_config.model_name},
+            )
+            asset = generate_and_persist_illustration(
+                db=db,
+                current_user=current_user,
+                model_config=fallback,
+                prompt=payload.prompt,
+                size=payload.size,
+                reference_asset_ids=list(payload.reference_asset_ids),
+                character_id=payload.character_id,
+                role=payload.role,
+                pipeline_run_id=payload.pipeline_run_id,
+                shot_seq=payload.shot_seq,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
     return _serialize_asset(asset)
@@ -144,15 +178,32 @@ def generate_shotlist_endpoint(
     if character is None or character.user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Character not found")
 
-    model_config, api_key = _default_text_model(db, current_user)
+    model_config = select_model_config(db, current_user.id, "text", "shotlist")
+    api_key = decrypt_text(model_config.encrypted_api_key) if model_config.encrypted_api_key else ""
     try:
-        parsed, usage = generate_shotlist(
-            model_config=model_config,
-            api_key=api_key,
-            essay=payload.essay,
-            ip_definition=character.ip_definition,
-            extra_instruction=payload.instruction,
-        )
+        try:
+            parsed, usage = generate_shotlist(
+                model_config=model_config,
+                api_key=api_key,
+                essay=payload.essay,
+                ip_definition=character.ip_definition,
+                extra_instruction=payload.instruction,
+            )
+        except ValueError as exc:
+            if not is_quota_error(exc):
+                raise
+            model_config = select_model_config(
+                db, current_user.id, "text", "shotlist",
+                excluded_model_names={model_config.model_name},
+            )
+            api_key = decrypt_text(model_config.encrypted_api_key) if model_config.encrypted_api_key else ""
+            parsed, usage = generate_shotlist(
+                model_config=model_config,
+                api_key=api_key,
+                essay=payload.essay,
+                ip_definition=character.ip_definition,
+                extra_instruction=payload.instruction,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 

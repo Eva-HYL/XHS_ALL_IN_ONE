@@ -6846,6 +6846,46 @@ def test_illustration_assets_and_usage_summary_are_owner_scoped(tmp_path):
         app.dependency_overrides.pop(db_dependency, None)
 
 
+def test_model_selector_prefers_free_quota_then_falls_back(tmp_path):
+    from decimal import Decimal
+    from backend.app.models import ModelConfig, UsageRecord
+    from backend.app.services.model_selector_service import select_model_config
+
+    db_dependency = _override_database(tmp_path)
+    try:
+        register = client.post("/api/auth/register", json={"username": "selector", "password": "pw123456"}).json()
+        user_id = register["user"]["id"]
+        session = next(app.dependency_overrides[db_dependency]())
+        session.add_all([
+            ModelConfig(user_id=user_id, name="free", model_type="image", provider="openai-compatible",
+                        model_name="doubao-seedream-4-0", base_url="https://x", encrypted_api_key="x", is_default=False),
+            ModelConfig(user_id=user_id, name="paid", model_type="image", provider="openai-compatible",
+                        model_name="doubao-seedream-5-0-260128", base_url="https://x", encrypted_api_key="x", is_default=True),
+        ])
+        session.commit()
+
+        selected = select_model_config(session, user_id, "image", "text_to_image")
+        assert selected.model_name == "doubao-seedream-4-0"
+
+        session.add(UsageRecord(
+            user_id=user_id, pipeline_run_id="spent", step="image_gen",
+            model="doubao-seedream-4-0", image_count=200, cost_yuan=Decimal("40.0000"),
+        ))
+        session.commit()
+        selected = select_model_config(session, user_id, "image", "text_to_image")
+        assert selected.model_name == "doubao-seedream-5-0-260128"
+
+        response = client.get(
+            "/api/illustrations/model-quotas",
+            headers={"Authorization": f"Bearer {register['access_token']}"},
+        )
+        assert response.status_code == 200
+        free = next(item for item in response.json()["items"] if item["model"] == "doubao-seedream-4-0")
+        assert free["free_remaining"] == 0
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+
+
 def test_generate_illustration_image_rejects_other_users_character(tmp_path):
     from backend.app.models import Character, ModelConfig
     from backend.app.core.security import encrypt_text

@@ -452,6 +452,19 @@ export type IllustrationUsageSummary = {
   }>;
 };
 
+export type IllustrationModelQuota = {
+  model_config_id: number;
+  model_type: "text" | "image";
+  model: string;
+  is_default: boolean;
+  used_units: number;
+  free_ceiling: number;
+  free_remaining: number;
+  priority: number;
+  unit_price_yuan: string;
+  capabilities: string[];
+};
+
 export type GenerateCoverPayload = {
   prompt: string;
   draft_id?: number;
