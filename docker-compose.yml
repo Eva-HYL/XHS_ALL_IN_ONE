@@ -16,8 +16,7 @@ services:
       - ./backend/app/storage/exports:/app/backend/app/storage/exports
     environment:
       - CONFIG_FILE=/app/config/default.yaml
-      # Override sensitive values via env vars in production:
-      # - SECRET_KEY=your-production-secret-key
+      - SECRET_KEY=${SECRET_KEY}
       # - FERNET_KEY=your-fernet-key
       # - DATABASE_TYPE=mysql
       # - DATABASE_MYSQL_HOST=mysql

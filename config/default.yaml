@@ -55,6 +55,6 @@ scheduler:
 
 frontend:
   # Set to true to serve pre-built frontend from backend (Docker/production)
-  serve_static: false
+  serve_static: true
   # Path to the built frontend assets
   build_dir: "./frontend/dist"

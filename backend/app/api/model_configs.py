@@ -138,7 +138,7 @@ def test_model_config(
             resp = http_requests.post(
                 f"{base_url}/images/generations",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": config.model_name, "prompt": "test", "n": 1, "size": "256x256"},
+                json={"model": config.model_name, "prompt": "test", "n": 1, "size": "2048x2048"},
                 timeout=15,
             )
         else:

@@ -282,6 +282,7 @@ class OpenAICompatibleImageClient:
     ) -> dict[str, Any]:
         return self.generate_image(
             model_config=model_config, api_key=api_key, prompt=f"{prompt}\nStyle: {style or 'clean XHS cover'}",
+            size=size,
         )
 
     def generate_image(
@@ -291,6 +292,7 @@ class OpenAICompatibleImageClient:
         api_key: str,
         prompt: str,
         reference_images: list[str] | None = None,
+        size: str | None = None,
     ) -> dict[str, Any]:
         self._validate(model_config=model_config, api_key=api_key)
         endpoint = f"{model_config.base_url.rstrip('/')}/images/generations"
@@ -298,6 +300,11 @@ class OpenAICompatibleImageClient:
             "model": model_config.model_name,
             "prompt": prompt,
             "response_format": "url",
+            # Many OpenAI-compatible providers (e.g. Volcengine/Doubao Seedream)
+            # reject their own small default size with a minimum-pixel-count
+            # error when `size` is omitted, so always send an explicit size
+            # that clears common minimums (>= 3,686,400 px).
+            "size": size or "2048x2048",
         }
         if reference_images:
             resolved = [self._resolve_image_ref(url) for url in reference_images]
