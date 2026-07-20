@@ -6805,6 +6805,87 @@ def test_generate_illustration_image_returns_502_on_provider_error(tmp_path, mon
         app.dependency_overrides.pop(db_dependency, None)
 
 
+def test_illustration_assets_and_usage_summary_are_owner_scoped(tmp_path):
+    from decimal import Decimal
+    from backend.app.models import IllustrationAsset, UsageRecord
+
+    db_dependency = _override_database(tmp_path)
+    try:
+        owner = client.post("/api/auth/register", json={"username": "asset-owner", "password": "pw123456"}).json()
+        other = client.post("/api/auth/register", json={"username": "asset-other", "password": "pw123456"}).json()
+        session = next(app.dependency_overrides[db_dependency]())
+        session.add_all([
+            IllustrationAsset(
+                user_id=owner["user"]["id"], role="illustration", pipeline_run_id="run-assets",
+                shot_seq=1, prompt="p", model="m", size="3:4", reference_asset_ids=[],
+                file_path="https://example.invalid/one.png",
+            ),
+            IllustrationAsset(
+                user_id=other["user"]["id"], role="illustration", pipeline_run_id="run-assets",
+                shot_seq=1, prompt="foreign", model="m", size="3:4", reference_asset_ids=[],
+                file_path="https://example.invalid/foreign.png",
+            ),
+            UsageRecord(
+                user_id=owner["user"]["id"], pipeline_run_id="run-assets", step="image_gen",
+                model="m", image_count=1, cost_yuan=Decimal("0.2600"),
+            ),
+        ])
+        session.commit()
+        headers = {"Authorization": f"Bearer {owner['access_token']}"}
+
+        assets = client.get("/api/illustrations/assets", headers=headers, params={"pipeline_run_id": "run-assets"})
+        assert assets.status_code == 200
+        assert assets.json()["total"] == 1
+        assert assets.json()["items"][0]["prompt"] == "p"
+
+        usage = client.get("/api/illustrations/usage-summary", headers=headers, params={"pipeline_run_id": "run-assets"})
+        assert usage.status_code == 200
+        assert usage.json()["total_cost_yuan"] == "0.2600"
+        assert usage.json()["items"][0]["model"] == "m"
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+
+
+def test_model_selector_prefers_free_quota_then_falls_back(tmp_path):
+    from decimal import Decimal
+    from backend.app.models import ModelConfig, UsageRecord
+    from backend.app.services.model_selector_service import select_model_config
+
+    db_dependency = _override_database(tmp_path)
+    try:
+        register = client.post("/api/auth/register", json={"username": "selector", "password": "pw123456"}).json()
+        user_id = register["user"]["id"]
+        session = next(app.dependency_overrides[db_dependency]())
+        session.add_all([
+            ModelConfig(user_id=user_id, name="free", model_type="image", provider="openai-compatible",
+                        model_name="doubao-seedream-4-0", base_url="https://x", encrypted_api_key="x", is_default=False),
+            ModelConfig(user_id=user_id, name="paid", model_type="image", provider="openai-compatible",
+                        model_name="doubao-seedream-5-0-260128", base_url="https://x", encrypted_api_key="x", is_default=True),
+        ])
+        session.commit()
+
+        selected = select_model_config(session, user_id, "image", "text_to_image")
+        assert selected.model_name == "doubao-seedream-4-0"
+
+        session.add(UsageRecord(
+            user_id=user_id, pipeline_run_id="spent", step="image_gen",
+            model="doubao-seedream-4-0", image_count=200, cost_yuan=Decimal("40.0000"),
+        ))
+        session.commit()
+        selected = select_model_config(session, user_id, "image", "text_to_image")
+        assert selected.model_name == "doubao-seedream-5-0-260128"
+
+        response = client.get(
+            "/api/illustrations/model-quotas",
+            headers={"Authorization": f"Bearer {register['access_token']}"},
+        )
+        assert response.status_code == 200
+        free = next(item for item in response.json()["items"] if item["model"] == "doubao-seedream-4-0")
+        assert free["free_remaining"] == 0
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+
+
 def test_generate_illustration_image_rejects_other_users_character(tmp_path):
     from backend.app.models import Character, ModelConfig
     from backend.app.core.security import encrypt_text
@@ -6928,5 +7009,84 @@ def test_generate_shotlist_rejects_other_users_character(tmp_path):
             "essay": "essay body", "character_id": char.id,
         })
         assert resp.status_code == 404
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+
+
+def test_pipeline_run_is_persisted_and_owner_scoped(tmp_path, monkeypatch):
+    from backend.app.models import Character
+    import backend.app.api.illustrations as illustrations_api
+
+    db_dependency = _override_database(tmp_path)
+    try:
+        owner = client.post("/api/auth/register", json={"username": "run-owner", "password": "pw123456"}).json()
+        intruder = client.post("/api/auth/register", json={"username": "run-intruder", "password": "pw123456"}).json()
+        session = next(app.dependency_overrides[db_dependency]())
+        character = Character(
+            user_id=owner["user"]["id"], name="猫", slug="cat", ip_definition="deadpan cat",
+            reference_image_asset_ids=[], created_via="text_only",
+        )
+        session.add(character)
+        session.commit()
+        session.refresh(character)
+        monkeypatch.setattr(illustrations_api, "generate_shotlist_endpoint", lambda *args: {
+            "core_thesis": "核心",
+            "cognitive_anchors": ["锚点"],
+            "shots": [{"seq": 1, "purpose": "封面", "anchor_paragraph": "第一段", "theme": "主题",
+                       "structure_type": "对比", "character_action": "站立", "elements": [], "chinese_labels": []}],
+        })
+        headers = {"Authorization": f"Bearer {owner['access_token']}"}
+        response = client.post("/api/illustrations/pipeline-runs", headers=headers, json={
+            "essay": "正文", "character_id": character.id,
+        })
+        assert response.status_code == 201, response.text
+        run_id = response.json()["id"]
+        assert response.json()["selected_shot_seqs"] == [1]
+
+        patched = client.patch(f"/api/illustrations/pipeline-runs/{run_id}", headers=headers, json={
+            "selected_shot_seqs": [],
+        })
+        assert patched.status_code == 200
+        assert patched.json()["selected_shot_seqs"] == []
+        foreign = client.get(
+            f"/api/illustrations/pipeline-runs/{run_id}",
+            headers={"Authorization": f"Bearer {intruder['access_token']}"},
+        )
+        assert foreign.status_code == 404
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+
+
+def test_uploaded_character_anchor_enters_independent_asset_library(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from backend.app.models import Character
+    import backend.app.api.illustrations as illustrations_api
+
+    db_dependency = _override_database(tmp_path)
+    try:
+        registered = client.post("/api/auth/register", json={"username": "anchor-owner", "password": "pw123456"}).json()
+        user_id = registered["user"]["id"]
+        session = next(app.dependency_overrides[db_dependency]())
+        character = Character(
+            user_id=user_id, name="护士", slug="nurse", ip_definition="small nurse",
+            reference_image_asset_ids=[], created_via="uploaded",
+        )
+        session.add(character)
+        session.commit()
+        session.refresh(character)
+        media_dir = tmp_path / "media"
+        media_dir.mkdir()
+        file_name = f"xhs-upload-u{user_id}-anchor.png"
+        (media_dir / file_name).write_bytes(b"png")
+        monkeypatch.setattr(illustrations_api, "get_settings", lambda: SimpleNamespace(storage_dir=tmp_path))
+
+        response = client.post(
+            "/api/illustrations/assets/import",
+            headers={"Authorization": f"Bearer {registered['access_token']}"},
+            json={"file_name": file_name, "character_id": character.id},
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["role"] == "character_anchor"
+        assert response.json()["model"] == "upload"
     finally:
         app.dependency_overrides.pop(db_dependency, None)

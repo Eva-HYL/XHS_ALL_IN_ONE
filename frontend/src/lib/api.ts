@@ -33,6 +33,13 @@ import type {
   GenerateTagsPayload,
   GenerateTitlePayload,
   ImageUtilityFile,
+  IllustrationAsset,
+  IllustrationCharacter,
+  IllustrationModelQuota,
+  IllustrationRun,
+  IllustrationShot,
+  IllustrationShotList,
+  IllustrationUsageSummary,
   KeywordGroup,
   KeywordGroupDetail,
   KeywordGroupPayload,
@@ -560,6 +567,116 @@ export async function generateCoverWithAi(payload: GenerateCoverPayload): Promis
 
 export async function generateImageWithAi(payload: GenerateImagePayload): Promise<GenerateImageResult> {
   const response = await http.post<GenerateImageResult>("/ai/images/generate", payload, { timeout: 180000 });
+  return response.data;
+}
+
+export async function fetchIllustrationCharacters(): Promise<Paginated<IllustrationCharacter>> {
+  const response = await http.get<Paginated<IllustrationCharacter>>("/characters");
+  return response.data;
+}
+
+export async function createIllustrationCharacter(payload: {
+  name: string;
+  slug: string;
+  ip_definition: string;
+  reference_image_asset_ids?: number[];
+  created_via?: string;
+}): Promise<IllustrationCharacter> {
+  const response = await http.post<IllustrationCharacter>("/characters", payload);
+  return response.data;
+}
+
+export async function updateIllustrationCharacter(characterId: number, payload: {
+  name?: string;
+  ip_definition?: string;
+  reference_image_asset_ids?: number[];
+}): Promise<IllustrationCharacter> {
+  const response = await http.patch<IllustrationCharacter>(`/characters/${characterId}`, payload);
+  return response.data;
+}
+
+export async function generateIllustrationShotList(payload: {
+  essay: string;
+  character_id: number;
+  instruction?: string;
+  pipeline_run_id: string;
+}): Promise<IllustrationShotList> {
+  const response = await http.post<IllustrationShotList>("/illustrations/generate-shotlist", payload, { timeout: 180000 });
+  return response.data;
+}
+
+export async function generateIllustrationImage(payload: {
+  prompt: string;
+  size?: string;
+  character_id: number;
+  reference_asset_ids?: number[];
+  role?: "illustration" | "character_anchor";
+  pipeline_run_id: string;
+  shot_seq: number;
+}): Promise<IllustrationAsset> {
+  const response = await http.post<IllustrationAsset>("/illustrations/generate-image", payload, { timeout: 240000 });
+  return response.data;
+}
+
+export async function fetchIllustrationAssets(pipelineRunId?: string): Promise<Paginated<IllustrationAsset>> {
+  const response = await http.get<Paginated<IllustrationAsset>>("/illustrations/assets", {
+    params: pipelineRunId ? { pipeline_run_id: pipelineRunId } : undefined,
+  });
+  return response.data;
+}
+
+export async function fetchIllustrationUsageSummary(pipelineRunId: string): Promise<IllustrationUsageSummary> {
+  const response = await http.get<IllustrationUsageSummary>("/illustrations/usage-summary", {
+    params: { pipeline_run_id: pipelineRunId },
+  });
+  return response.data;
+}
+
+export async function fetchIllustrationModelQuotas(): Promise<{ items: IllustrationModelQuota[] }> {
+  const response = await http.get<{ items: IllustrationModelQuota[] }>("/illustrations/model-quotas");
+  return response.data;
+}
+
+export async function importIllustrationAsset(fileName: string, characterId: number): Promise<IllustrationAsset> {
+  const response = await http.post<IllustrationAsset>("/illustrations/assets/import", {
+    file_name: fileName,
+    character_id: characterId,
+  });
+  return response.data;
+}
+
+export async function createIllustrationRun(payload: {
+  essay: string;
+  character_id: number;
+  instruction?: string;
+}): Promise<IllustrationRun> {
+  const response = await http.post<IllustrationRun>("/illustrations/pipeline-runs", payload, { timeout: 180000 });
+  return response.data;
+}
+
+export async function fetchIllustrationRuns(): Promise<Paginated<IllustrationRun>> {
+  const response = await http.get<Paginated<IllustrationRun>>("/illustrations/pipeline-runs");
+  return response.data;
+}
+
+export async function updateIllustrationRun(runId: string, payload: {
+  shots?: IllustrationShot[];
+  selected_shot_seqs?: number[];
+}): Promise<IllustrationRun> {
+  const response = await http.patch<IllustrationRun>(`/illustrations/pipeline-runs/${runId}`, payload);
+  return response.data;
+}
+
+export async function generateIllustrationRunShot(runId: string, shotSeq: number, payload: {
+  prompt: string;
+  size?: string;
+  reference_asset_ids?: number[];
+}): Promise<{ run: IllustrationRun; asset: IllustrationAsset }> {
+  const response = await http.post<{ run: IllustrationRun; asset: IllustrationAsset }>(
+    `/illustrations/pipeline-runs/${runId}/shots/${shotSeq}/generate`,
+    payload,
+    { timeout: 240000 },
+  );
   return response.data;
 }
 

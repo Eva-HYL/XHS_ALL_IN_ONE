@@ -396,6 +396,89 @@ export type GeneratedImageAsset = {
   created_at: string;
 };
 
+export type IllustrationCharacter = {
+  id: number;
+  name: string;
+  slug: string;
+  ip_definition: string;
+  reference_image_asset_ids: number[];
+  created_via: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type IllustrationShot = {
+  seq: number;
+  purpose: "封面" | "内页" | string;
+  anchor_paragraph: string;
+  theme: string;
+  structure_type: string;
+  character_action: string;
+  elements: string[];
+  chinese_labels: string[];
+};
+
+export type IllustrationShotList = {
+  core_thesis: string;
+  cognitive_anchors: string[];
+  shots: IllustrationShot[];
+};
+
+export type IllustrationAsset = {
+  id: number;
+  user_id: number;
+  character_id?: number | null;
+  role: "character_anchor" | "illustration" | string;
+  pipeline_run_id?: string | null;
+  shot_seq?: number | null;
+  prompt: string;
+  model: string;
+  size: string;
+  reference_asset_ids: number[];
+  file_path: string;
+  created_at: string;
+};
+
+export type IllustrationUsageSummary = {
+  pipeline_run_id?: string | null;
+  total_cost_yuan: string;
+  items: Array<{
+    step: string;
+    model: string;
+    input_tokens?: number | null;
+    output_tokens?: number | null;
+    image_count?: number | null;
+    cost_yuan: string;
+  }>;
+};
+
+export type IllustrationModelQuota = {
+  model_config_id: number;
+  model_type: "text" | "image";
+  model: string;
+  is_default: boolean;
+  used_units: number;
+  free_ceiling: number;
+  free_remaining: number;
+  priority: number;
+  unit_price_yuan: string;
+  capabilities: string[];
+};
+
+export type IllustrationRun = {
+  id: string;
+  character_id: number;
+  essay: string;
+  instruction: string;
+  status: string;
+  core_thesis: string;
+  cognitive_anchors: string[];
+  shots: Array<IllustrationShot & { asset_id?: number; generation_status?: string }>;
+  selected_shot_seqs: number[];
+  created_at: string;
+  updated_at: string;
+};
+
 export type GenerateCoverPayload = {
   prompt: string;
   draft_id?: number;
