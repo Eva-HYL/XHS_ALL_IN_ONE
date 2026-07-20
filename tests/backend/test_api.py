@@ -6580,7 +6580,7 @@ def test_pricing_service_calculates_text_and_image_costs():
 
     pricing = get_pricing()
     assert "qwen3.7-max" in pricing["text_models"]
-    assert "doubao-seedream-4-0" in pricing["image_models"]
+    assert "doubao-seedream-4-0-250828" in pricing["image_models"]
     assert pricing["meta"]["last_verified"] == "2026-07-17"
 
 
@@ -6858,18 +6858,18 @@ def test_model_selector_prefers_free_quota_then_falls_back(tmp_path):
         session = next(app.dependency_overrides[db_dependency]())
         session.add_all([
             ModelConfig(user_id=user_id, name="free", model_type="image", provider="openai-compatible",
-                        model_name="doubao-seedream-4-0", base_url="https://x", encrypted_api_key="x", is_default=False),
+                        model_name="doubao-seedream-4-0-250828", base_url="https://x", encrypted_api_key="x", is_default=False),
             ModelConfig(user_id=user_id, name="paid", model_type="image", provider="openai-compatible",
                         model_name="doubao-seedream-5-0-260128", base_url="https://x", encrypted_api_key="x", is_default=True),
         ])
         session.commit()
 
         selected = select_model_config(session, user_id, "image", "text_to_image")
-        assert selected.model_name == "doubao-seedream-4-0"
+        assert selected.model_name == "doubao-seedream-4-0-250828"
 
         session.add(UsageRecord(
             user_id=user_id, pipeline_run_id="spent", step="image_gen",
-            model="doubao-seedream-4-0", image_count=200, cost_yuan=Decimal("40.0000"),
+            model="doubao-seedream-4-0-250828", image_count=200, cost_yuan=Decimal("40.0000"),
         ))
         session.commit()
         selected = select_model_config(session, user_id, "image", "text_to_image")
@@ -6880,7 +6880,7 @@ def test_model_selector_prefers_free_quota_then_falls_back(tmp_path):
             headers={"Authorization": f"Bearer {register['access_token']}"},
         )
         assert response.status_code == 200
-        free = next(item for item in response.json()["items"] if item["model"] == "doubao-seedream-4-0")
+        free = next(item for item in response.json()["items"] if item["model"] == "doubao-seedream-4-0-250828")
         assert free["free_remaining"] == 0
     finally:
         app.dependency_overrides.pop(db_dependency, None)
