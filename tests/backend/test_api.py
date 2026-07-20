@@ -6886,6 +6886,12 @@ def test_model_selector_prefers_free_quota_then_falls_back(tmp_path):
         app.dependency_overrides.pop(db_dependency, None)
 
 
+def test_model_fallback_recognizes_provider_access_denied():
+    from backend.app.services.model_selector_service import is_quota_error
+
+    assert is_quota_error(ValueError("Access to model denied. Please make sure you are eligible for using the model."))
+
+
 def test_generate_illustration_image_rejects_other_users_character(tmp_path):
     from backend.app.models import Character, ModelConfig
     from backend.app.core.security import encrypt_text

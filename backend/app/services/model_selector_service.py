@@ -110,5 +110,8 @@ def select_model_config(
 
 def is_quota_error(error: Exception) -> bool:
     message = str(error).lower()
-    markers = ("quota", "rate limit", "rate_limit", "429", "余额不足", "额度", "insufficient")
+    markers = (
+        "quota", "rate limit", "rate_limit", "429", "余额不足", "额度", "insufficient",
+        "access to model denied", "not eligible", "model not found",
+    )
     return any(marker in message for marker in markers)
