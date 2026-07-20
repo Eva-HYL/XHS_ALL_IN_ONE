@@ -3,6 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "../components/layout/app-shell";
 import { ComingSoonPage } from "../components/platforms/coming-soon";
 import { ProtectedRoute, PublicOnlyRoute } from "../components/ui/protected-route";
+import { BillingCenterPage } from "../pages/billing/billing-center-page";
 import { LoginPage } from "../pages/login/login-page";
 import { ModelConfigPage } from "../pages/models/model-config-page";
 import { PlatformSelectPage } from "../pages/platform-select/platform-select-page";
@@ -75,6 +76,7 @@ export function AppRouter() {
           <Route path="/platforms/xhs/auto-ops" element={<AutoOpsPage />} />
           <Route path="/platforms/xhs/:section" element={<XhsSectionPage />} />
           <Route path="/tasks" element={<TaskCenterPage />} />
+          <Route path="/billing" element={<BillingCenterPage />} />
           <Route path="/models" element={<ModelConfigPage />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>

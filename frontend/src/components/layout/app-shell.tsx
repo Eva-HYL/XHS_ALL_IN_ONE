@@ -2,6 +2,7 @@ import {
   AimOutlined,
   BarChartOutlined,
   BellOutlined,
+  CreditCardOutlined,
   CloudDownloadOutlined,
   DashboardOutlined,
   DatabaseOutlined,
@@ -69,6 +70,7 @@ const mainNavItems: MenuProps["items"] = [
 
 const footerNavItems: MenuProps["items"] = [
   { key: "/tasks", icon: <ScheduleOutlined />, label: "任务中心" },
+  { key: "/billing", icon: <CreditCardOutlined />, label: "账单中心" },
   { key: "/models", icon: <RobotOutlined />, label: "模型配置" },
   { key: "/settings", icon: <SettingOutlined />, label: "设置" },
 ];
