@@ -57,3 +57,20 @@ class UsageRecord(Base):
     unit_price_snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     cost_yuan: Mapped[Decimal] = mapped_column(Numeric(10, 4), default=Decimal("0.0000"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=shanghai_now, index=True)
+
+
+class IllustrationRun(Base):
+    __tablename__ = "illustration_runs"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    character_id: Mapped[int] = mapped_column(ForeignKey("characters.id"), index=True)
+    essay: Mapped[str] = mapped_column(Text)
+    instruction: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(32), default="shotlist_ready", index=True)
+    core_thesis: Mapped[str] = mapped_column(Text, default="")
+    cognitive_anchors: Mapped[list] = mapped_column(JSON, default=list)
+    shots: Mapped[list] = mapped_column(JSON, default=list)
+    selected_shot_seqs: Mapped[list] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=shanghai_now, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=shanghai_now, onupdate=shanghai_now)

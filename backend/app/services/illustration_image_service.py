@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import base64
+import mimetypes
+from pathlib import Path
 from typing import Any, Optional
 
 import requests
@@ -93,7 +96,18 @@ def _resolve_reference_urls(db: Session, user_id: int, asset_ids: list[int]) -> 
         IllustrationAsset.id.in_(asset_ids),
         IllustrationAsset.user_id == user_id,
     ).all()
-    return [r.file_path for r in rows if r.file_path]
+    values: list[str] = []
+    for row in rows:
+        if not row.file_path:
+            continue
+        path = Path(row.file_path)
+        if path.is_file():
+            mime = mimetypes.guess_type(path.name)[0] or "image/png"
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+            values.append(f"data:{mime};base64,{encoded}")
+        else:
+            values.append(row.file_path)
+    return values
 
 
 def generate_and_persist_illustration(

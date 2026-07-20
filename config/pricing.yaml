@@ -8,9 +8,15 @@ text_models:
   qwen3.7-max:
     input_yuan_per_million_tokens: 2.5
     output_yuan_per_million_tokens: 7.5
+    free_tokens: 1000000
+    priority: 20
+    capabilities: ["shotlist"]
   qwen3.7-plus:
     input_yuan_per_million_tokens: 0.4
     output_yuan_per_million_tokens: 1.6
+    free_tokens: 1000000
+    priority: 10
+    capabilities: ["shotlist"]
 
 image_models:
   # Currently-configured default (still an estimate — this specific SKU isn't
@@ -19,15 +25,30 @@ image_models:
   # slightly higher.)
   doubao-seedream-5-0-260128:
     yuan_per_image: 0.26
+    free_images: 0
+    priority: 50
+    capabilities: ["text_to_image", "reference_image"]
   # Seeded here for the Phase 1.5 quota-fallback plan; not called yet.
   doubao-seedream-4-0:
     yuan_per_image: 0.20
+    free_images: 200
+    priority: 10
+    capabilities: ["text_to_image", "reference_image"]
   doubao-seedream-4-5:
     yuan_per_image: 0.25
+    free_images: 200
+    priority: 30
+    capabilities: ["text_to_image", "reference_image"]
   doubao-seedream-5-0-lite:
     yuan_per_image: 0.22
+    free_images: 50
+    priority: 20
+    capabilities: ["text_to_image", "reference_image"]
   doubao-seedream-3-0-t2i:
     yuan_per_image: 0.259
+    free_images: 200
+    priority: 40
+    capabilities: ["text_to_image"]
 
 meta:
   last_verified: "2026-07-17"
