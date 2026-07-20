@@ -249,9 +249,10 @@ export function IllustrationWorkflowPanel() {
 
   return (
     <Card
+      className="illustration-workflow-card"
       title={<Space><ThunderboltOutlined /><span>文章配图流水线</span><Tag color="gold">独立资产库</Tag></Space>}
       extra={<Text type="secondary">拆文免费试算 · 按需生成 · 默认保存</Text>}
-      style={{ marginBottom: 24, borderColor: "#7d6b3c" }}
+      style={{ marginBottom: 24 }}
     >
       <Steps
         current={currentStep}
@@ -308,7 +309,7 @@ export function IllustrationWorkflowPanel() {
       </Row>
 
       {quotas.length > 0 && (
-        <Card size="small" title="免费额度监控与自动切换" style={{ marginTop: 16, background: "#faf8f1" }}>
+        <Card className="illustration-quota-card" size="small" title="免费额度监控与自动切换" style={{ marginTop: 16 }}>
           <Row gutter={[12, 12]}>
             {quotas.map((quota) => (
               <Col xs={24} md={12} xl={8} key={quota.model_config_id}>
