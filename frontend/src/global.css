@@ -4,6 +4,27 @@ body {
   transition: background-color 0.3s ease;
 }
 
+:root,
+:root[data-theme="light"] {
+  --app-scrollbar-track: #f0f0f0;
+  --app-scrollbar-thumb: #bfbfbf;
+  --app-scrollbar-thumb-hover: #8c8c8c;
+  --app-table-row-hover: #eaf2ff;
+  --illustration-border: #d6b85a;
+  --illustration-quota-bg: #fffaf0;
+  --illustration-quota-border: #ead9a1;
+}
+
+:root[data-theme="dark"] {
+  --app-scrollbar-track: #1f1f1f;
+  --app-scrollbar-thumb: #434343;
+  --app-scrollbar-thumb-hover: #666666;
+  --app-table-row-hover: #1a1f2e;
+  --illustration-border: #7d6b3c;
+  --illustration-quota-bg: #202018;
+  --illustration-quota-border: #544a2b;
+}
+
 #root {
   min-height: 100vh;
 }
@@ -14,16 +35,16 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: #1f1f1f;
+  background: var(--app-scrollbar-track);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #434343;
+  background: var(--app-scrollbar-thumb);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #555;
+  background: var(--app-scrollbar-thumb-hover);
 }
 
 .ant-layout {
@@ -53,7 +74,16 @@ body {
 }
 
 .ant-table-tbody > tr:hover > td {
-  background: #1a1a2e !important;
+  background: var(--app-table-row-hover) !important;
+}
+
+.illustration-workflow-card {
+  border-color: var(--illustration-border);
+}
+
+.illustration-quota-card {
+  background: var(--illustration-quota-bg);
+  border-color: var(--illustration-quota-border);
 }
 
 .ant-tag {
