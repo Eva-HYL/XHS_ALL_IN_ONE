@@ -1,0 +1,37 @@
+# Model pricing — updated 2026-07-17 per Phase 0 findings + console screenshots.
+# All prices in CNY (¥).
+# Cost calculation:
+#   text = (input_tokens * input_yuan_per_million + output_tokens * output_yuan_per_million) / 1_000_000
+#   image = image_count * yuan_per_image
+
+text_models:
+  qwen3.7-max:
+    input_yuan_per_million_tokens: 2.5
+    output_yuan_per_million_tokens: 7.5
+  qwen3.7-plus:
+    input_yuan_per_million_tokens: 0.4
+    output_yuan_per_million_tokens: 1.6
+
+image_models:
+  # Currently-configured default (still an estimate — this specific SKU isn't
+  # in the 2026-07-17 console screenshot; adjacent Seedream 4.0 is ¥0.20, 4.5
+  # is ¥0.25, 5.0-lite is ¥0.22, 3.0-t2i is ¥0.259. 5.0 (non-lite) presumed
+  # slightly higher.)
+  doubao-seedream-5-0-260128:
+    yuan_per_image: 0.26
+  # Seeded here for the Phase 1.5 quota-fallback plan; not called yet.
+  doubao-seedream-4-0:
+    yuan_per_image: 0.20
+  doubao-seedream-4-5:
+    yuan_per_image: 0.25
+  doubao-seedream-5-0-lite:
+    yuan_per_image: 0.22
+  doubao-seedream-3-0-t2i:
+    yuan_per_image: 0.259
+
+meta:
+  last_verified: "2026-07-17"
+  sources:
+    - "https://help.aliyun.com/zh/model-studio/model-pricing"
+    - "https://www.volcengine.com/docs/82379/1099466"
+    - "aliyun/火山方舟 console screenshots 2026-07-17 (attached to spec)"
