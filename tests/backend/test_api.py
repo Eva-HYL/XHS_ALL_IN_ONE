@@ -7011,3 +7011,82 @@ def test_generate_shotlist_rejects_other_users_character(tmp_path):
         assert resp.status_code == 404
     finally:
         app.dependency_overrides.pop(db_dependency, None)
+
+
+def test_pipeline_run_is_persisted_and_owner_scoped(tmp_path, monkeypatch):
+    from backend.app.models import Character
+    import backend.app.api.illustrations as illustrations_api
+
+    db_dependency = _override_database(tmp_path)
+    try:
+        owner = client.post("/api/auth/register", json={"username": "run-owner", "password": "pw123456"}).json()
+        intruder = client.post("/api/auth/register", json={"username": "run-intruder", "password": "pw123456"}).json()
+        session = next(app.dependency_overrides[db_dependency]())
+        character = Character(
+            user_id=owner["user"]["id"], name="猫", slug="cat", ip_definition="deadpan cat",
+            reference_image_asset_ids=[], created_via="text_only",
+        )
+        session.add(character)
+        session.commit()
+        session.refresh(character)
+        monkeypatch.setattr(illustrations_api, "generate_shotlist_endpoint", lambda *args: {
+            "core_thesis": "核心",
+            "cognitive_anchors": ["锚点"],
+            "shots": [{"seq": 1, "purpose": "封面", "anchor_paragraph": "第一段", "theme": "主题",
+                       "structure_type": "对比", "character_action": "站立", "elements": [], "chinese_labels": []}],
+        })
+        headers = {"Authorization": f"Bearer {owner['access_token']}"}
+        response = client.post("/api/illustrations/pipeline-runs", headers=headers, json={
+            "essay": "正文", "character_id": character.id,
+        })
+        assert response.status_code == 201, response.text
+        run_id = response.json()["id"]
+        assert response.json()["selected_shot_seqs"] == [1]
+
+        patched = client.patch(f"/api/illustrations/pipeline-runs/{run_id}", headers=headers, json={
+            "selected_shot_seqs": [],
+        })
+        assert patched.status_code == 200
+        assert patched.json()["selected_shot_seqs"] == []
+        foreign = client.get(
+            f"/api/illustrations/pipeline-runs/{run_id}",
+            headers={"Authorization": f"Bearer {intruder['access_token']}"},
+        )
+        assert foreign.status_code == 404
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+
+
+def test_uploaded_character_anchor_enters_independent_asset_library(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from backend.app.models import Character
+    import backend.app.api.illustrations as illustrations_api
+
+    db_dependency = _override_database(tmp_path)
+    try:
+        registered = client.post("/api/auth/register", json={"username": "anchor-owner", "password": "pw123456"}).json()
+        user_id = registered["user"]["id"]
+        session = next(app.dependency_overrides[db_dependency]())
+        character = Character(
+            user_id=user_id, name="护士", slug="nurse", ip_definition="small nurse",
+            reference_image_asset_ids=[], created_via="uploaded",
+        )
+        session.add(character)
+        session.commit()
+        session.refresh(character)
+        media_dir = tmp_path / "media"
+        media_dir.mkdir()
+        file_name = f"xhs-upload-u{user_id}-anchor.png"
+        (media_dir / file_name).write_bytes(b"png")
+        monkeypatch.setattr(illustrations_api, "get_settings", lambda: SimpleNamespace(storage_dir=tmp_path))
+
+        response = client.post(
+            "/api/illustrations/assets/import",
+            headers={"Authorization": f"Bearer {registered['access_token']}"},
+            json={"file_name": file_name, "character_id": character.id},
+        )
+        assert response.status_code == 201, response.text
+        assert response.json()["role"] == "character_anchor"
+        assert response.json()["model"] == "upload"
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)

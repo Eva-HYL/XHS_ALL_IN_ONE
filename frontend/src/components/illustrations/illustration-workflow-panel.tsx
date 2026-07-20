@@ -1,6 +1,7 @@
 import {
   CheckCircleOutlined,
   PlusOutlined,
+  PictureOutlined,
   RobotOutlined,
   ThunderboltOutlined,
 } from "@ant-design/icons";
@@ -23,16 +24,24 @@ import {
   Steps,
   Tag,
   Typography,
+  Upload,
 } from "antd";
 import { useEffect, useState } from "react";
 
 import {
   createIllustrationCharacter,
+  createIllustrationRun,
+  fetchIllustrationAssets,
   fetchIllustrationCharacters,
   fetchIllustrationModelQuotas,
+  fetchIllustrationRuns,
   fetchIllustrationUsageSummary,
   generateIllustrationImage,
-  generateIllustrationShotList,
+  generateIllustrationRunShot,
+  importIllustrationAsset,
+  updateIllustrationCharacter,
+  updateIllustrationRun,
+  uploadAssetFile,
 } from "../../lib/api";
 import type {
   IllustrationAsset,
@@ -45,10 +54,6 @@ import type {
 
 const { Text, Title } = Typography;
 const { TextArea } = Input;
-
-function makeRunId(): string {
-  return `illustration-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
 
 function slugify(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, "-") || `character-${Date.now()}`;
@@ -80,7 +85,7 @@ export function IllustrationWorkflowPanel() {
   const [generated, setGenerated] = useState<Record<number, IllustrationAsset>>({});
   const [generating, setGenerating] = useState<number[]>([]);
   const [analyzing, setAnalyzing] = useState(false);
-  const [runId, setRunId] = useState(makeRunId());
+  const [runId, setRunId] = useState("");
   const [usage, setUsage] = useState<IllustrationUsageSummary>();
   const [quotas, setQuotas] = useState<IllustrationModelQuota[]>([]);
   const [error, setError] = useState<string>();
@@ -88,6 +93,7 @@ export function IllustrationWorkflowPanel() {
   const [newName, setNewName] = useState("");
   const [newDefinition, setNewDefinition] = useState("");
   const [creating, setCreating] = useState(false);
+  const [anchoring, setAnchoring] = useState(false);
 
   async function loadCharacters() {
     const result = await fetchIllustrationCharacters();
@@ -104,9 +110,24 @@ export function IllustrationWorkflowPanel() {
     setQuotas(result.items);
   }
 
+  async function restoreLatestRun() {
+    const result = await fetchIllustrationRuns();
+    const latest = result.items[0];
+    if (!latest) return;
+    setRunId(latest.id);
+    setEssay(latest.essay);
+    setCharacterId(latest.character_id);
+    setShotList({ core_thesis: latest.core_thesis, cognitive_anchors: latest.cognitive_anchors, shots: latest.shots });
+    setSelected(latest.selected_shot_seqs);
+    const assets = await fetchIllustrationAssets(latest.id);
+    setGenerated(Object.fromEntries(assets.items.filter((asset) => asset.shot_seq != null).map((asset) => [asset.shot_seq!, asset])));
+    await refreshUsage(latest.id);
+  }
+
   useEffect(() => {
     void loadCharacters().catch(() => setError("形象库加载失败"));
     void loadQuotas().catch(() => setError("模型额度加载失败"));
+    void restoreLatestRun().catch(() => undefined);
   }, []);
 
   async function handleCreateCharacter() {
@@ -131,20 +152,18 @@ export function IllustrationWorkflowPanel() {
 
   async function handleAnalyze() {
     if (!characterId || !essay.trim()) return;
-    const nextRunId = makeRunId();
-    setRunId(nextRunId);
     setAnalyzing(true);
     setError(undefined);
     setGenerated({});
     try {
-      const result = await generateIllustrationShotList({
+      const result = await createIllustrationRun({
         essay: essay.trim(),
         character_id: characterId,
-        pipeline_run_id: nextRunId,
       });
-      setShotList(result);
-      setSelected(result.shots.map((shot) => shot.seq));
-      await refreshUsage(nextRunId);
+      setRunId(result.id);
+      setShotList({ core_thesis: result.core_thesis, cognitive_anchors: result.cognitive_anchors, shots: result.shots });
+      setSelected(result.selected_shot_seqs);
+      await refreshUsage(result.id);
     } catch {
       setError("拆文失败，请检查文本模型配置。拦截器会显示具体错误。");
     } finally {
@@ -164,18 +183,58 @@ export function IllustrationWorkflowPanel() {
     if (!character) return;
     setGenerating((items) => [...items, shot.seq]);
     try {
-      const asset = await generateIllustrationImage({
+      if (shotList) await updateIllustrationRun(runId, { shots: shotList.shots, selected_shot_seqs: selected });
+      const result = await generateIllustrationRunShot(runId, shot.seq, {
         prompt: buildPrompt(shot, character),
         size: "3:4",
-        character_id: character.id,
         reference_asset_ids: character.reference_image_asset_ids,
-        pipeline_run_id: runId,
-        shot_seq: shot.seq,
       });
+      const asset = result.asset;
       setGenerated((items) => ({ ...items, [shot.seq]: asset }));
       await Promise.all([refreshUsage(), loadQuotas()]);
     } finally {
       setGenerating((items) => items.filter((seq) => seq !== shot.seq));
+    }
+  }
+
+  async function attachAnchorAsset(asset: IllustrationAsset) {
+    const character = characters.find((item) => item.id === characterId);
+    if (!character) return;
+    const ids = [...new Set([...character.reference_image_asset_ids, asset.id])];
+    const updated = await updateIllustrationCharacter(character.id, { reference_image_asset_ids: ids });
+    setCharacters((items) => items.map((item) => item.id === updated.id ? updated : item));
+  }
+
+  async function handleUploadAnchor(file: File) {
+    if (!characterId) return false;
+    setAnchoring(true);
+    try {
+      const uploaded = await uploadAssetFile(file);
+      const asset = await importIllustrationAsset(uploaded.file_name, characterId);
+      await attachAnchorAsset(asset);
+    } finally {
+      setAnchoring(false);
+    }
+    return false;
+  }
+
+  async function handleGenerateAnchor() {
+    const character = characters.find((item) => item.id === characterId);
+    if (!character) return;
+    setAnchoring(true);
+    try {
+      const asset = await generateIllustrationImage({
+        prompt: `Create a clean 3:4 character reference sheet on white background. Preserve this character exactly for future illustrations: ${character.ip_definition}`,
+        size: "3:4",
+        character_id: character.id,
+        role: "character_anchor",
+        pipeline_run_id: `character-${character.id}-${Date.now()}`,
+        shot_seq: 0,
+      });
+      await attachAnchorAsset(asset);
+      await loadQuotas();
+    } finally {
+      setAnchoring(false);
     }
   }
 
@@ -225,8 +284,14 @@ export function IllustrationWorkflowPanel() {
             <Button icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建</Button>
           </Space.Compact>
           <Text type="secondary" style={{ display: "block", marginTop: 10 }}>
-            当前支持文字定义；上传参考图和在线生成锚定图将在额度切换阶段接入同一形象库。
+            已绑定 {characters.find((item) => item.id === characterId)?.reference_image_asset_ids.length ?? 0} 张锚定图，后续配图会自动引用。
           </Text>
+          <Space wrap style={{ marginTop: 10 }}>
+            <Upload accept="image/*" showUploadList={false} beforeUpload={handleUploadAnchor} disabled={!characterId || anchoring}>
+              <Button icon={<PictureOutlined />} loading={anchoring}>上传参考图</Button>
+            </Upload>
+            <Button icon={<RobotOutlined />} loading={anchoring} disabled={!characterId} onClick={handleGenerateAnchor}>在线生成形象</Button>
+          </Space>
           <Button
             type="primary"
             icon={<RobotOutlined />}

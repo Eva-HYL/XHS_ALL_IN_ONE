@@ -465,6 +465,20 @@ export type IllustrationModelQuota = {
   capabilities: string[];
 };
 
+export type IllustrationRun = {
+  id: string;
+  character_id: number;
+  essay: string;
+  instruction: string;
+  status: string;
+  core_thesis: string;
+  cognitive_anchors: string[];
+  shots: Array<IllustrationShot & { asset_id?: number; generation_status?: string }>;
+  selected_shot_seqs: number[];
+  created_at: string;
+  updated_at: string;
+};
+
 export type GenerateCoverPayload = {
   prompt: string;
   draft_id?: number;

@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 
 class GenerateIllustrationRequest(BaseModel):
-    prompt: str = Field(min_length=1, max_length=2000)
+    prompt: str = Field(min_length=1, max_length=12000)
     size: str = Field(default="3:4", max_length=32)
     reference_asset_ids: list[int] = Field(default_factory=list, max_length=20)
     character_id: Optional[int] = None
@@ -36,3 +36,25 @@ class IllustrationAssetResponse(BaseModel):
     reference_asset_ids: list[int]
     file_path: str
     created_at: datetime
+
+
+class ImportIllustrationAssetRequest(BaseModel):
+    file_name: str = Field(min_length=1, max_length=180)
+    character_id: Optional[int] = None
+
+
+class IllustrationRunCreateRequest(BaseModel):
+    essay: str = Field(min_length=1, max_length=8000)
+    character_id: int
+    instruction: str = Field(default="", max_length=800)
+
+
+class IllustrationRunUpdateRequest(BaseModel):
+    shots: Optional[list[dict]] = None
+    selected_shot_seqs: Optional[list[int]] = Field(default=None, max_length=50)
+
+
+class GenerateRunShotRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=12000)
+    size: str = Field(default="3:4", max_length=32)
+    reference_asset_ids: list[int] = Field(default_factory=list, max_length=20)

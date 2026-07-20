@@ -6,7 +6,7 @@ from backend.app.models.login_session import LoginSession
 from backend.app.models.monitoring import MonitoringSnapshot, MonitoringTarget
 from backend.app.models.note import Note, NoteAsset, NoteComment, Tag, note_tags
 from backend.app.models.notification import Notification
-from backend.app.models.pipeline import Character, IllustrationAsset, UsageRecord
+from backend.app.models.pipeline import Character, IllustrationAsset, IllustrationRun, UsageRecord
 from backend.app.models.platform_account import AccountCookieVersion, PlatformAccount
 from backend.app.models.publish import PublishAsset, PublishJob
 from backend.app.models.task import Task
@@ -22,6 +22,7 @@ __all__ = [
     "DEFAULT_TEXT_MODEL_NAME",
     "DraftAsset",
     "IllustrationAsset",
+    "IllustrationRun",
     "KeywordGroup",
     "LoginSession",
     "ModelConfig",
