@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
 from backend.app.core.security import decrypt_text
-from backend.app.models import Character, IllustrationAsset, ModelConfig, User
+from backend.app.models import Character, IllustrationAsset, ModelConfig, UsageRecord, User
+from backend.app.schemas.common import paginated
 from backend.app.schemas.illustrations import GenerateIllustrationRequest, GenerateShotlistRequest
 from backend.app.services.illustration_image_service import generate_and_persist_illustration
 from backend.app.services.illustration_shotlist_service import generate_shotlist
@@ -57,6 +58,49 @@ def _serialize_asset(asset: IllustrationAsset) -> dict:
         "reference_asset_ids": asset.reference_asset_ids or [],
         "file_path": asset.file_path,
         "created_at": asset.created_at.isoformat(),
+    }
+
+
+@router.get("/assets")
+def list_illustration_assets(
+    pipeline_run_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    page: int = 1,
+    page_size: int = 50,
+):
+    stmt = select(IllustrationAsset).where(IllustrationAsset.user_id == current_user.id)
+    if pipeline_run_id is not None:
+        stmt = stmt.where(IllustrationAsset.pipeline_run_id == pipeline_run_id)
+    items = db.scalars(stmt.order_by(IllustrationAsset.id.desc())).all()
+    return paginated([_serialize_asset(asset) for asset in items], page=page, page_size=page_size)
+
+
+@router.get("/usage-summary")
+def illustration_usage_summary(
+    pipeline_run_id: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    stmt = select(UsageRecord).where(UsageRecord.user_id == current_user.id)
+    if pipeline_run_id is not None:
+        stmt = stmt.where(UsageRecord.pipeline_run_id == pipeline_run_id)
+    rows = db.scalars(stmt.order_by(UsageRecord.id.asc())).all()
+    total = sum((row.cost_yuan for row in rows), start=0)
+    return {
+        "pipeline_run_id": pipeline_run_id,
+        "total_cost_yuan": f"{total:.4f}",
+        "items": [
+            {
+                "step": row.step,
+                "model": row.model,
+                "input_tokens": row.input_tokens,
+                "output_tokens": row.output_tokens,
+                "image_count": row.image_count,
+                "cost_yuan": f"{row.cost_yuan:.4f}",
+            }
+            for row in rows
+        ],
     }
 
 

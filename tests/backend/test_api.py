@@ -6805,6 +6805,47 @@ def test_generate_illustration_image_returns_502_on_provider_error(tmp_path, mon
         app.dependency_overrides.pop(db_dependency, None)
 
 
+def test_illustration_assets_and_usage_summary_are_owner_scoped(tmp_path):
+    from decimal import Decimal
+    from backend.app.models import IllustrationAsset, UsageRecord
+
+    db_dependency = _override_database(tmp_path)
+    try:
+        owner = client.post("/api/auth/register", json={"username": "asset-owner", "password": "pw123456"}).json()
+        other = client.post("/api/auth/register", json={"username": "asset-other", "password": "pw123456"}).json()
+        session = next(app.dependency_overrides[db_dependency]())
+        session.add_all([
+            IllustrationAsset(
+                user_id=owner["user"]["id"], role="illustration", pipeline_run_id="run-assets",
+                shot_seq=1, prompt="p", model="m", size="3:4", reference_asset_ids=[],
+                file_path="https://example.invalid/one.png",
+            ),
+            IllustrationAsset(
+                user_id=other["user"]["id"], role="illustration", pipeline_run_id="run-assets",
+                shot_seq=1, prompt="foreign", model="m", size="3:4", reference_asset_ids=[],
+                file_path="https://example.invalid/foreign.png",
+            ),
+            UsageRecord(
+                user_id=owner["user"]["id"], pipeline_run_id="run-assets", step="image_gen",
+                model="m", image_count=1, cost_yuan=Decimal("0.2600"),
+            ),
+        ])
+        session.commit()
+        headers = {"Authorization": f"Bearer {owner['access_token']}"}
+
+        assets = client.get("/api/illustrations/assets", headers=headers, params={"pipeline_run_id": "run-assets"})
+        assert assets.status_code == 200
+        assert assets.json()["total"] == 1
+        assert assets.json()["items"][0]["prompt"] == "p"
+
+        usage = client.get("/api/illustrations/usage-summary", headers=headers, params={"pipeline_run_id": "run-assets"})
+        assert usage.status_code == 200
+        assert usage.json()["total_cost_yuan"] == "0.2600"
+        assert usage.json()["items"][0]["model"] == "m"
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+
+
 def test_generate_illustration_image_rejects_other_users_character(tmp_path):
     from backend.app.models import Character, ModelConfig
     from backend.app.core.security import encrypt_text

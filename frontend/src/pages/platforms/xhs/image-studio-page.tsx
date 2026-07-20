@@ -16,6 +16,7 @@ import {
   Card,
   Checkbox,
   Col,
+  Divider,
   Empty,
   Image,
   Input,
@@ -31,6 +32,7 @@ import {
 import { useEffect, useState } from "react";
 
 import { PageHeader } from "../../../components/layout/app-shell";
+import { IllustrationWorkflowPanel } from "../../../components/illustrations/illustration-workflow-panel";
 import {
   deleteGeneratedImageAsset,
   deleteUserImage,
@@ -191,7 +193,7 @@ export function XhsImageStudioPage() {
       <PageHeader
         eyebrow="XHS Image Studio"
         title="图片工坊"
-        description="AI 图片生成、图片描述、沉淀图片资产，赋能小红书内容创作。"
+        description="文章配图流水线与通用 AI 生图彼此独立：前者理解正文并按需生成，后者保留原有自由创作能力。"
         action={
           <Button
             icon={<ReloadOutlined />}
@@ -223,6 +225,10 @@ export function XhsImageStudioPage() {
           style={{ marginBottom: 16 }}
         />
       )}
+
+      <IllustrationWorkflowPanel />
+
+      <Divider>通用生图（原有功能）</Divider>
 
       {/* ---- Top Row: Two tool cards ---- */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
