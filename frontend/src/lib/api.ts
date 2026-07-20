@@ -629,9 +629,9 @@ export async function fetchIllustrationAssets(pipelineRunId?: string): Promise<P
   return response.data;
 }
 
-export async function fetchIllustrationUsageSummary(pipelineRunId: string): Promise<IllustrationUsageSummary> {
+export async function fetchIllustrationUsageSummary(pipelineRunId?: string): Promise<IllustrationUsageSummary> {
   const response = await http.get<IllustrationUsageSummary>("/illustrations/usage-summary", {
-    params: { pipeline_run_id: pipelineRunId },
+    params: pipelineRunId ? { pipeline_run_id: pipelineRunId } : undefined,
   });
   return response.data;
 }
