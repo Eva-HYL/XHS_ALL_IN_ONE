@@ -112,6 +112,7 @@ export function IllustrationWorkflowPanel({ onManageCharacters }: IllustrationWo
     const confirmed = result.items.filter(isCharacterConfirmed);
     setCharacters(confirmed);
     setCharacterId((current) => confirmed.some((item) => item.id === current) ? current : confirmed[0]?.id);
+    return confirmed;
   }
 
   async function refreshRuns(preferredRunId?: string) {
@@ -136,15 +137,46 @@ export function IllustrationWorkflowPanel({ onManageCharacters }: IllustrationWo
     setUsage(await fetchIllustrationUsageSummary(runId));
   }
 
+  function characterForRun(run: IllustrationRun, source = characters) {
+    return source.find((item) => item.id === run.character_id);
+  }
+
+  async function ensureRunPrompts(run: IllustrationRun, source = characters, syncVisibleState = true) {
+    const character = characterForRun(run, source);
+    if (!character) return run;
+
+    let changed = false;
+    const nextPrompts: PromptMap = {};
+    const nextShots = run.shots.map((shot) => {
+      const existingPrompt = shotPrompt(shot);
+      const prompt = existingPrompt || buildIllustrationPrompt(shot, character);
+      nextPrompts[shot.seq] = prompt;
+      if (existingPrompt) return shot;
+      changed = true;
+      return { ...shot, image_prompt: prompt };
+    });
+
+    if (syncVisibleState) setPrompts(nextPrompts);
+    if (!changed) return run;
+
+    const updated = await updateIllustrationRun(run.id, {
+      shots: nextShots,
+      selected_shot_seqs: run.selected_shot_seqs,
+    });
+    setRuns((items) => items.map((item) => item.id === updated.id ? updated : item));
+    return updated;
+  }
+
   async function loadInitial() {
     setLoading(true);
     setError(undefined);
     try {
-      await Promise.all([refreshCharacters(), refreshQuotas()]);
+      const [confirmed] = await Promise.all([refreshCharacters(), refreshQuotas()]);
       const run = await refreshRuns();
       if (run) {
-        hydrateRun(run);
-        await Promise.all([loadRunAssets(run.id), loadUsage(run.id)]);
+        const readyRun = await ensureRunPrompts(run, confirmed);
+        hydrateRun(readyRun);
+        await Promise.all([loadRunAssets(readyRun.id), loadUsage(readyRun.id)]);
       }
     } catch {
       setError("拆文资产加载失败。");
@@ -165,8 +197,10 @@ export function IllustrationWorkflowPanel({ onManageCharacters }: IllustrationWo
 
   useEffect(() => {
     if (!selectedRun) return;
-    hydrateRun(selectedRun);
-    void Promise.all([loadRunAssets(selectedRun.id), loadUsage(selectedRun.id)]).catch(() => undefined);
+    void ensureRunPrompts(selectedRun).then((readyRun) => {
+      hydrateRun(readyRun);
+      return Promise.all([loadRunAssets(readyRun.id), loadUsage(readyRun.id)]);
+    }).catch(() => undefined);
   }, [selectedRun?.id]);
 
   async function createRunsInQueue() {
@@ -183,9 +217,10 @@ export function IllustrationWorkflowPanel({ onManageCharacters }: IllustrationWo
       setQueue((items) => items.map((item, idx) => idx === index ? { ...item, status: "running" } : item));
       try {
         const run = await createIllustrationRun({ essay: essays[index], character_id: characterId });
-        latestRun = run;
-        setQueue((items) => items.map((item, idx) => idx === index ? { ...item, status: "done", run } : item));
-        setRuns((items) => [run, ...items.filter((item) => item.id !== run.id)]);
+        const readyRun = await ensureRunPrompts(run, characters, false);
+        latestRun = readyRun;
+        setQueue((items) => items.map((item, idx) => idx === index ? { ...item, status: "done", run: readyRun } : item));
+        setRuns((items) => [readyRun, ...items.filter((item) => item.id !== readyRun.id)]);
       } catch {
         setQueue((items) => items.map((item, idx) => idx === index ? { ...item, status: "failed", error: "拆文失败" } : item));
       }
@@ -233,9 +268,9 @@ export function IllustrationWorkflowPanel({ onManageCharacters }: IllustrationWo
 
   async function generateShot(shot: IllustrationRun["shots"][number]) {
     if (!selectedRun || !selectedCharacter) return;
-    const prompt = (prompts[shot.seq] ?? "").trim();
+    const prompt = (prompts[shot.seq] || buildIllustrationPrompt(shot, selectedCharacter)).trim();
     if (!prompt) {
-      setError("请先生成并确认这张图的提示词。");
+      setError("图片提示词为空，请检查拆文资产。");
       return;
     }
 
@@ -303,7 +338,7 @@ export function IllustrationWorkflowPanel({ onManageCharacters }: IllustrationWo
       <Card
         className="illustration-workflow-card"
         title={<Space><ThunderboltOutlined /><span>拆文资产队列</span><Tag color="gold">拆文独立资产</Tag></Space>}
-        extra={<Text type="secondary">拆文完成后进入详情，再逐张确认提示词和生成图片</Text>}
+        extra={<Text type="secondary">拆文完成后自动生成提示词，可修改后再生成图片</Text>}
       >
         {loading ? (
           <div style={{ padding: 40, textAlign: "center" }}><Spin tip="正在加载拆文资产..." /></div>
@@ -454,14 +489,14 @@ export function IllustrationWorkflowPanel({ onManageCharacters }: IllustrationWo
                               {shot.chinese_labels.map((label) => <Tag key={label}>{label}</Tag>)}
                             </Space>
                             <Button size="small" icon={<RobotOutlined />} onClick={() => void generatePromptForShot(shot)} style={{ marginBottom: 8 }}>
-                              生成提示词
+                              重新生成提示词
                             </Button>
                             <TextArea
                               value={prompt}
                               onChange={(event) => void updatePrompt(shot.seq, event.target.value)}
                               onBlur={() => void savePrompt(shot.seq)}
                               autoSize={{ minRows: 4, maxRows: 8 }}
-                              placeholder="先生成提示词，确认或修改后再生成图片。"
+                              placeholder="拆文完成后会自动生成提示词，可在这里修改后再生成图片。"
                             />
                             <Button
                               block
