@@ -1,6 +1,7 @@
 import importlib.util
 import time
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -9,6 +10,18 @@ from sqlalchemy.orm import sessionmaker
 
 from backend.app.core.database import Base
 from backend.app.models.user import User
+
+
+def test_wechat_mp_adapter_accepts_successful_errcode_zero():
+    from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiAdapter
+
+    response = Mock(status_code=200)
+    response.json.return_value = {"errcode": 0, "publish_id": "publish_001"}
+
+    assert WechatMpApiAdapter()._checked_json(response, "wechat publish submit failed") == {
+        "errcode": 0,
+        "publish_id": "publish_001",
+    }
 
 
 @pytest.fixture
@@ -456,6 +469,15 @@ def test_submit_publish_job_requires_synced_draft_and_records_publish_id(api_cli
     assert data["publish_id"] == "publish_001"
     assert data["status"] == "submitted"
 
+    _, session_factory = api_client
+    session = session_factory()
+    try:
+        from backend.app.models import WechatMpArticle
+
+        assert session.get(WechatMpArticle, synced_wechat_article.id).status == "publish_pending"
+    finally:
+        session.close()
+
 
 def test_submit_publish_job_schedules_without_calling_wechat(api_client, auth_headers, synced_wechat_article, monkeypatch):
     from backend.app.services import wechat_mp_publish_service as publish_service
@@ -513,6 +535,53 @@ def test_poll_publish_job_maps_wechat_status_and_stores_response(api_client, aut
     assert response.status_code == 200
     assert response.json()["status"] == "published"
     assert response.json()["raw_response"]["article_id"] == "article_001"
+
+    _, session_factory = api_client
+    session = session_factory()
+    try:
+        from backend.app.models import WechatMpArticle
+
+        assert session.get(WechatMpArticle, synced_wechat_article.id).status == "published"
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("publish_status", [2, 3, 4, 5, 6])
+def test_poll_publish_job_maps_terminal_failures_and_keeps_article_editable(
+    api_client, auth_headers, synced_wechat_article, monkeypatch, publish_status
+):
+    from backend.app.services import wechat_mp_publish_service as publish_service
+
+    class FakeAdapter:
+        def submit_publish(self, **kwargs):
+            return {"publish_id": "publish_001"}
+
+        def get_publish_status(self, **kwargs):
+            return {"publish_id": "publish_001", "publish_status": publish_status, "errmsg": "content rejected"}
+
+    monkeypatch.setattr(publish_service, "WechatMpApiAdapter", lambda: FakeAdapter())
+    client, session_factory = api_client
+    submitted = client.post(
+        f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/publish",
+        json={"confirm": True},
+        headers=auth_headers,
+    )
+    response = client.post(
+        f"/api/platforms/wechat-mp/publish-jobs/{submitted.json()['id']}/poll",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "failed"
+    assert response.json()["error_message"] == "content rejected"
+
+    session = session_factory()
+    try:
+        from backend.app.models import WechatMpArticle
+
+        assert session.get(WechatMpArticle, synced_wechat_article.id).status == "synced_to_wechat"
+    finally:
+        session.close()
 
 
 def test_publish_routes_hide_foreign_article_and_map_api_failure_to_502(api_client, auth_headers, synced_wechat_article, monkeypatch):

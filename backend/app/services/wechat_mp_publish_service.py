@@ -49,7 +49,7 @@ def submit_publish_job(
     article_id: int,
     scheduled_at: datetime | None = None,
 ) -> WechatMpPublishJob:
-    _get_owned_article(db, user_id, article_id)
+    article = _get_owned_article(db, user_id, article_id)
     draft_sync = _get_latest_synced_draft(db, user_id, article_id)
     account = _get_owned_account(db, user_id, draft_sync.account_id)
 
@@ -86,6 +86,7 @@ def submit_publish_job(
         raw_response=response,
     )
     db.add(job)
+    article.status = "publish_pending"
     db.commit()
     db.refresh(job)
     return job
@@ -97,9 +98,17 @@ def _map_publish_status(response: dict) -> str:
         return "published"
     if value in (1, "1", "publishing"):
         return "publishing"
-    if value in (3, "3", "failed"):
+    if value in (2, "2", 3, "3", 4, "4", 5, "5", 6, "6", "failed", "rejected"):
         return "failed"
     return "submitted"
+
+
+def _failure_message(response: dict) -> str:
+    for key in ("errmsg", "error_message", "fail_reason", "fail_idx"):
+        value = response.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return "publish failed"
 
 
 def poll_publish_job(db: Session, user_id: int, publish_job_id: int) -> WechatMpPublishJob:
@@ -114,7 +123,10 @@ def poll_publish_job(db: Session, user_id: int, publish_job_id: int) -> WechatMp
     response = adapter.get_publish_status(access_token=_get_access_token(account, adapter), publish_id=job.publish_id)
     job.status = _map_publish_status(response)
     job.raw_response = response
-    job.error_message = "" if job.status != "failed" else str(response.get("fail_idx", "publish failed"))
+    job.error_message = "" if job.status != "failed" else _failure_message(response)
+    if job.status in {"published", "failed"}:
+        article = _get_owned_article(db, user_id, job.article_id)
+        article.status = "published" if job.status == "published" else "synced_to_wechat"
     db.commit()
     db.refresh(job)
     return job

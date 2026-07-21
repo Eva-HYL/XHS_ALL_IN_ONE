@@ -18,7 +18,7 @@ class WechatMpApiAdapter:
             raise WechatMpApiError(message) from exc
         if not isinstance(payload, dict):
             raise WechatMpApiError(message, payload={})
-        if response.status_code >= 400 or "errcode" in payload:
+        if response.status_code >= 400 or payload.get("errcode", 0) != 0:
             raise WechatMpApiError(message, errcode=payload.get("errcode"), payload=payload)
         return payload
 
