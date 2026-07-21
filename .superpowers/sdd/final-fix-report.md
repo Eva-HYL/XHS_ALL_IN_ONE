@@ -60,3 +60,30 @@ The current environment uses Node.js `18.15.0`; Vite 7 warns that Node `20.19+` 
 ### Concern
 
 The current environment still uses Node.js `18.15.0`; Vite 7 warns that Node `20.19+` or `22.12+` is supported. The production build completed successfully. Existing bundle-size and Python deprecation warnings remain non-blocking.
+
+## Third Final Fix
+
+**Status:** DONE_WITH_CONCERNS
+
+**Implementation commit:** `79690b2 fix: resolve third wechat mp final review`
+
+### Findings Resolved
+
+1. Article PATCH now distinguishes omitted, unchanged, and changed body fields. No-op saves preserve rendered HTML, embedded images, status, and revision; real Markdown/HTML or skill changes remove obsolete markers and inline prompt state, detach historical assets, stale synced drafts, and increment the article revision once.
+2. Publish submission now treats only an explicit nonzero WeChat `errcode` as a definitive rejection. Transport, timeout, malformed, and missing-result failures keep the job pending with its unique active key retained, so repeated requests return the same guarded job instead of submitting again.
+3. The `none` workflow skips shotlisting and inline prompt generation entirely, clears any prior inline planning state when selected, and can sync normally after cover generation without unresolved placeholders.
+4. Inline image generation accepts both `prompt_ready` and `failed`, preserving the editable prompt and allowing a failed provider call to be retried safely.
+5. Scheduled publish input is normalized to naive UTC for the existing database column and serialized as explicit UTC (`Z`) in API responses. The frontend continues to submit UTC ISO timestamps and renders explicit UTC responses in browser-local time.
+6. The writer and publish pages now expose text/prompt estimate guidance plus visible `¥0` labels for WeChat draft sync and publish actions.
+
+### Verification
+
+- Third-review focused regressions: `6 passed`.
+- WeChat MP backend: `75 passed`.
+- Full backend: `221 passed`.
+- Static checks: `git diff --check` and Python module compilation passed.
+- Frontend: `npm run build` passed (`tsc` + Vite, 3235 modules transformed).
+
+### Concern
+
+The current environment still uses Node.js `18.15.0`; Vite 7 warns that Node `20.19+` or `22.12+` is supported. The production build completed successfully. Existing bundle-size and Python/Starlette deprecation warnings remain non-blocking.
