@@ -799,3 +799,102 @@ export type AppNotification = {
   read: boolean;
   created_at: string;
 };
+
+export type CreateWechatMpArticlePayload = {
+  title: string;
+  topic: string;
+  source_material?: string;
+  target_reader?: string;
+  tone?: string;
+  illustration_skill?: string;
+};
+
+export interface WechatMpArticle {
+  id: number;
+  title: string;
+  markdown_body: string;
+  html_body: string;
+  digest: string;
+  status: string;
+  illustration_skill: string;
+  cost_estimate: Record<string, unknown>;
+  user_id?: number;
+  account_id?: number | null;
+  cover_brief?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface WechatMpImagePrompt {
+  id: number;
+  article_id: number;
+  section_id: number;
+  skill_name: string;
+  prompt: string;
+  editable_prompt: string;
+  version: number;
+  status: string;
+  skill_version?: string;
+  cost_estimate?: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export type WechatMpAccount = {
+  id: number;
+  user_id: number;
+  name: string;
+  app_id: string;
+  connection_status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateWechatMpAccountPayload = {
+  name: string;
+  app_id: string;
+  app_secret: string;
+};
+
+export type WechatMpAsset = {
+  id: number;
+  user_id: number;
+  article_id: number;
+  prompt_id: number | null;
+  role: string;
+  file_path: string;
+  public_url: string;
+  prompt: string;
+  skill_name: string;
+  model_name: string;
+  status: string;
+  provider_response: Record<string, unknown>;
+  created_at: string;
+};
+
+export type WechatMpDraftSync = {
+  id: number;
+  user_id: number;
+  account_id: number;
+  article_id: number;
+  wechat_media_id: string;
+  status: string;
+  raw_response: Record<string, unknown>;
+  error_message: string;
+  created_at: string;
+};
+
+export type WechatMpPublishJob = {
+  id: number;
+  user_id: number;
+  account_id: number;
+  article_id: number;
+  draft_sync_id: number;
+  publish_id: string;
+  status: string;
+  scheduled_at: string | null;
+  raw_response: Record<string, unknown>;
+  error_message: string;
+  created_at: string;
+  updated_at: string;
+};

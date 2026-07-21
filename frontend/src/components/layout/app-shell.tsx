@@ -23,6 +23,7 @@ import {
   SunOutlined,
   UserOutlined,
   VideoCameraOutlined,
+  WechatOutlined,
 } from "@ant-design/icons";
 import {
   Avatar,
@@ -66,6 +67,18 @@ const mainNavItems: MenuProps["items"] = [
   { key: "/platforms/xhs/drafts", icon: <FileTextOutlined />, label: "草稿工坊" },
   { key: "/platforms/xhs/publish", icon: <SendOutlined />, label: "发布中心" },
   { key: "/platforms/xhs/auto-ops", icon: <ThunderboltOutlined />, label: "自动运营" },
+  {
+    key: "wechat-mp",
+    icon: <WechatOutlined />,
+    label: "公众号",
+    children: [
+      { key: "/platforms/wechat-mp/dashboard", icon: <DashboardOutlined />, label: "工作台" },
+      { key: "/platforms/wechat-mp/accounts", icon: <SafetyCertificateOutlined />, label: "账号" },
+      { key: "/platforms/wechat-mp/writer", icon: <FileTextOutlined />, label: "写作" },
+      { key: "/platforms/wechat-mp/assets", icon: <StarOutlined />, label: "素材" },
+      { key: "/platforms/wechat-mp/publish", icon: <SendOutlined />, label: "发布" },
+    ],
+  },
 ];
 
 const footerNavItems: MenuProps["items"] = [

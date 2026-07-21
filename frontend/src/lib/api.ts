@@ -81,7 +81,15 @@ import type {
   XhsDataCrawlResponse,
   XhsSearchOptions,
   XhsSearchNote,
-  XhsQrLoginSession
+  XhsQrLoginSession,
+  CreateWechatMpAccountPayload,
+  CreateWechatMpArticlePayload,
+  WechatMpAccount,
+  WechatMpArticle,
+  WechatMpAsset,
+  WechatMpDraftSync,
+  WechatMpImagePrompt,
+  WechatMpPublishJob
 } from "../types";
 
 const http = axios.create({
@@ -998,5 +1006,87 @@ export async function deleteAutoTask(taskId: number): Promise<{ id: number; stat
 
 export async function runAutoTask(taskId: number): Promise<AutoTaskRunResult> {
   const response = await http.post<AutoTaskRunResult>(`/auto-tasks/${taskId}/run`);
+  return response.data;
+}
+
+// WeChat MP
+
+export async function fetchWechatMpAccounts(): Promise<WechatMpAccount[]> {
+  const response = await http.get<WechatMpAccount[]>("/platforms/wechat-mp/accounts");
+  return response.data;
+}
+
+export async function createWechatMpAccount(payload: CreateWechatMpAccountPayload): Promise<WechatMpAccount> {
+  const response = await http.post<WechatMpAccount>("/platforms/wechat-mp/accounts", payload);
+  return response.data;
+}
+
+export async function testWechatMpAccount(accountId: number): Promise<WechatMpAccount> {
+  const response = await http.post<WechatMpAccount>(`/platforms/wechat-mp/accounts/${accountId}/test`);
+  return response.data;
+}
+
+export async function fetchWechatMpArticles(): Promise<WechatMpArticle[]> {
+  const response = await http.get<WechatMpArticle[]>("/platforms/wechat-mp/articles");
+  return response.data;
+}
+
+export async function fetchWechatMpArticle(articleId: number): Promise<WechatMpArticle> {
+  const response = await http.get<WechatMpArticle>(`/platforms/wechat-mp/articles/${articleId}`);
+  return response.data;
+}
+
+export async function createWechatMpArticle(payload: CreateWechatMpArticlePayload): Promise<WechatMpArticle> {
+  const response = await http.post<WechatMpArticle>("/platforms/wechat-mp/articles", payload);
+  return response.data;
+}
+
+export async function updateWechatMpArticle(articleId: number, payload: Partial<Pick<WechatMpArticle, "title" | "markdown_body" | "html_body" | "digest" | "illustration_skill">>): Promise<WechatMpArticle> {
+  const response = await http.patch<WechatMpArticle>(`/platforms/wechat-mp/articles/${articleId}`, payload);
+  return response.data;
+}
+
+export async function generateWechatMpPrompts(articleId: number, skillName?: string): Promise<WechatMpImagePrompt[]> {
+  const response = await http.post<WechatMpImagePrompt[]>(`/platforms/wechat-mp/articles/${articleId}/prompts`, skillName ? { skill_name: skillName } : undefined);
+  return response.data;
+}
+
+export async function updateWechatMpPrompt(articleId: number, promptId: number, editablePrompt: string): Promise<WechatMpImagePrompt> {
+  const response = await http.patch<WechatMpImagePrompt>(`/platforms/wechat-mp/articles/${articleId}/prompts/${promptId}`, { editable_prompt: editablePrompt });
+  return response.data;
+}
+
+export async function regenerateWechatMpPrompt(articleId: number, promptId: number): Promise<WechatMpImagePrompt> {
+  const response = await http.post<WechatMpImagePrompt>(`/platforms/wechat-mp/articles/${articleId}/prompts/${promptId}/regenerate`);
+  return response.data;
+}
+
+export async function generateWechatMpImage(promptId: number, payload: { image_model: string; size?: string }): Promise<WechatMpAsset> {
+  const response = await http.post<WechatMpAsset>(`/platforms/wechat-mp/prompts/${promptId}/image`, payload);
+  return response.data;
+}
+
+export async function fetchWechatMpAssets(page = 1, pageSize = 50): Promise<Paginated<WechatMpAsset>> {
+  const response = await http.get<Paginated<WechatMpAsset>>("/platforms/wechat-mp/assets", { params: { page, page_size: pageSize } });
+  return response.data;
+}
+
+export async function deleteWechatMpAsset(assetId: number): Promise<{ id: number; status: string }> {
+  const response = await http.delete<{ id: number; status: string }>(`/platforms/wechat-mp/assets/${assetId}`);
+  return response.data;
+}
+
+export async function syncWechatMpDraft(articleId: number, accountId: number): Promise<WechatMpDraftSync> {
+  const response = await http.post<WechatMpDraftSync>(`/platforms/wechat-mp/articles/${articleId}/sync-draft`, { account_id: accountId });
+  return response.data;
+}
+
+export async function publishWechatMpArticle(articleId: number, payload: { confirm: boolean; scheduled_at?: string | null }): Promise<WechatMpPublishJob> {
+  const response = await http.post<WechatMpPublishJob>(`/platforms/wechat-mp/articles/${articleId}/publish`, payload);
+  return response.data;
+}
+
+export async function pollWechatMpPublishJob(jobId: number): Promise<WechatMpPublishJob> {
+  const response = await http.post<WechatMpPublishJob>(`/platforms/wechat-mp/publish-jobs/${jobId}/poll`);
   return response.data;
 }
