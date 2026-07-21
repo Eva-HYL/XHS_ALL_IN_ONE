@@ -81,6 +81,14 @@ const mainNavItems: MenuProps["items"] = [
   },
 ];
 
+const wechatMpNavItems: MenuProps["items"] = [
+  { key: "/platforms/wechat-mp/dashboard", icon: <DashboardOutlined />, label: "工作台" },
+  { key: "/platforms/wechat-mp/accounts", icon: <SafetyCertificateOutlined />, label: "账号" },
+  { key: "/platforms/wechat-mp/writer", icon: <FileTextOutlined />, label: "写作" },
+  { key: "/platforms/wechat-mp/assets", icon: <StarOutlined />, label: "素材" },
+  { key: "/platforms/wechat-mp/publish", icon: <SendOutlined />, label: "发布" },
+];
+
 const footerNavItems: MenuProps["items"] = [
   { key: "/tasks", icon: <ScheduleOutlined />, label: "任务中心" },
   { key: "/billing", icon: <CreditCardOutlined />, label: "账单中心" },
@@ -121,6 +129,8 @@ export function AppShell() {
   const handleMarkAllRead = async () => { await markAllNotificationsRead(); void loadNotifications(); };
   const handleMenuClick: MenuProps["onClick"] = ({ key }) => { navigate(key); };
   const selectedKeys = [location.pathname];
+  const isWechatMpWorkspace = location.pathname.startsWith("/platforms/wechat-mp");
+  const workspaceNavItems = isWechatMpWorkspace ? wechatMpNavItems : mainNavItems;
 
   const notificationDropdownContent = (
     <div style={{ width: 360, background: "#1f1f1f", borderRadius: 8, border: "1px solid #303030", overflow: "hidden" }}>
@@ -189,7 +199,7 @@ export function AppShell() {
 
           {/* Main nav — scrollable */}
           <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
-            <Menu theme="dark" mode="inline" selectedKeys={selectedKeys} onClick={handleMenuClick} items={mainNavItems} style={{ borderRight: 0 }} />
+            <Menu theme="dark" mode="inline" selectedKeys={selectedKeys} onClick={handleMenuClick} items={workspaceNavItems} style={{ borderRight: 0 }} />
           </div>
 
           {/* Footer — pinned to bottom */}
