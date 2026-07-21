@@ -910,6 +910,22 @@ def test_generate_prompts_defaults_to_xiaomao_skill(api_client, auth_headers, cr
     assert data[0]["editable_prompt"] == data[0]["prompt"]
 
 
+def test_list_prompts_returns_persisted_prompts_for_owned_article(api_client, auth_headers, created_wechat_prompt):
+    client, _ = api_client
+
+    response = client.get(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_prompt.article_id}/prompts",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    prompts = response.json()
+    assert len(prompts) == 1
+    assert prompts[0]["id"] == created_wechat_prompt.id
+    assert prompts[0]["article_id"] == created_wechat_prompt.article_id
+    assert prompts[0]["editable_prompt"] == "一只小猫开始最小动作"
+
+
 def test_generate_prompts_creates_shotlist_and_records_article_usage(api_client, auth_headers, created_wechat_article, monkeypatch):
     from backend.app.models import UsageRecord
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
@@ -1131,6 +1147,7 @@ def test_prompt_endpoints_hide_foreign_article_and_prompt(api_client, auth_heade
     other = client.post("/api/auth/register", json={"username": "wechat-prompt-other", "password": "secret123"})
     other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
 
+    assert client.get(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts", headers=other_headers).status_code == 404
     assert client.post(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts", headers=other_headers).status_code == 404
     assert client.patch(
         f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts/{prompt_id}",

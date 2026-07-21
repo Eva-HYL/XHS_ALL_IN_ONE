@@ -1051,6 +1051,11 @@ export async function generateWechatMpPrompts(articleId: number, skillName?: str
   return response.data;
 }
 
+export async function fetchWechatMpPrompts(articleId: number): Promise<WechatMpImagePrompt[]> {
+  const response = await http.get<WechatMpImagePrompt[]>(`/platforms/wechat-mp/articles/${articleId}/prompts`);
+  return response.data;
+}
+
 export async function updateWechatMpPrompt(articleId: number, promptId: number, editablePrompt: string): Promise<WechatMpImagePrompt> {
   const response = await http.patch<WechatMpImagePrompt>(`/platforms/wechat-mp/articles/${articleId}/prompts/${promptId}`, { editable_prompt: editablePrompt });
   return response.data;

@@ -106,6 +106,20 @@ def create_prompts(
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 
+@router.get("/{article_id}/prompts", response_model=list[WechatMpImagePromptResponse])
+def list_prompts(
+    article_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    article = _get_owned_article(db, current_user, article_id)
+    return db.scalars(
+        select(WechatMpImagePrompt)
+        .where(WechatMpImagePrompt.article_id == article.id, WechatMpImagePrompt.user_id == current_user.id)
+        .order_by(WechatMpImagePrompt.section_id, WechatMpImagePrompt.id)
+    ).all()
+
+
 @router.patch("/{article_id}/prompts/{prompt_id}", response_model=WechatMpImagePromptResponse)
 def update_prompt(
     article_id: int,

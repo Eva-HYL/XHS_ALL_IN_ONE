@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { PageHeader } from "../../../components/layout/app-shell";
-import { createWechatMpArticle, fetchWechatMpArticle, generateWechatMpImage, generateWechatMpPrompts, regenerateWechatMpPrompt, updateWechatMpPrompt } from "../../../lib/api";
+import { createWechatMpArticle, fetchWechatMpArticle, fetchWechatMpPrompts, generateWechatMpImage, generateWechatMpPrompts, regenerateWechatMpPrompt, updateWechatMpPrompt } from "../../../lib/api";
 import type { WechatMpArticle, WechatMpAsset, WechatMpImagePrompt } from "../../../types";
 import { WechatMpLayout } from "./wechat-mp-layout";
 
@@ -20,7 +20,22 @@ export function WechatMpWriterPage() {
   const [title, setTitle] = useState(""); const [topic, setTopic] = useState(""); const [material, setMaterial] = useState(""); const [reader, setReader] = useState(""); const [tone, setTone] = useState("");
   const [skill, setSkill] = useState(DEFAULT_SKILL); const [busy, setBusy] = useState(false); const [error, setError] = useState<string | null>(null); const [notice, setNotice] = useState<string | null>(null);
   const articleId = Number(params.get("article"));
-  useEffect(() => { if (!articleId) return; void (async () => { try { setArticle(await fetchWechatMpArticle(articleId)); } catch { setError("文章加载失败。"); } })(); }, [articleId]);
+  useEffect(() => {
+    if (!articleId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [loadedArticle, loadedPrompts] = await Promise.all([fetchWechatMpArticle(articleId), fetchWechatMpPrompts(articleId)]);
+        if (cancelled) return;
+        setArticle(loadedArticle);
+        setSkill(loadedArticle.illustration_skill);
+        setPrompts(loadedPrompts);
+      } catch {
+        if (!cancelled) setError("文章或提示词加载失败。");
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [articleId]);
   async function createArticle() { if (!title.trim() || !topic.trim()) { setError("请填写标题和主题。"); return; } setBusy(true); setError(null); try { const next = await createWechatMpArticle({ title: title.trim(), topic: topic.trim(), source_material: material, target_reader: reader, tone, illustration_skill: skill }); setArticle(next); setParams({ article: String(next.id) }); setNotice("文章已生成，可检查排版预览。"); } catch { setError("文章生成失败，请确认文本模型配置。"); } finally { setBusy(false); } }
   async function makePrompts() { if (!article) return; setBusy(true); try { setPrompts(await generateWechatMpPrompts(article.id, skill)); setArticle(await fetchWechatMpArticle(article.id)); setNotice("配图提示词已生成。即使选择 none，提示词也可以继续生成。"); } catch { setError("提示词生成失败。"); } finally { setBusy(false); } }
   async function savePrompt(prompt: WechatMpImagePrompt) { try { const updated = await updateWechatMpPrompt(prompt.article_id, prompt.id, prompt.editable_prompt); setPrompts((items) => items.map((item) => item.id === updated.id ? updated : item)); } catch { setError("提示词保存失败。"); } }
