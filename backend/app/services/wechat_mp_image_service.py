@@ -14,6 +14,8 @@ from sqlalchemy.orm import Session
 from backend.app.core.config import get_settings
 from backend.app.models import WechatMpArticle, WechatMpArticleSection, WechatMpAsset, WechatMpImagePrompt
 from backend.app.services.usage_recording_service import record_image_usage
+from backend.app.services.illustration_size_service import normalize_illustration_size
+from backend.app.services.wechat_mp_cost_service import add_article_cost
 
 
 def _media_dir() -> Path:
@@ -102,10 +104,11 @@ def generate_asset_for_prompt(
     model = resolve_wechat_mp_model(
         db=db, user_id=user_id, model_type="image", requested_model=image_model,
     )
+    normalized_size = normalize_illustration_size(model.model_name, size)
 
     try:
         result = _call_image_model(
-            prompt=prompt.editable_prompt, model_name=model.model_name, size=size,
+            prompt=prompt.editable_prompt, model_name=model.model_name, size=normalized_size,
             base_url=model.base_url, api_key=model.api_key,
         )
         if isinstance(result.get("image_ref"), str):
@@ -136,7 +139,7 @@ def generate_asset_for_prompt(
         )).all()
         article.status = "images_ready" if all(status == "generated" for status in remaining) else "images_partial"
         db.flush()
-        record_image_usage(
+        usage = record_image_usage(
             db=db,
             user_id=user_id,
             pipeline_run_id=None,
@@ -148,6 +151,7 @@ def generate_asset_for_prompt(
             resource_id=article.id,
             commit=False,
         )
+        add_article_cost(article, usage.cost_yuan)
         db.commit()
     except Exception:
         db.rollback()
@@ -169,9 +173,6 @@ def generate_cover_asset(
     ))
     if article is None:
         raise LookupError("WeChat MP article not found")
-    if article.illustration_skill == "none":
-        raise WechatMpImageValidationError("Image generation is disabled when illustration skill is none")
-
     from backend.app.services.wechat_mp_image_prompt_service import build_skill_prompt
     from backend.app.services.wechat_mp_model_service import resolve_wechat_mp_model
     from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
@@ -179,11 +180,12 @@ def generate_cover_asset(
     model = resolve_wechat_mp_model(
         db=db, user_id=user_id, model_type="image", requested_model=image_model,
     )
+    normalized_size = normalize_illustration_size(model.model_name, size)
     prompt_text = build_skill_prompt(
         article.illustration_skill, article.title, article.cover_brief or article.title,
     )
     result = _call_image_model(
-        prompt=prompt_text, model_name=model.model_name, size=size,
+        prompt=prompt_text, model_name=model.model_name, size=normalized_size,
         base_url=model.base_url, api_key=model.api_key,
     )
     if isinstance(result.get("image_ref"), str):
@@ -212,13 +214,7 @@ def generate_cover_asset(
         model=model.model_name, image_count=1, platform="wechat_mp",
         resource_type="wechat_mp_article", resource_id=article.id, commit=False,
     )
-    current = article.cost_estimate or {}
-    from decimal import Decimal
-    total = Decimal(str(current.get("total_yuan", "0"))) + Decimal(str(usage.cost_yuan))
-    article.cost_estimate = {
-        "currency": "CNY", "total_yuan": str(total.quantize(Decimal("0.0001"))),
-        "calls": int(current.get("calls", 0)) + 1,
-    }
+    add_article_cost(article, usage.cost_yuan)
     db.commit()
     db.refresh(asset)
     return asset

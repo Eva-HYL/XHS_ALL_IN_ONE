@@ -117,6 +117,7 @@ class WechatMpPublishJob(Base):
     account_id: Mapped[int] = mapped_column(ForeignKey("wechat_mp_accounts.id"), index=True, nullable=False)
     article_id: Mapped[int] = mapped_column(ForeignKey("wechat_mp_articles.id"), index=True, nullable=False)
     draft_sync_id: Mapped[int] = mapped_column(ForeignKey("wechat_mp_draft_syncs.id"), index=True, nullable=False)
+    active_key: Mapped[str | None] = mapped_column(String(160), unique=True, index=True, nullable=True)
     publish_id: Mapped[str] = mapped_column(String(128), default="", nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="scheduled", index=True, nullable=False)
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

@@ -59,14 +59,27 @@ def delete_asset(
             r'<img\b[^>]*\bsrc=["\']' + re.escape(asset.public_url) + r'["\'][^>]*>',
             re.IGNORECASE,
         )
-        replacement = f"{{{{image:prompt-{prompt.id}}}}}" if prompt is not None else ""
-        article.html_body = image_pattern.sub(replacement, article.html_body)
-        if prompt is not None:
-            prompt.status = "prompt_ready"
-        from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
-        invalidate_synced_drafts(
-            db, article, next_status="prompts_ready" if prompt is not None else "images_partial",
+        is_embedded = image_pattern.search(article.html_body) is not None
+        latest_cover = db.scalar(
+            select(WechatMpAsset)
+            .where(
+                WechatMpAsset.article_id == article.id,
+                WechatMpAsset.role == "cover",
+                WechatMpAsset.status == "generated",
+            )
+            .order_by(WechatMpAsset.id.desc())
         )
+        is_current_cover = asset.role == "cover" and latest_cover is not None and latest_cover.id == asset.id
+        if is_embedded:
+            replacement = f"{{{{image:prompt-{prompt.id}}}}}" if prompt is not None else ""
+            article.html_body = image_pattern.sub(replacement, article.html_body)
+            if prompt is not None:
+                prompt.status = "prompt_ready"
+        if is_embedded or is_current_cover:
+            from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
+            invalidate_synced_drafts(
+                db, article, next_status="prompts_ready" if prompt is not None else "images_partial",
+            )
     _delete_local_media(asset.file_path)
     db.delete(asset)
     db.commit()

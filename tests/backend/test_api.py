@@ -6340,15 +6340,19 @@ def test_run_due_publish_jobs_for_all_users_executes_each_due_user(tmp_path):
 
 
 def test_due_publish_scheduler_registers_interval_job():
-    from backend.app.services.scheduler_service import build_due_publish_scheduler, shutdown_due_publish_scheduler
+    from backend.app.services.scheduler_service import (
+        build_due_publish_scheduler,
+        build_wechat_mp_publish_scheduler,
+        shutdown_due_publish_scheduler,
+    )
 
     scheduler = build_due_publish_scheduler(interval_seconds=17, job_func=lambda: None)
+    wechat_mp_scheduler = build_wechat_mp_publish_scheduler(interval_seconds=17)
 
     try:
         jobs = scheduler.get_jobs()
         assert {job.id for job in jobs} == {
             "due_publish_runner",
-            "wechat_mp_due_publish_runner",
             "monitoring_refresh_runner",
             "auto_tasks_runner",
             "cookie_health_checker",
@@ -6358,8 +6362,14 @@ def test_due_publish_scheduler_registers_interval_job():
         assert job_intervals["monitoring_refresh_runner"] == 17
         assert job_intervals["auto_tasks_runner"] == 60
         assert job_intervals["cookie_health_checker"] == 7200
+        wechat_job = wechat_mp_scheduler.get_job("wechat_mp_due_publish_runner")
+        assert wechat_job is not None
+        assert wechat_job.trigger.interval.total_seconds() == 17
+        assert wechat_job.max_instances == 1
+        assert wechat_job.coalesce is True
     finally:
         shutdown_due_publish_scheduler(scheduler)
+        shutdown_due_publish_scheduler(wechat_mp_scheduler)
 
 
 def test_run_monitoring_refresh_for_all_users_refreshes_active_targets(tmp_path):

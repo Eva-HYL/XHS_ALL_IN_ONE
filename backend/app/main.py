@@ -19,7 +19,12 @@ from backend.app.api.platforms.wechat_mp import publish as wechat_mp_publish
 from backend.app.api.platforms.xhs import analytics, crawl, creator, monitoring, pc
 from backend.app.core.config import get_settings
 from backend.app.core.database import init_db
-from backend.app.services.scheduler_service import run_due_auto_tasks, shutdown_due_publish_scheduler, start_due_publish_scheduler
+from backend.app.services.scheduler_service import (
+    run_due_auto_tasks,
+    shutdown_due_publish_scheduler,
+    start_due_publish_scheduler,
+    start_wechat_mp_publish_scheduler,
+)
 
 
 @asynccontextmanager
@@ -29,11 +34,14 @@ async def lifespan(app: FastAPI):
     scheduler = None
     if settings.scheduler_enabled:
         scheduler = start_due_publish_scheduler(settings.scheduler_interval_seconds)
+    wechat_mp_scheduler = start_wechat_mp_publish_scheduler(settings.scheduler_interval_seconds)
     app.state.scheduler = scheduler
+    app.state.wechat_mp_scheduler = wechat_mp_scheduler
     try:
         yield
     finally:
         shutdown_due_publish_scheduler(scheduler)
+        shutdown_due_publish_scheduler(wechat_mp_scheduler)
 
 
 def create_app() -> FastAPI:

@@ -2,6 +2,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiError
@@ -40,6 +41,18 @@ class WechatMpPublishJobResponse(BaseModel):
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+@router.get("/publish-jobs", response_model=list[WechatMpPublishJobResponse])
+def list_publish_jobs(
+    article_id: int | None = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    query = select(WechatMpPublishJob).where(WechatMpPublishJob.user_id == current_user.id)
+    if article_id is not None:
+        query = query.where(WechatMpPublishJob.article_id == article_id)
+    return db.scalars(query.order_by(WechatMpPublishJob.id.desc())).all()
 
 
 @router.post("/articles/{article_id}/publish", response_model=WechatMpPublishJobResponse, status_code=status.HTTP_201_CREATED)

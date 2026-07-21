@@ -5,14 +5,18 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
-from backend.app.models import User, WechatMpArticle, WechatMpImagePrompt
+from backend.app.models import User, WechatMpArticle, WechatMpArticleSection, WechatMpImagePrompt
 from backend.app.schemas.wechat_mp import WechatMpArticleCreateRequest, WechatMpArticleResponse, WechatMpAssetResponse, WechatMpImagePromptResponse
 from backend.app.services.wechat_mp_image_service import (
     WechatMpImageValidationError,
     generate_asset_for_prompt,
     generate_cover_asset,
 )
-from backend.app.services.wechat_mp_image_prompt_service import generate_image_prompts, regenerate_image_prompt
+from backend.app.services.wechat_mp_image_prompt_service import (
+    _restore_prompt_placeholder,
+    generate_image_prompts,
+    regenerate_image_prompt,
+)
 from backend.app.services.wechat_mp_layout_service import render_wechat_html
 from backend.app.services.wechat_mp_writer_service import generate_wechat_article
 
@@ -137,8 +141,15 @@ def update_prompt(
 ):
     article = _get_owned_article(db, current_user, article_id)
     prompt = _get_owned_prompt(db, article, prompt_id)
+    section = db.get(WechatMpArticleSection, prompt.section_id)
+    if section is None or section.article_id != article.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="WeChat MP prompt not found")
     prompt.editable_prompt = payload.editable_prompt
     prompt.version += 1
+    prompt.status = "prompt_ready"
+    _restore_prompt_placeholder(db, article, section, prompt)
+    from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
+    invalidate_synced_drafts(db, article, next_status="prompts_ready")
     db.commit()
     db.refresh(prompt)
     return prompt
@@ -165,6 +176,24 @@ def generate_image(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+
+@image_router.get("/image-cost-estimate")
+def image_cost_estimate(
+    image_model: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from backend.app.services.wechat_mp_cost_service import estimate_image_action
+    from backend.app.services.wechat_mp_model_service import resolve_wechat_mp_model
+
+    try:
+        model = resolve_wechat_mp_model(
+            db=db, user_id=current_user.id, model_type="image", requested_model=image_model,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return estimate_image_action(model.model_name)
 
 
 @router.post("/{article_id}/cover", response_model=WechatMpAssetResponse, status_code=status.HTTP_201_CREATED)

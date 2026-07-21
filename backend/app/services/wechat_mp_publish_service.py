@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiAdapter, WechatMpApiError
@@ -12,6 +13,38 @@ from backend.app.services.wechat_mp_draft_service import _get_access_token
 
 class WechatMpPublishValidationError(ValueError):
     pass
+
+
+_ACTIVE_PUBLISH_STATUSES = ("scheduled", "pending", "submitted", "publishing")
+
+
+def _publish_active_key(draft_sync_id: int) -> str:
+    return f"draft:{draft_sync_id}"
+
+
+def _get_active_publish_job(db: Session, draft_sync_id: int) -> WechatMpPublishJob | None:
+    return db.scalar(
+        select(WechatMpPublishJob)
+        .where(
+            WechatMpPublishJob.draft_sync_id == draft_sync_id,
+            WechatMpPublishJob.status.in_(_ACTIVE_PUBLISH_STATUSES),
+        )
+        .order_by(WechatMpPublishJob.id)
+    )
+
+
+def _commit_new_publish_job(db: Session, job: WechatMpPublishJob) -> WechatMpPublishJob:
+    db.add(job)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = _get_active_publish_job(db, job.draft_sync_id)
+        if existing is None:
+            raise
+        return existing
+    db.refresh(job)
+    return job
 
 
 def _get_owned_article(db: Session, user_id: int, article_id: int) -> WechatMpArticle:
@@ -53,12 +86,9 @@ def submit_publish_job(
     article = _get_owned_article(db, user_id, article_id)
     draft_sync = _get_latest_synced_draft(db, user_id, article)
     account = _get_owned_account(db, user_id, draft_sync.account_id)
-    existing_pending = db.scalar(select(WechatMpPublishJob).where(
-        WechatMpPublishJob.draft_sync_id == draft_sync.id,
-        WechatMpPublishJob.status == "pending",
-    ))
-    if existing_pending is not None:
-        raise WechatMpPublishValidationError("A WeChat MP publish job is already pending reconciliation")
+    existing_active = _get_active_publish_job(db, draft_sync.id)
+    if existing_active is not None:
+        return existing_active
 
     if scheduled_at is not None:
         job = WechatMpPublishJob(
@@ -66,26 +96,25 @@ def submit_publish_job(
             account_id=account.id,
             article_id=article_id,
             draft_sync_id=draft_sync.id,
+            active_key=_publish_active_key(draft_sync.id),
             status="scheduled",
             scheduled_at=scheduled_at,
         )
-        db.add(job)
-        db.commit()
-        db.refresh(job)
-        return job
+        return _commit_new_publish_job(db, job)
 
     job = WechatMpPublishJob(
         user_id=user_id,
         account_id=account.id,
         article_id=article_id,
         draft_sync_id=draft_sync.id,
+        active_key=_publish_active_key(draft_sync.id),
         status="pending",
         raw_response={},
     )
-    db.add(job)
-    db.commit()
-    db.refresh(job)
-    return _submit_existing_job(db=db, job=job, article=article, account=account, adapter=WechatMpApiAdapter())
+    persisted_job = _commit_new_publish_job(db, job)
+    if persisted_job is not job:
+        return persisted_job
+    return _submit_existing_job(db=db, job=persisted_job, article=article, account=account, adapter=WechatMpApiAdapter())
 
 
 def _submit_existing_job(
@@ -109,6 +138,7 @@ def _submit_existing_job(
             raise ValueError("WeChat MP publish response is missing publish_id")
     except Exception as exc:
         job.status = "failed"
+        job.active_key = None
         job.raw_response = exc.payload if isinstance(exc, WechatMpApiError) else {"error": str(exc)}
         job.error_message = str(exc)
         db.commit()
@@ -134,8 +164,33 @@ def run_due_publish_jobs(*, db: Session, now: datetime, adapter_factory=WechatMp
     failed_count = 0
     items = []
     for job in jobs:
-        job.status = "pending"
+        active_jobs = db.scalars(
+            select(WechatMpPublishJob)
+            .where(
+                WechatMpPublishJob.draft_sync_id == job.draft_sync_id,
+                WechatMpPublishJob.status.in_(_ACTIVE_PUBLISH_STATUSES),
+            )
+            .order_by(WechatMpPublishJob.id)
+        ).all()
+        canonical = active_jobs[0] if active_jobs else None
+        if canonical is not None and canonical.id != job.id:
+            job.status = "cancelled"
+            job.active_key = None
+            job.error_message = f"Duplicate active publish job; canonical job is #{canonical.id}"
+            db.commit()
+            continue
+        claimed = db.execute(
+            update(WechatMpPublishJob)
+            .where(
+                WechatMpPublishJob.id == job.id,
+                WechatMpPublishJob.status == "scheduled",
+            )
+            .values(status="pending")
+        ).rowcount
         db.commit()
+        if claimed != 1:
+            continue
+        db.refresh(job)
         try:
             article = _get_owned_article(db, job.user_id, job.article_id)
             account = _get_owned_account(db, job.user_id, job.account_id)
@@ -168,6 +223,7 @@ def cancel_publish_job(db: Session, user_id: int, publish_job_id: int) -> Wechat
     if job.status != "scheduled":
         raise WechatMpPublishValidationError("Only scheduled WeChat MP publish jobs can be cancelled")
     job.status = "cancelled"
+    job.active_key = None
     db.commit()
     db.refresh(job)
     return job
@@ -206,6 +262,7 @@ def poll_publish_job(db: Session, user_id: int, publish_job_id: int) -> WechatMp
     job.raw_response = response
     job.error_message = "" if job.status != "failed" else _failure_message(response)
     if job.status in {"published", "failed"}:
+        job.active_key = None
         article = _get_owned_article(db, user_id, job.article_id)
         article.status = "published" if job.status == "published" else "synced_to_wechat"
     db.commit()

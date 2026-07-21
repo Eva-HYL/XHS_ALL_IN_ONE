@@ -900,3 +900,10 @@ export type WechatMpPublishJob = {
   created_at: string;
   updated_at: string;
 };
+
+export type WechatMpImageCostEstimate = {
+  model_name: string;
+  currency: "CNY";
+  estimated_yuan: string;
+  pricing_available: boolean;
+};

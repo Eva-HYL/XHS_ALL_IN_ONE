@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.models import WechatMpArticle, WechatMpArticleSection, WechatMpAsset, WechatMpImagePrompt
 from backend.app.services.usage_recording_service import record_text_usage
+from backend.app.services.wechat_mp_cost_service import add_article_cost
 from backend.app.services.wechat_mp_layout_service import render_wechat_html
 from backend.app.services.wechat_mp_shotlist_service import generate_article_shotlist
 
@@ -117,18 +118,6 @@ def _call_prompt_model(
     }
 
 
-def _add_article_cost(article: WechatMpArticle, cost_yuan: object) -> None:
-    from decimal import Decimal
-
-    current = article.cost_estimate or {}
-    total = Decimal(str(current.get("total_yuan", "0"))) + Decimal(str(cost_yuan))
-    article.cost_estimate = {
-        "currency": "CNY",
-        "total_yuan": str(total.quantize(Decimal("0.0001"))),
-        "calls": int(current.get("calls", 0)) + 1,
-    }
-
-
 def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_name: str | None) -> list[WechatMpImagePrompt]:
     from backend.app.services.wechat_mp_model_service import resolve_wechat_mp_model
 
@@ -192,7 +181,7 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
             prompt.cost_estimate = {
                 "currency": "CNY", "total_yuan": str(usage.cost_yuan), "calls": 1,
             }
-            _add_article_cost(article, usage.cost_yuan)
+            add_article_cost(article, usage.cost_yuan)
             prompts.append(prompt)
             article.illustration_skill = selected_skill
             if not revision_invalidated:
@@ -247,7 +236,7 @@ def regenerate_image_prompt(*, db: Session, prompt: WechatMpImagePrompt, article
     prompt.cost_estimate = {
         "currency": "CNY", "total_yuan": str(usage.cost_yuan), "calls": 1,
     }
-    _add_article_cost(article, usage.cost_yuan)
+    add_article_cost(article, usage.cost_yuan)
     from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
     invalidate_synced_drafts(db, article, next_status="prompts_ready")
     db.commit()

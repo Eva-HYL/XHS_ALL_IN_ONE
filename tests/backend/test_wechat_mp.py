@@ -671,7 +671,7 @@ def test_generate_wechat_mp_image_saves_only_wechat_asset_and_backfills_article(
     def fake_generate(*, prompt, model_name, size, **kwargs):
         assert prompt == "一只小猫开始最小动作"
         assert model_name == "doubao-seedream-4-0-250828"
-        assert size == "16:9"
+        assert size == "2732x1536"
         return {
             "file_path": "/api/files/media/wechat-mp-u1-p1.png",
             "public_url": "/api/files/media/wechat-mp-u1-p1.png",
@@ -713,6 +713,8 @@ def test_generate_wechat_mp_image_saves_only_wechat_asset_and_backfills_article(
         assert usage.platform == "wechat_mp"
         assert usage.resource_type == "wechat_mp_article"
         assert usage.image_count == 1
+        assert article.cost_estimate["total_yuan"] == str(usage.cost_yuan)
+        assert article.cost_estimate["calls"] == len(prompts) + 1
     finally:
         session.close()
 
@@ -1511,7 +1513,7 @@ def test_failed_publish_submit_is_journaled(api_client, auth_headers, synced_wec
         session.close()
 
 
-def test_due_publish_runner_executes_only_due_jobs(api_client, auth_headers, synced_wechat_article, monkeypatch):
+def test_due_publish_runner_executes_due_job(api_client, auth_headers, synced_wechat_article, monkeypatch):
     from datetime import datetime
     from backend.app.models import WechatMpPublishJob
     from backend.app.services import wechat_mp_publish_service as publish_service
@@ -1521,11 +1523,7 @@ def test_due_publish_runner_executes_only_due_jobs(api_client, auth_headers, syn
         f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/publish",
         json={"confirm": True, "scheduled_at": "2026-07-20T00:00:00"}, headers=auth_headers,
     )
-    future = client.post(
-        f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/publish",
-        json={"confirm": True, "scheduled_at": "2026-07-22T00:00:00"}, headers=auth_headers,
-    )
-    assert due.status_code == future.status_code == 201
+    assert due.status_code == 201
     calls = []
 
     class FakeAdapter:
@@ -1541,7 +1539,6 @@ def test_due_publish_runner_executes_only_due_jobs(api_client, auth_headers, syn
         )
         assert result["executed_count"] == 1
         assert session.get(WechatMpPublishJob, due.json()["id"]).status == "submitted"
-        assert session.get(WechatMpPublishJob, future.json()["id"]).status == "scheduled"
     finally:
         session.close()
     assert len(calls) == 1
@@ -1561,9 +1558,9 @@ def test_scheduled_publish_can_be_cancelled(api_client, auth_headers, synced_wec
 
 
 def test_wechat_mp_due_runner_is_registered_with_scheduler():
-    from backend.app.services.scheduler_service import build_due_publish_scheduler
+    from backend.app.services.scheduler_service import build_wechat_mp_publish_scheduler
 
-    scheduler = build_due_publish_scheduler(60, lambda: None)
+    scheduler = build_wechat_mp_publish_scheduler(60)
     try:
         assert scheduler.get_job("wechat_mp_due_publish_runner") is not None
     finally:
@@ -1637,3 +1634,314 @@ def test_draft_sync_rejects_missing_local_asset_file(
     )
     assert response.status_code == 400
     assert "missing local asset" in response.json()["detail"]
+
+
+def test_repeated_immediate_publish_returns_existing_active_job(
+    api_client, auth_headers, synced_wechat_article, monkeypatch
+):
+    from backend.app.models import WechatMpPublishJob
+    from backend.app.services import wechat_mp_publish_service as publish_service
+
+    calls = []
+
+    class FakeAdapter:
+        def submit_publish(self, **kwargs):
+            calls.append(kwargs)
+            return {"publish_id": "publish-once"}
+
+    monkeypatch.setattr(publish_service, "WechatMpApiAdapter", lambda: FakeAdapter())
+    client, session_factory = api_client
+    url = f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/publish"
+
+    first = client.post(url, json={"confirm": True}, headers=auth_headers)
+    repeated = client.post(url, json={"confirm": True}, headers=auth_headers)
+
+    assert first.status_code == repeated.status_code == 201
+    assert repeated.json()["id"] == first.json()["id"]
+    assert len(calls) == 1
+    session = session_factory()
+    try:
+        assert session.query(WechatMpPublishJob).filter_by(
+            article_id=synced_wechat_article.id,
+        ).count() == 1
+    finally:
+        session.close()
+
+
+def test_repeated_scheduled_publish_returns_existing_job_and_lists_it(
+    api_client, auth_headers, synced_wechat_article
+):
+    from backend.app.models import WechatMpPublishJob
+
+    client, session_factory = api_client
+    url = f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/publish"
+    payload = {"confirm": True, "scheduled_at": "2030-01-02T03:04:05"}
+
+    first = client.post(url, json=payload, headers=auth_headers)
+    repeated = client.post(url, json=payload, headers=auth_headers)
+    listed = client.get(
+        "/api/platforms/wechat-mp/publish-jobs",
+        params={"article_id": synced_wechat_article.id},
+        headers=auth_headers,
+    )
+
+    assert first.status_code == repeated.status_code == 201
+    assert repeated.json()["id"] == first.json()["id"]
+    assert listed.status_code == 200
+    assert [item["id"] for item in listed.json()] == [first.json()["id"]]
+    session = session_factory()
+    try:
+        job = session.query(WechatMpPublishJob).one()
+        assert job.active_key == f"draft:{job.draft_sync_id}"
+    finally:
+        session.close()
+
+
+def test_due_runner_submits_only_one_legacy_duplicate(
+    api_client, auth_headers, synced_wechat_article, monkeypatch
+):
+    from datetime import datetime
+
+    from backend.app.models import WechatMpPublishJob
+    from backend.app.services import wechat_mp_publish_service as publish_service
+
+    client, session_factory = api_client
+    scheduled = client.post(
+        f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/publish",
+        json={"confirm": True, "scheduled_at": "2026-07-20T00:00:00"},
+        headers=auth_headers,
+    )
+    assert scheduled.status_code == 201
+    session = session_factory()
+    try:
+        original = session.get(WechatMpPublishJob, scheduled.json()["id"])
+        duplicate = WechatMpPublishJob(
+            user_id=original.user_id,
+            account_id=original.account_id,
+            article_id=original.article_id,
+            draft_sync_id=original.draft_sync_id,
+            status="scheduled",
+            scheduled_at=original.scheduled_at,
+            active_key=None,
+        )
+        session.add(duplicate)
+        session.commit()
+        duplicate_id = duplicate.id
+    finally:
+        session.close()
+
+    calls = []
+
+    class FakeAdapter:
+        def submit_publish(self, **kwargs):
+            calls.append(kwargs)
+            return {"publish_id": "deduplicated-publish"}
+
+    monkeypatch.setattr(publish_service, "_get_access_token", lambda account, adapter: "token")
+    session = session_factory()
+    try:
+        result = publish_service.run_due_publish_jobs(
+            db=session, now=datetime(2026, 7, 21), adapter_factory=FakeAdapter,
+        )
+        assert result["executed_count"] == 1
+        assert session.get(WechatMpPublishJob, scheduled.json()["id"]).status == "submitted"
+        duplicate = session.get(WechatMpPublishJob, duplicate_id)
+        assert duplicate.status == "cancelled"
+        assert "duplicate" in duplicate.error_message.lower()
+    finally:
+        session.close()
+    assert len(calls) == 1
+
+
+def test_wechat_mp_scheduler_starts_when_xhs_scheduler_is_disabled(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    from backend.app import main
+
+    calls = []
+    monkeypatch.setattr(main, "init_db", lambda: None)
+    monkeypatch.setattr(
+        main,
+        "get_settings",
+        lambda: SimpleNamespace(scheduler_enabled=False, scheduler_interval_seconds=37),
+    )
+    monkeypatch.setattr(main, "start_due_publish_scheduler", lambda interval: calls.append(("xhs", interval)))
+    monkeypatch.setattr(
+        main,
+        "start_wechat_mp_publish_scheduler",
+        lambda interval: calls.append(("wechat_mp", interval)) or SimpleNamespace(running=False),
+    )
+    monkeypatch.setattr(main, "shutdown_due_publish_scheduler", lambda scheduler: None)
+
+    async def exercise_lifespan():
+        app = SimpleNamespace(state=SimpleNamespace())
+        async with main.lifespan(app):
+            assert app.state.scheduler is None
+            assert app.state.wechat_mp_scheduler is not None
+
+    asyncio.run(exercise_lifespan())
+    assert calls == [("wechat_mp", 37)]
+
+
+def test_editing_generated_prompt_restores_marker_and_allows_regeneration(
+    api_client, auth_headers, created_wechat_prompt, monkeypatch
+):
+    from backend.app.models import WechatMpArticle
+    from backend.app.services import wechat_mp_image_service as image_service
+
+    generated_urls = iter(("/api/files/media/first.png", "/api/files/media/second.png"))
+    monkeypatch.setattr(
+        image_service,
+        "_call_image_model",
+        lambda **kwargs: {
+            "file_path": "/tmp/wechat-prompt-edit.png",
+            "public_url": next(generated_urls),
+            "provider_response": {"ok": True},
+        },
+    )
+    client, session_factory = api_client
+    image_url = f"/api/platforms/wechat-mp/prompts/{created_wechat_prompt.id}/image"
+    first = client.post(image_url, json={"size": "16:9"}, headers=auth_headers)
+    assert first.status_code == 201
+
+    edited = client.patch(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_prompt.article_id}/prompts/{created_wechat_prompt.id}",
+        json={"editable_prompt": "编辑后重新生成"},
+        headers=auth_headers,
+    )
+    assert edited.status_code == 200
+    assert edited.json()["status"] == "prompt_ready"
+    article = client.get(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_prompt.article_id}",
+        headers=auth_headers,
+    ).json()
+    assert article["status"] == "prompts_ready"
+    assert f"{{{{image:prompt-{created_wechat_prompt.id}}}}}" in article["html_body"]
+    assert "/api/files/media/first.png" not in article["html_body"]
+
+    second = client.post(image_url, json={"size": "16:9"}, headers=auth_headers)
+    assert second.status_code == 201
+    session = session_factory()
+    try:
+        assert "/api/files/media/second.png" in session.get(
+            WechatMpArticle, created_wechat_prompt.article_id,
+        ).html_body
+    finally:
+        session.close()
+
+
+def test_none_skill_allows_cover_but_still_uses_normalized_doubao_size(
+    api_client, auth_headers, created_wechat_article, monkeypatch
+):
+    from backend.app.models import WechatMpArticle
+    from backend.app.services import wechat_mp_image_service as image_service
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        article = session.get(WechatMpArticle, created_wechat_article.id)
+        article.illustration_skill = "none"
+        session.commit()
+    finally:
+        session.close()
+
+    captured = {}
+
+    def fake_generate(**kwargs):
+        captured.update(kwargs)
+        return {
+            "file_path": "/tmp/wechat-none-cover.png",
+            "public_url": "/api/files/media/wechat-none-cover.png",
+            "provider_response": {"ok": True},
+        }
+
+    monkeypatch.setattr(image_service, "_call_image_model", fake_generate)
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/cover",
+        json={"size": "16:9"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["role"] == "cover"
+    assert captured["model_name"] == "doubao-seedream-4-0-250828"
+    assert captured["size"] == "2732x1536"
+
+
+def test_image_cost_estimate_uses_requested_or_default_model(api_client, auth_headers):
+    client, _ = api_client
+
+    response = client.get(
+        "/api/platforms/wechat-mp/image-cost-estimate",
+        params={"image_model": "doubao-seedream-4-0-250828"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "model_name": "doubao-seedream-4-0-250828",
+        "currency": "CNY",
+        "estimated_yuan": "0.2000",
+        "pricing_available": True,
+    }
+
+
+def test_deleting_obsolete_asset_keeps_current_prompt_and_article_state(
+    api_client, auth_headers, created_wechat_prompt
+):
+    from backend.app.models import WechatMpArticle, WechatMpAsset, WechatMpImagePrompt
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        prompt = session.get(WechatMpImagePrompt, created_wechat_prompt.id)
+        article = session.get(WechatMpArticle, created_wechat_prompt.article_id)
+        old_asset = WechatMpAsset(
+            user_id=prompt.user_id,
+            article_id=article.id,
+            prompt_id=prompt.id,
+            role="inline_illustration",
+            file_path="/tmp/wechat-old.png",
+            public_url="/api/files/media/wechat-old.png",
+            prompt="old",
+            skill_name=prompt.skill_name,
+            model_name="test-model",
+        )
+        current_asset = WechatMpAsset(
+            user_id=prompt.user_id,
+            article_id=article.id,
+            prompt_id=prompt.id,
+            role="inline_illustration",
+            file_path="/tmp/wechat-current.png",
+            public_url="/api/files/media/wechat-current.png",
+            prompt="current",
+            skill_name=prompt.skill_name,
+            model_name="test-model",
+        )
+        session.add_all([old_asset, current_asset])
+        session.flush()
+        old_asset_id = old_asset.id
+        prompt.status = "generated"
+        article.status = "images_ready"
+        article.html_body += '<img src="/api/files/media/wechat-current.png" alt="current" />'
+        original_revision = article.revision
+        original_html = article.html_body
+        session.commit()
+    finally:
+        session.close()
+
+    response = client.delete(
+        f"/api/platforms/wechat-mp/assets/{old_asset_id}", headers=auth_headers,
+    )
+    assert response.status_code == 200
+    session = session_factory()
+    try:
+        article = session.get(WechatMpArticle, created_wechat_prompt.article_id)
+        prompt = session.get(WechatMpImagePrompt, created_wechat_prompt.id)
+        assert article.html_body == original_html
+        assert article.status == "images_ready"
+        assert article.revision == original_revision
+        assert prompt.status == "generated"
+    finally:
+        session.close()

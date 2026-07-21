@@ -88,6 +88,7 @@ import type {
   WechatMpArticle,
   WechatMpAsset,
   WechatMpDraftSync,
+  WechatMpImageCostEstimate,
   WechatMpImagePrompt,
   WechatMpPublishJob
 } from "../types";
@@ -1076,6 +1077,13 @@ export async function generateWechatMpCover(articleId: number, payload: { image_
   return response.data;
 }
 
+export async function fetchWechatMpImageCostEstimate(imageModel?: string): Promise<WechatMpImageCostEstimate> {
+  const response = await http.get<WechatMpImageCostEstimate>("/platforms/wechat-mp/image-cost-estimate", {
+    params: imageModel ? { image_model: imageModel } : undefined
+  });
+  return response.data;
+}
+
 export async function fetchWechatMpAssets(page = 1, pageSize = 50): Promise<Paginated<WechatMpAsset>> {
   const response = await http.get<Paginated<WechatMpAsset>>("/platforms/wechat-mp/assets", { params: { page, page_size: pageSize } });
   return response.data;
@@ -1093,6 +1101,13 @@ export async function syncWechatMpDraft(articleId: number, accountId: number): P
 
 export async function publishWechatMpArticle(articleId: number, payload: { confirm: boolean; scheduled_at?: string | null }): Promise<WechatMpPublishJob> {
   const response = await http.post<WechatMpPublishJob>(`/platforms/wechat-mp/articles/${articleId}/publish`, payload);
+  return response.data;
+}
+
+export async function fetchWechatMpPublishJobs(articleId?: number): Promise<WechatMpPublishJob[]> {
+  const response = await http.get<WechatMpPublishJob[]>("/platforms/wechat-mp/publish-jobs", {
+    params: articleId ? { article_id: articleId } : undefined
+  });
   return response.data;
 }
 
