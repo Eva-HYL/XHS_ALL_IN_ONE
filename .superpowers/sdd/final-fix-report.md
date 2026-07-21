@@ -114,3 +114,20 @@ The current environment still uses Node.js `18.15.0`; Vite 7 warns that Node `20
 ### Concern
 
 The current environment still uses Node.js `18.15.0`; Vite 7 warns that Node `20.19+` or `22.12+` is supported. The production build completed successfully. Existing bundle-size and Python/Starlette deprecation warnings remain non-blocking.
+
+## Fifth Final Fix
+
+**Status:** DONE
+
+### Findings Resolved
+
+1. A successful same-revision draft re-sync now rebinds only active `scheduled` publish jobs for that account and article to the new draft sync. `pending`, `submitted`, and `publishing` jobs remain bound to their original draft syncs so remote submission and reconciliation state is not altered.
+2. Migration `20260721_wmp005` now selects remote-active `pending`, `submitted`, and `publishing` rows before `scheduled` rows when canonicalizing duplicate revision-scoped publish jobs, with ID used as the tie-breaker within each priority group.
+
+### Verification
+
+- Focused fifth-review regressions: `2 passed`.
+- WeChat MP backend: `82 passed`.
+- Full backend: `229 passed`.
+- Static checks: `git diff --check` and Python module compilation passed.
+- Frontend: not run; no frontend files changed.

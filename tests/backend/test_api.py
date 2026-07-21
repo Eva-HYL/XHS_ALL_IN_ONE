@@ -240,6 +240,86 @@ def test_alembic_initial_migration_creates_all_product_tables(tmp_path):
     assert expected.issubset(table_names)
 
 
+def test_wmp005_preserves_remote_active_publish_jobs_over_older_schedules(tmp_path):
+    from alembic import command
+    from alembic.config import Config
+
+    db_url = f"sqlite:///{tmp_path / 'wmp005-active-job-priority.db'}"
+    cfg = Config(os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "backend", "alembic.ini")))
+    cfg.set_main_option("sqlalchemy.url", db_url)
+    command.upgrade(cfg, "20260721_wmp004")
+
+    engine = create_engine(db_url)
+    with engine.begin() as connection:
+        for article_id, remote_status in enumerate(("pending", "submitted", "publishing"), start=1):
+            connection.execute(
+                text("""
+                    INSERT INTO wechat_mp_draft_syncs (
+                        id, user_id, account_id, article_id, wechat_media_id,
+                        article_revision, status, raw_response, error_message, created_at
+                    ) VALUES (
+                        :id, 1, 1, :article_id, :media_id, 1, 'synced', '{}', '', CURRENT_TIMESTAMP
+                    )
+                """),
+                {"id": article_id * 10 + 1, "article_id": article_id, "media_id": f"draft-scheduled-{article_id}"},
+            )
+            connection.execute(
+                text("""
+                    INSERT INTO wechat_mp_draft_syncs (
+                        id, user_id, account_id, article_id, wechat_media_id,
+                        article_revision, status, raw_response, error_message, created_at
+                    ) VALUES (
+                        :id, 1, 1, :article_id, :media_id, 1, 'synced', '{}', '', CURRENT_TIMESTAMP
+                    )
+                """),
+                {"id": article_id * 10 + 2, "article_id": article_id, "media_id": f"draft-remote-{article_id}"},
+            )
+            connection.execute(
+                text("""
+                    INSERT INTO wechat_mp_publish_jobs (
+                        id, user_id, account_id, article_id, draft_sync_id, publish_id, status,
+                        scheduled_at, raw_response, error_message, created_at, updated_at, active_key
+                    ) VALUES (
+                        :id, 1, 1, :article_id, :draft_sync_id, '', 'scheduled', NULL,
+                        '{}', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL
+                    )
+                """),
+                {"id": article_id * 10 + 1, "article_id": article_id, "draft_sync_id": article_id * 10 + 1},
+            )
+            connection.execute(
+                text("""
+                    INSERT INTO wechat_mp_publish_jobs (
+                        id, user_id, account_id, article_id, draft_sync_id, publish_id, status,
+                        scheduled_at, raw_response, error_message, created_at, updated_at, active_key
+                    ) VALUES (
+                        :id, 1, 1, :article_id, :draft_sync_id, '', :status, NULL,
+                        '{}', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL
+                    )
+                """),
+                {
+                    "id": article_id * 10 + 2,
+                    "article_id": article_id,
+                    "draft_sync_id": article_id * 10 + 2,
+                    "status": remote_status,
+                },
+            )
+
+    command.upgrade(cfg, "20260721_wmp005")
+
+    with engine.connect() as connection:
+        rows = connection.execute(text("""
+            SELECT id, status, active_key
+            FROM wechat_mp_publish_jobs
+            ORDER BY id
+        """)).mappings().all()
+
+    assert [(row["status"], row["active_key"] is None) for row in rows] == [
+        ("cancelled", True), ("pending", False),
+        ("cancelled", True), ("submitted", False),
+        ("cancelled", True), ("publishing", False),
+    ]
+
+
 def test_database_initialization_normalizes_legacy_gpt_54_model_name(tmp_path):
     from backend.app.core.database import _normalize_model_config_names
 

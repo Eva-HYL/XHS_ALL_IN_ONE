@@ -70,7 +70,10 @@ def upgrade() -> None:
         FROM wechat_mp_publish_jobs AS jobs
         JOIN wechat_mp_draft_syncs AS syncs ON syncs.id = jobs.draft_sync_id
         WHERE jobs.status IN ('scheduled', 'pending', 'submitted', 'publishing')
-        ORDER BY jobs.id
+        ORDER BY CASE
+            WHEN jobs.status IN ('pending', 'submitted', 'publishing') THEN 0
+            ELSE 1
+        END, jobs.id
     """)).mappings().all()
     claimed_keys: set[str] = set()
     connection.execute(sa.text("UPDATE wechat_mp_publish_jobs SET active_key = NULL"))

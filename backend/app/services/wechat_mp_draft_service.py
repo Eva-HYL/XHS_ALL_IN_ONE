@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiAdapter
 from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiError
-from backend.app.models import WechatMpAccount, WechatMpArticle, WechatMpAsset, WechatMpDraftSync
+from backend.app.models import WechatMpAccount, WechatMpArticle, WechatMpAsset, WechatMpDraftSync, WechatMpPublishJob
 from backend.app.services.wechat_mp_crypto_service import decrypt_secret
 from backend.app.services.wechat_mp_token_service import get_cached_access_token, normalize_token_cache
 
@@ -148,6 +148,18 @@ def sync_article_to_wechat_draft(db: Session, user_id: int, article_id: int, acc
         WechatMpDraftSync.id != draft_sync.id,
     )):
         previous.status = "stale"
+    for scheduled_job in db.scalars(
+        select(WechatMpPublishJob)
+        .join(WechatMpDraftSync, WechatMpDraftSync.id == WechatMpPublishJob.draft_sync_id)
+        .where(
+            WechatMpPublishJob.user_id == user_id,
+            WechatMpPublishJob.account_id == account.id,
+            WechatMpPublishJob.article_id == article.id,
+            WechatMpPublishJob.status == "scheduled",
+            WechatMpDraftSync.article_revision == draft_sync.article_revision,
+        )
+    ):
+        scheduled_job.draft_sync_id = draft_sync.id
     draft_sync.wechat_media_id = media_id
     draft_sync.status = "synced"
     draft_sync.active_key = None
