@@ -97,7 +97,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["section_id"], ["wechat_mp_article_sections.id"], name="fk_wechat_mp_image_prompts_section_id"),
         sa.PrimaryKeyConstraint("id"),
     )
-    _create_indexes("wechat_mp_image_prompts", ["user_id", "article_id", "status"])
+    _create_indexes("wechat_mp_image_prompts", ["user_id", "article_id", "section_id", "status"])
 
     op.create_table(
         "wechat_mp_assets",
@@ -167,7 +167,7 @@ def downgrade() -> None:
         ("wechat_mp_publish_jobs", ["status", "draft_sync_id", "article_id", "account_id", "user_id"]),
         ("wechat_mp_draft_syncs", ["status", "article_id", "account_id", "user_id"]),
         ("wechat_mp_assets", ["status", "prompt_id", "article_id", "user_id"]),
-        ("wechat_mp_image_prompts", ["status", "article_id", "user_id"]),
+        ("wechat_mp_image_prompts", ["status", "section_id", "article_id", "user_id"]),
         ("wechat_mp_article_sections", ["article_id", "user_id"]),
         ("wechat_mp_articles", ["status", "account_id", "user_id"]),
         ("wechat_mp_accounts", ["user_id"]),

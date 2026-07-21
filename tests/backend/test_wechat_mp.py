@@ -1,3 +1,6 @@
+import importlib.util
+from pathlib import Path
+
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -60,3 +63,35 @@ def test_wechat_mp_models_are_independent_from_xhs_assets(db_session, test_user)
 
     assert db_session.query(WechatMpAsset).count() == 1
     assert db_session.query(IllustrationAsset).count() == 0
+
+
+def test_image_prompt_section_index_matches_migration(monkeypatch):
+    from backend.app.models.wechat_mp import WechatMpImagePrompt
+
+    migration_path = (
+        Path(__file__).parents[2]
+        / "backend"
+        / "alembic"
+        / "versions"
+        / "20260721_wmp001_add_wechat_mp_tables.py"
+    )
+    spec = importlib.util.spec_from_file_location("wechat_mp_migration", migration_path)
+    migration = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(migration)
+
+    created_indexes: list[tuple[str, str]] = []
+    dropped_indexes: list[tuple[str, str]] = []
+    monkeypatch.setattr(migration.op, "create_table", lambda *args, **kwargs: None)
+    monkeypatch.setattr(migration.op, "create_index", lambda name, table, columns: created_indexes.append((name, table)))
+    monkeypatch.setattr(migration.op, "drop_index", lambda name, table_name: dropped_indexes.append((name, table_name)))
+    monkeypatch.setattr(migration.op, "drop_table", lambda *args, **kwargs: None)
+
+    migration.upgrade()
+    migration.downgrade()
+
+    model_index_names = {index.name for index in WechatMpImagePrompt.__table__.indexes}
+    section_index_name = "ix_wechat_mp_image_prompts_section_id"
+    assert section_index_name in model_index_names
+    assert (section_index_name, "wechat_mp_image_prompts") in created_indexes
+    assert (section_index_name, "wechat_mp_image_prompts") in dropped_indexes

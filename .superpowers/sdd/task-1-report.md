@@ -60,3 +60,29 @@ Result: all three commands passed. The revision upgraded from `17a6f0c5d2e1` to 
 - Migration indexes cover every applicable `user_id`, `article_id`, `account_id`, `prompt_id`, `draft_sync_id`, and `status` column.
 - `git diff --check` passed.
 - No concerns identified.
+
+## Review Fix
+
+The migration now creates and drops `ix_wechat_mp_image_prompts_section_id`, matching the `index=True` contract on `WechatMpImagePrompt.section_id`.
+
+Added `test_image_prompt_section_index_matches_migration`, a structural test that executes mocked migration upgrade/downgrade operations and verifies the section index is present in both directions and in the model metadata.
+
+### Fix Verification
+
+```bash
+/Users/yingdasun/eva-project/XHS_ALL_IN_ONE/.venv/bin/python -m pytest tests/backend/test_wechat_mp.py -q
+```
+
+Result: `2 passed in 0.42s`.
+
+```bash
+/Users/yingdasun/eva-project/XHS_ALL_IN_ONE/.venv/bin/python -m pytest tests/backend/test_api.py tests/backend/test_wechat_mp.py -q
+```
+
+Result: `144 passed, 1 warning in 15.73s`. The warning is the existing Starlette `TestClient` deprecation warning for `httpx`.
+
+```bash
+git diff --check
+```
+
+Result: passed with no whitespace errors.
