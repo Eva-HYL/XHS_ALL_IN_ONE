@@ -89,7 +89,7 @@ def generate_asset_for_prompt(
     ))
     if prompt is None:
         raise LookupError("WeChat MP prompt not found")
-    if prompt.status != "prompt_ready":
+    if prompt.status not in {"prompt_ready", "failed"}:
         raise ValueError("WeChat MP prompt is not ready for image generation")
     article = db.get(WechatMpArticle, prompt.article_id)
     section = db.get(WechatMpArticleSection, prompt.section_id)

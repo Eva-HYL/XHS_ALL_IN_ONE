@@ -7,6 +7,11 @@ class WechatMpApiError(RuntimeError):
         self.errcode = errcode
         self.payload = payload or {}
 
+    @property
+    def is_definitive_rejection(self) -> bool:
+        """Only an explicit nonzero WeChat errcode proves the request was rejected."""
+        return self.errcode not in (None, 0, "0")
+
 
 class WechatMpApiAdapter:
     base_url = "https://api.weixin.qq.com"

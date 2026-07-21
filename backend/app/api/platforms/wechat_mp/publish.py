@@ -1,7 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -25,6 +25,13 @@ class WechatMpPublishRequest(BaseModel):
     confirm: bool = False
     scheduled_at: datetime | None = None
 
+    @field_validator("scheduled_at")
+    @classmethod
+    def normalize_scheduled_at_to_utc_storage(cls, value: datetime | None) -> datetime | None:
+        if value is None or value.tzinfo is None:
+            return value
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+
 
 class WechatMpPublishJobResponse(BaseModel):
     id: int
@@ -39,6 +46,15 @@ class WechatMpPublishJobResponse(BaseModel):
     error_message: str
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("scheduled_at")
+    @classmethod
+    def expose_scheduled_at_as_utc(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
     model_config = {"from_attributes": True}
 

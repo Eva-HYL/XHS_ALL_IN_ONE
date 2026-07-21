@@ -65,6 +65,48 @@ def _restore_prompt_placeholder(db: Session, article: WechatMpArticle, section: 
         _insert_prompt_placeholder(article, section, prompt)
 
 
+def reset_inline_illustrations(
+    db: Session,
+    article: WechatMpArticle,
+    *,
+    html_body: str | None = None,
+) -> str:
+    """Remove obsolete inline planning state while retaining generated assets as history."""
+    prompts = db.scalars(
+        select(WechatMpImagePrompt).where(WechatMpImagePrompt.article_id == article.id)
+    ).all()
+    sections = db.scalars(
+        select(WechatMpArticleSection).where(WechatMpArticleSection.article_id == article.id)
+    ).all()
+    inline_assets = db.scalars(
+        select(WechatMpAsset).where(
+            WechatMpAsset.article_id == article.id,
+            WechatMpAsset.role == "inline_illustration",
+        )
+    ).all()
+
+    cleaned_html = article.html_body if html_body is None else html_body
+    for asset in inline_assets:
+        image_pattern = re.compile(
+            r'<img\b[^>]*\bsrc=["\']'
+            + re.escape(escape(asset.public_url, quote=True))
+            + r'["\'][^>]*>'
+        )
+        cleaned_html = image_pattern.sub("", cleaned_html)
+        asset.prompt_id = None
+    cleaned_html = re.sub(r"\{\{image:prompt-\d+\}\}", "", cleaned_html)
+
+    # Detach historical assets before deleting prompt rows to satisfy foreign keys.
+    db.flush()
+    for prompt in prompts:
+        db.delete(prompt)
+    db.flush()
+    for section in sections:
+        db.delete(section)
+    article.html_body = cleaned_html
+    return cleaned_html
+
+
 def _parse_token_count(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError("token count must be an integer")
@@ -125,6 +167,19 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
     if article is None:
         raise LookupError("WeChat MP article not found")
     selected_skill = skill_name or article.illustration_skill or "xiaomao-illustrations"
+    if selected_skill == "none":
+        has_inline_state = bool(db.scalar(
+            select(WechatMpImagePrompt.id).where(WechatMpImagePrompt.article_id == article.id).limit(1)
+        )) or "{{image:prompt-" in article.html_body
+        skill_changed = article.illustration_skill != "none"
+        if has_inline_state:
+            reset_inline_illustrations(db, article)
+        article.illustration_skill = "none"
+        if has_inline_state or skill_changed:
+            from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
+            invalidate_synced_drafts(db, article, next_status="layout_ready")
+            db.commit()
+        return []
     model = resolve_wechat_mp_model(db=db, user_id=user_id, model_type="text")
     try:
         sections = generate_article_shotlist(db=db, user_id=user_id, article_id=article_id, text_model=model.model_name)

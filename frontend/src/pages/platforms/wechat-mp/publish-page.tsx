@@ -147,6 +147,8 @@ export function WechatMpPublishPage() {
         />
         <Select placeholder="选择公众号账号" value={accountId} onChange={setAccountId} options={accounts.map((account) => ({ value: account.id, label: account.name }))} />
         <DatePicker showTime value={scheduledAt} onChange={setScheduledAt} placeholder="留空即立即发布" style={{ width: "100%" }} />
+        <Text type="secondary">所选时间按本地时区显示，提交后统一以 UTC 保存。</Text>
+        <Text type="secondary">同步草稿预计费用：¥0（仅调用微信 API）</Text>
         <Button icon={<CloudUploadOutlined />} type="primary" loading={busy} onClick={() => void syncDraft()}>同步到公众号草稿箱</Button>
       </Space>
     </Card>}
@@ -157,6 +159,7 @@ export function WechatMpPublishPage() {
 
     <Card title="发布" style={{ marginTop: 16 }}>
       <Paragraph>{scheduledAt ? `定时发布：${scheduledAt.format("YYYY-MM-DD HH:mm")}` : "立即发布：点击后将要求明确确认。"}</Paragraph>
+      <Paragraph type="secondary">发布预计费用：¥0（仅调用微信 API）</Paragraph>
       <Button type="primary" danger icon={<SendOutlined />} disabled={!sync || busy} loading={busy} onClick={publish}>{scheduledAt ? "确认定时发布" : "立即发布"}</Button>
     </Card>
 

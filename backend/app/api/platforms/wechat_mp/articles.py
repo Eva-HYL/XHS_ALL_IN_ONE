@@ -16,6 +16,7 @@ from backend.app.services.wechat_mp_image_prompt_service import (
     _restore_prompt_placeholder,
     generate_image_prompts,
     regenerate_image_prompt,
+    reset_inline_illustrations,
 )
 from backend.app.services.wechat_mp_layout_service import render_wechat_html
 from backend.app.services.wechat_mp_writer_service import generate_wechat_article
@@ -83,14 +84,30 @@ def update_article(article_id: int, payload: WechatMpArticleUpdateRequest, curre
     from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
 
     article = _get_owned_article(db, current_user, article_id)
-    changed = False
-    for field in ("title", "markdown_body", "html_body", "digest", "illustration_skill"):
+    markdown_changed = payload.markdown_body is not None and payload.markdown_body != article.markdown_body
+    html_changed = payload.html_body is not None and payload.html_body != article.html_body
+    skill_changed = payload.illustration_skill is not None and payload.illustration_skill != article.illustration_skill
+    body_changed = markdown_changed or html_changed
+    changed = body_changed or skill_changed
+
+    for field in ("title", "digest"):
         value = getattr(payload, field)
         if value is not None and value != getattr(article, field):
             setattr(article, field, value)
             changed = True
-    if payload.markdown_body is not None and payload.html_body is None:
-        article.html_body = render_wechat_html(payload.markdown_body, image_placeholders=[])
+
+    if markdown_changed:
+        article.markdown_body = payload.markdown_body or ""
+    if skill_changed:
+        article.illustration_skill = payload.illustration_skill or article.illustration_skill
+    if body_changed or skill_changed:
+        if payload.html_body is not None:
+            next_html = payload.html_body
+        elif markdown_changed:
+            next_html = render_wechat_html(article.markdown_body, image_placeholders=[])
+        else:
+            next_html = article.html_body
+        reset_inline_illustrations(db, article, html_body=next_html)
     if changed:
         invalidate_synced_drafts(db, article, next_status="layout_ready")
     db.commit()

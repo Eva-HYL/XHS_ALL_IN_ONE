@@ -121,14 +121,19 @@ def _submit_existing_job(
     *, db: Session, job: WechatMpPublishJob, article: WechatMpArticle,
     account: WechatMpAccount, adapter: WechatMpApiAdapter,
 ) -> WechatMpPublishJob:
+    draft_sync = db.get(WechatMpDraftSync, job.draft_sync_id)
+    if (
+        draft_sync is None
+        or draft_sync.status != "synced"
+        or draft_sync.article_revision != article.revision
+    ):
+        job.status = "failed"
+        job.active_key = None
+        job.error_message = "Scheduled publish draft is stale; sync the article again"
+        db.commit()
+        raise WechatMpPublishValidationError(job.error_message)
+
     try:
-        draft_sync = db.get(WechatMpDraftSync, job.draft_sync_id)
-        if (
-            draft_sync is None
-            or draft_sync.status != "synced"
-            or draft_sync.article_revision != article.revision
-        ):
-            raise WechatMpPublishValidationError("Scheduled publish draft is stale; sync the article again")
         response = adapter.submit_publish(
             access_token=_get_access_token(account, adapter),
             media_id=draft_sync.wechat_media_id,
@@ -137,8 +142,10 @@ def _submit_existing_job(
         if not isinstance(publish_id, str) or not publish_id:
             raise ValueError("WeChat MP publish response is missing publish_id")
     except Exception as exc:
-        job.status = "failed"
-        job.active_key = None
+        definitive_rejection = isinstance(exc, WechatMpApiError) and exc.is_definitive_rejection
+        job.status = "failed" if definitive_rejection else "pending"
+        if definitive_rejection:
+            job.active_key = None
         job.raw_response = exc.payload if isinstance(exc, WechatMpApiError) else {"error": str(exc)}
         job.error_message = str(exc)
         db.commit()

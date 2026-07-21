@@ -31,6 +31,17 @@ const { Text, Paragraph } = Typography;
 const { TextArea } = Input;
 const DEFAULT_SKILL = "xiaomao-illustrations";
 
+function activeArticleAssets(
+  articleId: number,
+  prompts: WechatMpImagePrompt[],
+  assets: WechatMpAsset[],
+): WechatMpAsset[] {
+  const activePromptIds = new Set(prompts.map((prompt) => prompt.id));
+  return assets.filter((asset) =>
+    asset.article_id === articleId && (asset.role === "cover" || (asset.prompt_id !== null && activePromptIds.has(asset.prompt_id)))
+  );
+}
+
 export function WechatMpWriterPage() {
   const [params, setParams] = useSearchParams();
   const [article, setArticle] = useState<WechatMpArticle | null>(null);
@@ -83,7 +94,7 @@ export function WechatMpWriterPage() {
         setEditMarkdown(loadedArticle.markdown_body);
         setSkill(loadedArticle.illustration_skill);
         setPrompts(loadedPrompts);
-        setAssets(loadedAssets.items.filter((asset) => asset.article_id === articleId));
+        setAssets(activeArticleAssets(articleId, loadedPrompts, loadedAssets.items));
       } catch {
         if (!cancelled) setError("文章或提示词加载失败。");
       }
@@ -129,6 +140,8 @@ export function WechatMpWriterPage() {
     setBusy(true);
     setError(null);
     try {
+      const previousRevision = article.revision;
+      const bodyChanged = editMarkdown !== article.markdown_body;
       const updated = await updateWechatMpArticle(article.id, {
         title: editTitle.trim(),
         markdown_body: editMarkdown,
@@ -136,7 +149,18 @@ export function WechatMpWriterPage() {
       setArticle(updated);
       setEditTitle(updated.title);
       setEditMarkdown(updated.markdown_body);
-      setNotice("文章已保存。已同步的旧草稿会标记为过期，请重新同步后再发布。");
+      if (bodyChanged) {
+        const [loadedPrompts, loadedAssets] = await Promise.all([
+          fetchWechatMpPrompts(article.id),
+          fetchWechatMpAssets(),
+        ]);
+        setPrompts(loadedPrompts);
+        setAssets(activeArticleAssets(article.id, loadedPrompts, loadedAssets.items));
+      }
+      setNotice(updated.revision === previousRevision
+        ? "文章内容无变化，现有排版、配图和同步修订已保留。"
+        : "文章已保存。已同步的旧草稿会标记为过期，请重新同步后再发布。"
+      );
     } catch {
       setError("文章保存失败。");
     } finally {
@@ -232,6 +256,7 @@ export function WechatMpWriterPage() {
         <Col xs={24} md={12}><Input value={tone} onChange={(event) => setTone(event.target.value)} placeholder="语气风格（可选）" /></Col>
         <Col span={24}><TextArea value={material} onChange={(event) => setMaterial(event.target.value)} placeholder="参考素材、事实和要点（可选）" rows={4} /></Col>
       </Row>
+      <Text type="secondary">正文生成与提示词费用将在模型调用前按已配置价格展示；微信排版本身不收模型费。</Text>
       <Button type="primary" icon={<EditOutlined />} loading={busy} onClick={() => void createArticle()} style={{ marginTop: 12 }}>生成文章</Button>
     </Card>
 
@@ -258,6 +283,7 @@ export function WechatMpWriterPage() {
 
       <Card title="4. 生成配图提示词" style={{ marginTop: 16 }}>
         <Paragraph>当前技能：<Text code>{skill}</Text>。<Text code>none</Text> 只跳过正文插画，公众号封面仍可生成。</Paragraph>
+        <Paragraph type="secondary">提示词预估：按文本模型 token 计费；选择 <Text code>none</Text> 时为 ¥0。</Paragraph>
         <Button type="primary" icon={<PictureOutlined />} loading={busy} onClick={() => void makePrompts()}>重新生成提示词</Button>
       </Card>
 
@@ -266,7 +292,7 @@ export function WechatMpWriterPage() {
           <Select placeholder="使用后端默认图片模型" allowClear value={imageModel} onChange={setImageModel} options={imageModels.map((model) => ({ value: model.model_name, label: `${model.name}${model.is_default ? "（默认）" : ""}` }))} />
           <Text type="secondary">{estimatedCost}；执行后会写入上方累计实际费用。</Text>
           <Button type="primary" icon={<PictureOutlined />} loading={busy} onClick={() => void generateCover()}>生成 16:9 公众号封面</Button>
-          {prompts.length === 0 ? <Empty description="提示词生成后在此编辑并生图" /> : prompts.map((prompt) =>
+          {prompts.length === 0 ? <Empty description={skill === "none" ? "none 模式不生成正文配图提示词" : "提示词生成后在此编辑并生图"} /> : prompts.map((prompt) =>
             <Card key={prompt.id} size="small" title={`段落 #${prompt.section_id}`} extra={<Tag>{prompt.status}</Tag>}>
               <TextArea value={prompt.editable_prompt} onChange={(event) => setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, editable_prompt: event.target.value } : item))} rows={3} />
               <Space style={{ marginTop: 8 }} wrap>
