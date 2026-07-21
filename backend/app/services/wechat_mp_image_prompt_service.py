@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import os
+import re
+from html import escape
 from typing import Any
 
 import requests
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.app.models import WechatMpArticle, WechatMpArticleSection, WechatMpImagePrompt
+from backend.app.models import WechatMpArticle, WechatMpArticleSection, WechatMpAsset, WechatMpImagePrompt
 from backend.app.services.usage_recording_service import record_text_usage
 from backend.app.services.wechat_mp_layout_service import render_wechat_html
 from backend.app.services.wechat_mp_shotlist_service import generate_article_shotlist
@@ -27,6 +29,26 @@ def _insert_prompt_placeholder(article: WechatMpArticle, section: WechatMpArticl
         article.html_body = article.html_body.replace(section_html, f"{section_html}\n{marker}", 1)
     else:
         article.html_body = f"{article.html_body}\n{marker}" if article.html_body else marker
+
+
+def _restore_prompt_placeholder(db: Session, article: WechatMpArticle, section: WechatMpArticleSection, prompt: WechatMpImagePrompt) -> None:
+    """Replace the most recently embedded image so a regenerated prompt can backfill it."""
+    marker = f"{{{{image:prompt-{prompt.id}}}}}"
+    if marker in article.html_body:
+        return
+    asset = db.scalar(
+        select(WechatMpAsset)
+        .where(WechatMpAsset.article_id == article.id, WechatMpAsset.prompt_id == prompt.id)
+        .order_by(WechatMpAsset.id.desc())
+    )
+    if asset is None:
+        _insert_prompt_placeholder(article, section, prompt)
+        return
+    image_pattern = re.compile(r'<img src="' + re.escape(escape(asset.public_url, quote=True)) + r'" alt="[^"]*" />')
+    if image_pattern.search(article.html_body):
+        article.html_body = image_pattern.sub(marker, article.html_body, count=1)
+    else:
+        _insert_prompt_placeholder(article, section, prompt)
 
 
 def _parse_token_count(value: Any) -> int:
@@ -88,24 +110,37 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
         sections = generate_article_shotlist(db=db, user_id=user_id, article_id=article_id, text_model=text_model)
         prompts = []
         for section in sections:
+            prompt = db.scalar(
+                select(WechatMpImagePrompt)
+                .where(WechatMpImagePrompt.article_id == article.id, WechatMpImagePrompt.section_id == section.id)
+                .order_by(WechatMpImagePrompt.id.desc())
+            )
             result = _call_prompt_model(
                 article_title=article.title,
                 section_summary=section.summary,
                 skill_name=selected_skill,
                 model_name=text_model,
             )
-            prompt = WechatMpImagePrompt(
-                user_id=user_id,
-                article_id=article.id,
-                section_id=section.id,
-                skill_name=selected_skill,
-                prompt=result["prompt"],
-                editable_prompt=result["prompt"],
-                version=1,
-                status="prompt_ready",
-            )
-            db.add(prompt)
-            db.flush()
+            if prompt is None:
+                prompt = WechatMpImagePrompt(
+                    user_id=user_id,
+                    article_id=article.id,
+                    section_id=section.id,
+                    skill_name=selected_skill,
+                    prompt=result["prompt"],
+                    editable_prompt=result["prompt"],
+                    version=1,
+                    status="prompt_ready",
+                )
+                db.add(prompt)
+                db.flush()
+            else:
+                _restore_prompt_placeholder(db, article, section, prompt)
+                prompt.skill_name = selected_skill
+                prompt.prompt = result["prompt"]
+                prompt.editable_prompt = result["prompt"]
+                prompt.version += 1
+                prompt.status = "prompt_ready"
             _insert_prompt_placeholder(article, section, prompt)
             record_text_usage(
                 db=db,
@@ -146,6 +181,7 @@ def regenerate_image_prompt(*, db: Session, prompt: WechatMpImagePrompt, article
     prompt.editable_prompt = result["prompt"]
     prompt.version += 1
     prompt.status = "prompt_ready"
+    _restore_prompt_placeholder(db, article, section, prompt)
     record_text_usage(
         db=db,
         user_id=article.user_id,
@@ -157,6 +193,9 @@ def regenerate_image_prompt(*, db: Session, prompt: WechatMpImagePrompt, article
         platform="wechat_mp",
         resource_type="wechat_mp_article",
         resource_id=article.id,
+        commit=False,
     )
+    article.status = "prompts_ready"
+    db.commit()
     db.refresh(prompt)
     return prompt

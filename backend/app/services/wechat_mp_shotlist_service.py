@@ -26,25 +26,36 @@ def generate_article_shotlist(*, db: Session, user_id: int, article_id: int, tex
     article = db.scalar(select(WechatMpArticle).where(WechatMpArticle.id == article_id, WechatMpArticle.user_id == user_id))
     if article is None:
         raise LookupError("WeChat MP article not found")
-    if article.status != "layout_ready":
-        raise ValueError("WeChat MP article must be layout_ready before generating prompts")
+    if article.status not in {"layout_ready", "prompts_ready", "images_partial", "images_ready"}:
+        raise ValueError("WeChat MP article must have a rendered layout before generating prompts")
 
     candidates = choose_candidate_sections(article.markdown_body)
     if not candidates:
         raise ValueError("WeChat MP article has no content for illustration prompts")
 
-    db.query(WechatMpArticleSection).filter(WechatMpArticleSection.article_id == article.id).delete()
-    sections = [
-        WechatMpArticleSection(
-            user_id=user_id,
-            article_id=article.id,
-            section_index=candidate["section_index"],
-            summary=candidate["summary"],
-            source_excerpt=candidate["summary"],
-            needs_image=candidate["needs_image"],
+    existing_sections = {
+        section.section_index: section
+        for section in db.scalars(
+            select(WechatMpArticleSection).where(WechatMpArticleSection.article_id == article.id)
         )
-        for candidate in candidates
-    ]
-    db.add_all(sections)
+    }
+    sections = []
+    for candidate in candidates:
+        section = existing_sections.get(candidate["section_index"])
+        if section is None:
+            section = WechatMpArticleSection(
+                user_id=user_id,
+                article_id=article.id,
+                section_index=candidate["section_index"],
+                summary=candidate["summary"],
+                source_excerpt=candidate["summary"],
+                needs_image=candidate["needs_image"],
+            )
+            db.add(section)
+        else:
+            section.summary = candidate["summary"]
+            section.source_excerpt = candidate["summary"]
+            section.needs_image = candidate["needs_image"]
+        sections.append(section)
     db.flush()
     return sections

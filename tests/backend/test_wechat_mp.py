@@ -483,6 +483,90 @@ def test_generate_prompts_creates_shotlist_and_records_article_usage(api_client,
         session.close()
 
 
+def test_generating_prompts_twice_reuses_prompts_and_placeholders(api_client, auth_headers, created_wechat_article, monkeypatch):
+    from backend.app.models import WechatMpImagePrompt
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    monkeypatch.setattr(
+        prompt_service,
+        "_call_prompt_model",
+        lambda **kwargs: {"prompt": f"提示词：{kwargs['section_summary']}", "input_tokens": 12, "output_tokens": 24, "model_name": kwargs["model_name"]},
+    )
+    client, session_factory = api_client
+
+    first = client.post(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts", headers=auth_headers)
+    second = client.post(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts", headers=auth_headers)
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert [prompt["id"] for prompt in second.json()] == [prompt["id"] for prompt in first.json()]
+    html_body = client.get(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers).json()["html_body"]
+    assert all(html_body.count(f"{{{{image:prompt-{prompt['id']}}}}}") == 1 for prompt in second.json())
+    session = session_factory()
+    try:
+        assert session.query(WechatMpImagePrompt).filter_by(article_id=created_wechat_article.id).count() == len(first.json())
+    finally:
+        session.close()
+
+
+def test_regenerating_embedded_prompt_restores_marker_for_next_image(api_client, auth_headers, created_wechat_article, monkeypatch):
+    from backend.app.models import WechatMpAsset
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+    from backend.app.services import wechat_mp_image_service as image_service
+
+    monkeypatch.setattr(
+        prompt_service,
+        "_call_prompt_model",
+        lambda **kwargs: {"prompt": "第一版提示词", "input_tokens": 12, "output_tokens": 24, "model_name": kwargs["model_name"]},
+    )
+    generated_urls = iter(("/api/files/media/wechat-mp-first.png", "/api/files/media/wechat-mp-second.png"))
+    monkeypatch.setattr(
+        image_service,
+        "_call_image_model",
+        lambda **kwargs: (lambda url: {"file_path": url, "public_url": url, "provider_response": {"ok": True}})(next(generated_urls)),
+    )
+    client, session_factory = api_client
+    created = client.post(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts", headers=auth_headers)
+    assert created.status_code == 201
+    prompt_id = created.json()[0]["id"]
+
+    first_image = client.post(
+        f"/api/platforms/wechat-mp/prompts/{prompt_id}/image",
+        json={"image_model": "doubao-seedream-4-0-250828"},
+        headers=auth_headers,
+    )
+    assert first_image.status_code == 201
+    marker = f"{{{{image:prompt-{prompt_id}}}}}"
+    assert marker not in client.get(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers).json()["html_body"]
+
+    monkeypatch.setattr(
+        prompt_service,
+        "_call_prompt_model",
+        lambda **kwargs: {"prompt": "第二版提示词", "input_tokens": 12, "output_tokens": 24, "model_name": kwargs["model_name"]},
+    )
+    regenerated = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts/{prompt_id}/regenerate",
+        headers=auth_headers,
+    )
+    assert regenerated.status_code == 200
+    assert client.get(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers).json()["html_body"].count(marker) == 1
+
+    second_image = client.post(
+        f"/api/platforms/wechat-mp/prompts/{prompt_id}/image",
+        json={"image_model": "doubao-seedream-4-0-250828"},
+        headers=auth_headers,
+    )
+    assert second_image.status_code == 201
+    html_body = client.get(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers).json()["html_body"]
+    assert "/api/files/media/wechat-mp-first.png" not in html_body
+    assert "/api/files/media/wechat-mp-second.png" in html_body
+    session = session_factory()
+    try:
+        assert session.query(WechatMpAsset).filter_by(prompt_id=prompt_id).count() == 2
+    finally:
+        session.close()
+
+
 def test_generate_prompts_rolls_back_all_records_when_a_later_model_call_fails(api_client, auth_headers, created_wechat_article, monkeypatch):
     from backend.app.models import UsageRecord, WechatMpArticleSection, WechatMpImagePrompt
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service

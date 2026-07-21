@@ -92,3 +92,34 @@ PYTHONPATH=. .venv/bin/pytest tests/backend/test_wechat_mp.py -q
 ```
 
 Result: `25 passed`.
+
+---
+
+## Review Fix: Prompt Idempotency and Regeneration Backfill
+
+### Fix
+
+1. Shotlist generation now preserves sections by `section_index` and allows repeated prompt generation after the initial layout.
+2. Prompt generation reuses the existing prompt for each retained section, updates it in place, and preserves its marker ID instead of inserting duplicate prompt rows and placeholders.
+3. Regenerating a prompt that already has an embedded image replaces the most recent embedded asset URL with that prompt's stable marker before the next image generation backfills it.
+4. The review fix preserves WeChat-only asset persistence, owner scoping, safe deletion, and usage records; it adds no draft sync, publish, or frontend functionality.
+
+### Verification
+
+```bash
+PYTHONPATH=. .venv/bin/pytest tests/backend/test_wechat_mp.py -k "prompt or image or asset" -q
+```
+
+Result: `14 passed, 13 deselected`.
+
+```bash
+PYTHONPATH=. .venv/bin/pytest tests/backend/test_wechat_mp.py -q
+```
+
+Result: `27 passed`.
+
+```bash
+git diff --check
+```
+
+Result: passed.
