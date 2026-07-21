@@ -5,14 +5,16 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
-from backend.app.models import User, WechatMpArticle
-from backend.app.schemas.wechat_mp import WechatMpArticleCreateRequest, WechatMpArticleResponse
+from backend.app.models import User, WechatMpArticle, WechatMpImagePrompt
+from backend.app.schemas.wechat_mp import WechatMpArticleCreateRequest, WechatMpArticleResponse, WechatMpImagePromptResponse
+from backend.app.services.wechat_mp_image_prompt_service import generate_image_prompts, regenerate_image_prompt
 from backend.app.services.wechat_mp_layout_service import render_wechat_html
 from backend.app.services.wechat_mp_writer_service import generate_wechat_article
 
 
 router = APIRouter(prefix="/platforms/wechat-mp/articles", tags=["wechat-mp-articles"])
 _WRITER_TEXT_MODEL = "qwen3.7-plus"
+_PROMPT_TEXT_MODEL = "qwen3.7-plus"
 
 
 class WechatMpArticleUpdateRequest(BaseModel):
@@ -23,11 +25,26 @@ class WechatMpArticleUpdateRequest(BaseModel):
     illustration_skill: str | None = Field(default=None, min_length=1, max_length=80)
 
 
+class WechatMpPromptGenerateRequest(BaseModel):
+    skill_name: str | None = Field(default=None, min_length=1, max_length=80)
+
+
+class WechatMpPromptUpdateRequest(BaseModel):
+    editable_prompt: str = Field(min_length=1)
+
+
 def _get_owned_article(db: Session, current_user: User, article_id: int) -> WechatMpArticle:
     article = db.get(WechatMpArticle, article_id)
     if article is None or article.user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="WeChat MP article not found")
     return article
+
+
+def _get_owned_prompt(db: Session, article: WechatMpArticle, prompt_id: int) -> WechatMpImagePrompt:
+    prompt = db.get(WechatMpImagePrompt, prompt_id)
+    if prompt is None or prompt.article_id != article.id or prompt.user_id != article.user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="WeChat MP prompt not found")
+    return prompt
 
 
 @router.post("", response_model=WechatMpArticleResponse, status_code=status.HTTP_201_CREATED)
@@ -60,3 +77,55 @@ def update_article(article_id: int, payload: WechatMpArticleUpdateRequest, curre
     db.commit()
     db.refresh(article)
     return article
+
+
+@router.post("/{article_id}/prompts", response_model=list[WechatMpImagePromptResponse], status_code=status.HTTP_201_CREATED)
+def create_prompts(
+    article_id: int,
+    payload: WechatMpPromptGenerateRequest | None = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    article = _get_owned_article(db, current_user, article_id)
+    try:
+        return generate_image_prompts(
+            db=db,
+            user_id=current_user.id,
+            article_id=article.id,
+            skill_name=payload.skill_name if payload else None,
+            text_model=_PROMPT_TEXT_MODEL,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+
+@router.patch("/{article_id}/prompts/{prompt_id}", response_model=WechatMpImagePromptResponse)
+def update_prompt(
+    article_id: int,
+    prompt_id: int,
+    payload: WechatMpPromptUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    article = _get_owned_article(db, current_user, article_id)
+    prompt = _get_owned_prompt(db, article, prompt_id)
+    prompt.editable_prompt = payload.editable_prompt
+    prompt.version += 1
+    db.commit()
+    db.refresh(prompt)
+    return prompt
+
+
+@router.post("/{article_id}/prompts/{prompt_id}/regenerate", response_model=WechatMpImagePromptResponse)
+def regenerate_prompt(
+    article_id: int,
+    prompt_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    article = _get_owned_article(db, current_user, article_id)
+    prompt = _get_owned_prompt(db, article, prompt_id)
+    try:
+        return regenerate_image_prompt(db=db, prompt=prompt, article=article, text_model=_PROMPT_TEXT_MODEL)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc

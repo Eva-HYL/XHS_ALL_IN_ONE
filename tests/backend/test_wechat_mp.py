@@ -136,6 +136,32 @@ def auth_headers(api_client):
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
+@pytest.fixture
+def created_wechat_article(api_client, auth_headers):
+    client, session_factory = api_client
+    from backend.app.models import User, WechatMpArticle
+
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        article = WechatMpArticle(
+            user_id=owner.id,
+            title="稳定输出",
+            markdown_body="## 问题\n总在计划开始时消耗精力。\n\n## 方法\n先做最小动作。",
+            html_body="<h2>问题</h2><p>总在计划开始时消耗精力。</p><h2>方法</h2><p>先做最小动作。</p>",
+            digest="稳定输出的方法",
+            cover_brief="小猫压住计划表",
+            status="layout_ready",
+            illustration_skill="xiaomao-illustrations",
+        )
+        session.add(article)
+        session.commit()
+        session.refresh(article)
+        return article
+    finally:
+        session.close()
+
+
 def _create_wechat_account(client, headers):
     response = client.post(
         "/api/platforms/wechat-mp/accounts",
@@ -263,6 +289,121 @@ def test_create_wechat_mp_article_generates_markdown_html_and_usage(api_client, 
         assert session.query(UsageRecord).filter_by(platform="wechat_mp", step="write_article").count() == 1
     finally:
         session.close()
+
+
+def test_generate_prompts_defaults_to_xiaomao_skill(api_client, auth_headers, created_wechat_article, monkeypatch):
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    def fake_prompt_call(*, article_title, section_summary, skill_name, model_name):
+        assert skill_name == "xiaomao-illustrations"
+        return {
+            "prompt": "Generate one 16:9 Chinese article illustration. 小猫 lazily presses a messy note stack.",
+            "input_tokens": 50,
+            "output_tokens": 80,
+            "model_name": model_name,
+        }
+
+    monkeypatch.setattr(prompt_service, "_call_prompt_model", fake_prompt_call)
+    client, _ = api_client
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data[0]["skill_name"] == "xiaomao-illustrations"
+    assert "小猫" in data[0]["prompt"]
+    assert data[0]["status"] == "prompt_ready"
+    assert data[0]["version"] == 1
+    assert data[0]["editable_prompt"] == data[0]["prompt"]
+
+
+def test_generate_prompts_creates_shotlist_and_records_article_usage(api_client, auth_headers, created_wechat_article, monkeypatch):
+    from backend.app.models import UsageRecord
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    monkeypatch.setattr(
+        prompt_service,
+        "_call_prompt_model",
+        lambda **kwargs: {"prompt": "一只小猫整理便签", "input_tokens": 12, "output_tokens": 24, "model_name": kwargs["model_name"]},
+    )
+    client, session_factory = api_client
+    response = client.post(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts", headers=auth_headers)
+
+    assert response.status_code == 201
+    assert 1 <= len(response.json()) <= 8
+    session = session_factory()
+    try:
+        usages = session.query(UsageRecord).filter_by(step="generate_image_prompt").all()
+        assert len(usages) == len(response.json())
+        assert all(usage.platform == "wechat_mp" for usage in usages)
+        assert all(usage.resource_type == "wechat_mp_article" for usage in usages)
+        assert all(usage.resource_id == created_wechat_article.id for usage in usages)
+    finally:
+        session.close()
+
+
+def test_edit_and_regenerate_prompt_increment_version(api_client, auth_headers, created_wechat_article, monkeypatch):
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    monkeypatch.setattr(
+        prompt_service,
+        "_call_prompt_model",
+        lambda **kwargs: {"prompt": "第一版提示词", "input_tokens": 12, "output_tokens": 24, "model_name": kwargs["model_name"]},
+    )
+    client, _ = api_client
+    created = client.post(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts", headers=auth_headers)
+    prompt_id = created.json()[0]["id"]
+
+    edited = client.patch(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts/{prompt_id}",
+        json={"editable_prompt": "编辑后的提示词"},
+        headers=auth_headers,
+    )
+    assert edited.status_code == 200
+    assert edited.json()["editable_prompt"] == "编辑后的提示词"
+    assert edited.json()["version"] == 2
+
+    monkeypatch.setattr(
+        prompt_service,
+        "_call_prompt_model",
+        lambda **kwargs: {"prompt": "再生成的提示词", "input_tokens": 15, "output_tokens": 30, "model_name": kwargs["model_name"]},
+    )
+    regenerated = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts/{prompt_id}/regenerate",
+        headers=auth_headers,
+    )
+    assert regenerated.status_code == 200
+    assert regenerated.json()["prompt"] == "再生成的提示词"
+    assert regenerated.json()["editable_prompt"] == "再生成的提示词"
+    assert regenerated.json()["version"] == 3
+
+
+def test_prompt_endpoints_hide_foreign_article_and_prompt(api_client, auth_headers, created_wechat_article, monkeypatch):
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    monkeypatch.setattr(
+        prompt_service,
+        "_call_prompt_model",
+        lambda **kwargs: {"prompt": "提示词", "input_tokens": 1, "output_tokens": 1, "model_name": kwargs["model_name"]},
+    )
+    client, _ = api_client
+    created = client.post(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts", headers=auth_headers)
+    prompt_id = created.json()[0]["id"]
+    other = client.post("/api/auth/register", json={"username": "wechat-prompt-other", "password": "secret123"})
+    other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
+
+    assert client.post(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts", headers=other_headers).status_code == 404
+    assert client.patch(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts/{prompt_id}",
+        json={"editable_prompt": "越权"},
+        headers=other_headers,
+    ).status_code == 404
+    assert client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts/{prompt_id}/regenerate",
+        headers=other_headers,
+    ).status_code == 404
 
 
 def test_wechat_mp_layout_renderer_supports_article_blocks():
