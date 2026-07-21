@@ -30,3 +30,33 @@
 ### Concern
 
 The current environment uses Node.js `18.15.0`; Vite 7 warns that Node `20.19+` or `22.12+` is supported. The production build still completed successfully. Existing bundle-size and Python deprecation warnings remain unchanged and are non-blocking.
+
+## Second Final Fix
+
+**Status:** DONE_WITH_CONCERNS
+
+**Implementation commit:** `3fffa19 fix: resolve second wechat mp final review`
+
+### Findings Resolved
+
+1. WeChat cover and inline image generation now use the shared provider/model size normalizer. The default Doubao path receives `2732x1536` for the `16:9` alias, with regression coverage for inline and cover calls.
+2. Publish jobs now have a nullable unique active key per current draft sync. Repeated immediate or scheduled requests return the existing active job across `scheduled`, `pending`, `submitted`, and `publishing`; terminal jobs release the key. The due runner cancels legacy duplicate rows and atomically claims scheduled jobs before provider submission.
+3. The WeChat MP due runner now starts in a dedicated scheduler regardless of the disabled default XHS scheduler. An owner-scoped publish-job list endpoint and reload-backed frontend task list expose scheduled jobs and cancellation after reload.
+4. Editing a generated prompt restores its placeholder, removes the stale embedded image from article HTML, resets the prompt/article state, invalidates synced revisions, and permits a subsequent image generation.
+5. `none` now means skip inline illustrations only: cover generation remains available in the backend and frontend, while inline generation stays blocked.
+6. Inline image usage is added to `article.cost_estimate`; the writer displays the aggregate actual cost across writing, prompts, cover, and inline images. A model-aware image-cost endpoint supplies the per-action estimate shown before image buttons.
+7. The writer page now provides title and Markdown body editing, saves through article PATCH, refreshes rendered preview/revision state, and tells the user to resync stale drafts before publishing.
+8. Deleting an obsolete asset no longer resets a prompt or article when a newer image remains embedded. Only the currently embedded inline asset or current cover changes article state and revision.
+
+### Verification
+
+- Focused second-review regressions: `12 passed`.
+- WeChat MP backend: `69 passed`.
+- Full backend: `215 passed`.
+- Alembic: fresh SQLite upgrade through `20260721_wmp004` passed.
+- Static checks: `git diff --check` and Python module compilation passed.
+- Frontend: `npm run build` passed (`tsc` + Vite, 3235 modules transformed).
+
+### Concern
+
+The current environment still uses Node.js `18.15.0`; Vite 7 warns that Node `20.19+` or `22.12+` is supported. The production build completed successfully. Existing bundle-size and Python deprecation warnings remain non-blocking.
