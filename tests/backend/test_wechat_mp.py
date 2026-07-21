@@ -1,4 +1,5 @@
 import importlib.util
+import time
 from pathlib import Path
 
 import pytest
@@ -176,7 +177,7 @@ def created_wechat_account(api_client, auth_headers):
     session = session_factory()
     try:
         account = session.get(WechatMpAccount, response.json()["id"])
-        account.token_cache = {"access_token": "cached-token"}
+        account.token_cache = {"access_token": "cached-token", "expires_at": time.time() + 3600}
         session.commit()
     finally:
         session.close()
@@ -266,6 +267,90 @@ def test_sync_wechat_mp_article_creates_draft_sync(api_client, auth_headers, cre
         assert session.get(WechatMpArticle, created_wechat_article_with_image.id).status == "synced_to_wechat"
     finally:
         session.close()
+
+
+def test_sync_wechat_mp_draft_refreshes_raw_token_cache(api_client, auth_headers, created_wechat_article_with_image, created_wechat_account, monkeypatch):
+    from backend.app.models import WechatMpAccount
+    from backend.app.services import wechat_mp_draft_service as draft_service
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        account = session.get(WechatMpAccount, created_wechat_account.id)
+        account.token_cache = {"access_token": "raw-token", "expires_in": 7200}
+        session.commit()
+    finally:
+        session.close()
+
+    calls = []
+
+    class FakeAdapter:
+        def get_access_token(self, **kwargs):
+            calls.append(("refresh", kwargs))
+            return {"access_token": "refreshed-token", "expires_in": 7200}
+
+        def upload_permanent_image(self, **kwargs):
+            calls.append(("cover", kwargs))
+            return {"media_id": "thumb_media_id"}
+
+        def upload_content_image(self, **kwargs):
+            return {"url": "https://mmbiz.qpic.cn/fake.png"}
+
+        def add_draft(self, **kwargs):
+            return {"media_id": "wechat_draft_media_id"}
+
+    monkeypatch.setattr(draft_service, "WechatMpApiAdapter", lambda: FakeAdapter())
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/sync-draft",
+        json={"account_id": created_wechat_account.id},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    assert [name for name, _ in calls] == ["refresh", "cover"]
+    assert calls[-1][1]["access_token"] == "refreshed-token"
+
+
+def test_sync_wechat_mp_draft_refreshes_expired_token_cache(api_client, auth_headers, created_wechat_article_with_image, created_wechat_account, monkeypatch):
+    from backend.app.models import WechatMpAccount
+    from backend.app.services import wechat_mp_draft_service as draft_service
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        account = session.get(WechatMpAccount, created_wechat_account.id)
+        account.token_cache = {"access_token": "expired-token", "expires_at": time.time() - 1}
+        session.commit()
+    finally:
+        session.close()
+
+    calls = []
+
+    class FakeAdapter:
+        def get_access_token(self, **kwargs):
+            calls.append(("refresh", kwargs))
+            return {"access_token": "refreshed-token", "expires_in": 7200}
+
+        def upload_permanent_image(self, **kwargs):
+            calls.append(("cover", kwargs))
+            return {"media_id": "thumb_media_id"}
+
+        def upload_content_image(self, **kwargs):
+            return {"url": "https://mmbiz.qpic.cn/fake.png"}
+
+        def add_draft(self, **kwargs):
+            return {"media_id": "wechat_draft_media_id"}
+
+    monkeypatch.setattr(draft_service, "WechatMpApiAdapter", lambda: FakeAdapter())
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/sync-draft",
+        json={"account_id": created_wechat_account.id},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    assert [name for name, _ in calls] == ["refresh", "cover"]
+    assert calls[-1][1]["access_token"] == "refreshed-token"
 
 
 def test_sync_wechat_mp_draft_hides_foreign_article_and_account(api_client, auth_headers, created_wechat_article_with_image, created_wechat_account):
@@ -548,7 +633,9 @@ def test_wechat_mp_account_test_caches_successful_token(api_client, auth_headers
     session = session_factory()
     try:
         stored = session.get(WechatMpAccount, account["id"])
-        assert stored.token_cache == {"access_token": "token-value", "expires_in": 7200}
+        assert stored.token_cache["access_token"] == "token-value"
+        assert stored.token_cache["expires_in"] == 7200
+        assert time.time() + 7100 < stored.token_cache["expires_at"] < time.time() + 7200
     finally:
         session.close()
 

@@ -8,6 +8,7 @@ from backend.app.core.deps import get_current_user
 from backend.app.models import User, WechatMpAccount
 from backend.app.schemas.wechat_mp import WechatMpAccountCreateRequest, WechatMpAccountResponse
 from backend.app.services.wechat_mp_crypto_service import decrypt_secret, encrypt_secret
+from backend.app.services.wechat_mp_token_service import normalize_token_cache
 
 router = APIRouter(prefix="/platforms/wechat-mp/accounts", tags=["wechat-mp-accounts"])
 
@@ -62,10 +63,10 @@ def test_account(
 ):
     account = _get_owned_account(db, current_user, account_id)
     try:
-        account.token_cache = adapter.get_access_token(
+        account.token_cache = normalize_token_cache(adapter.get_access_token(
             app_id=account.app_id,
             app_secret=decrypt_secret(account.encrypted_app_secret),
-        )
+        ))
         account.connection_status = "connected"
         db.commit()
         db.refresh(account)

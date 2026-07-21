@@ -1,27 +1,24 @@
 from __future__ import annotations
 
-import time
-
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiAdapter
 from backend.app.models import WechatMpAccount, WechatMpArticle, WechatMpAsset, WechatMpDraftSync
 from backend.app.services.wechat_mp_crypto_service import decrypt_secret
+from backend.app.services.wechat_mp_token_service import get_cached_access_token, normalize_token_cache
 
 
 def _get_access_token(account: WechatMpAccount, adapter: WechatMpApiAdapter) -> str:
-    cached = account.token_cache or {}
-    token = cached.get("access_token")
-    expires_at = cached.get("expires_at")
-    if isinstance(token, str) and token and (not isinstance(expires_at, (int, float)) or expires_at > time.time()):
+    token = get_cached_access_token(account.token_cache)
+    if token is not None:
         return token
 
     payload = adapter.get_access_token(app_id=account.app_id, app_secret=decrypt_secret(account.encrypted_app_secret))
     token = payload.get("access_token")
     if not isinstance(token, str) or not token:
         raise ValueError("WeChat MP access token response is missing access_token")
-    account.token_cache = {**payload, "expires_at": time.time() + max(int(payload.get("expires_in", 0)) - 60, 0)}
+    account.token_cache = normalize_token_cache(payload)
     return token
 
 
