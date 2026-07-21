@@ -737,6 +737,28 @@ def build_due_publish_scheduler(interval_seconds: int, job_func, monitoring_job_
     return scheduler
 
 
+def build_wechat_mp_publish_scheduler(interval_seconds: int) -> BackgroundScheduler:
+    from backend.app.services.wechat_mp_publish_service import run_due_wechat_mp_publish_jobs_once
+
+    scheduler = BackgroundScheduler(timezone="UTC")
+    scheduler.add_job(
+        run_due_wechat_mp_publish_jobs_once,
+        "interval",
+        seconds=interval_seconds,
+        id="wechat_mp_due_publish_runner",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    return scheduler
+
+
+def start_wechat_mp_publish_scheduler(interval_seconds: int) -> BackgroundScheduler:
+    scheduler = build_wechat_mp_publish_scheduler(interval_seconds)
+    scheduler.start()
+    return scheduler
+
+
 def start_due_publish_scheduler(interval_seconds: int) -> BackgroundScheduler:
     scheduler = build_due_publish_scheduler(
         interval_seconds=interval_seconds,

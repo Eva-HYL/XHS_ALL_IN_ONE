@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from sqlalchemy.orm import Session
 
 from backend.app.models import UsageRecord
@@ -19,12 +21,20 @@ def record_text_usage(
     model: str,
     input_tokens: int,
     output_tokens: int,
+    platform: str | None = None,
+    resource_type: str | None = None,
+    resource_id: int | None = None,
+    commit: bool = True,
 ) -> UsageRecord:
-    cost = calculate_text_cost(model, input_tokens, output_tokens)
-    snapshot = get_pricing()["text_models"][model]
+    details = get_pricing().get("text_models", {}).get(model)
+    cost = calculate_text_cost(model, input_tokens, output_tokens) if details else Decimal("0.0000")
+    snapshot = details or {"pricing_unavailable": True}
     rec = UsageRecord(
         user_id=user_id,
         pipeline_run_id=pipeline_run_id,
+        platform=platform,
+        resource_type=resource_type,
+        resource_id=resource_id,
         step=step,
         model=model,
         input_tokens=input_tokens,
@@ -34,8 +44,9 @@ def record_text_usage(
         cost_yuan=cost,
     )
     db.add(rec)
-    db.commit()
-    db.refresh(rec)
+    if commit:
+        db.commit()
+        db.refresh(rec)
     return rec
 
 
@@ -47,12 +58,20 @@ def record_image_usage(
     step: str,
     model: str,
     image_count: int,
+    platform: str | None = None,
+    resource_type: str | None = None,
+    resource_id: int | None = None,
+    commit: bool = True,
 ) -> UsageRecord:
-    cost = calculate_image_cost(model, image_count)
-    snapshot = get_pricing()["image_models"][model]
+    details = get_pricing().get("image_models", {}).get(model)
+    cost = calculate_image_cost(model, image_count) if details else Decimal("0.0000")
+    snapshot = details or {"pricing_unavailable": True}
     rec = UsageRecord(
         user_id=user_id,
         pipeline_run_id=pipeline_run_id,
+        platform=platform,
+        resource_type=resource_type,
+        resource_id=resource_id,
         step=step,
         model=model,
         input_tokens=None,
@@ -62,6 +81,7 @@ def record_image_usage(
         cost_yuan=cost,
     )
     db.add(rec)
-    db.commit()
-    db.refresh(rec)
+    if commit:
+        db.commit()
+        db.refresh(rec)
     return rec

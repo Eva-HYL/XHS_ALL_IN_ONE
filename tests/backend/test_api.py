@@ -240,6 +240,86 @@ def test_alembic_initial_migration_creates_all_product_tables(tmp_path):
     assert expected.issubset(table_names)
 
 
+def test_wmp005_preserves_remote_active_publish_jobs_over_older_schedules(tmp_path):
+    from alembic import command
+    from alembic.config import Config
+
+    db_url = f"sqlite:///{tmp_path / 'wmp005-active-job-priority.db'}"
+    cfg = Config(os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "..", "backend", "alembic.ini")))
+    cfg.set_main_option("sqlalchemy.url", db_url)
+    command.upgrade(cfg, "20260721_wmp004")
+
+    engine = create_engine(db_url)
+    with engine.begin() as connection:
+        for article_id, remote_status in enumerate(("pending", "submitted", "publishing"), start=1):
+            connection.execute(
+                text("""
+                    INSERT INTO wechat_mp_draft_syncs (
+                        id, user_id, account_id, article_id, wechat_media_id,
+                        article_revision, status, raw_response, error_message, created_at
+                    ) VALUES (
+                        :id, 1, 1, :article_id, :media_id, 1, 'synced', '{}', '', CURRENT_TIMESTAMP
+                    )
+                """),
+                {"id": article_id * 10 + 1, "article_id": article_id, "media_id": f"draft-scheduled-{article_id}"},
+            )
+            connection.execute(
+                text("""
+                    INSERT INTO wechat_mp_draft_syncs (
+                        id, user_id, account_id, article_id, wechat_media_id,
+                        article_revision, status, raw_response, error_message, created_at
+                    ) VALUES (
+                        :id, 1, 1, :article_id, :media_id, 1, 'synced', '{}', '', CURRENT_TIMESTAMP
+                    )
+                """),
+                {"id": article_id * 10 + 2, "article_id": article_id, "media_id": f"draft-remote-{article_id}"},
+            )
+            connection.execute(
+                text("""
+                    INSERT INTO wechat_mp_publish_jobs (
+                        id, user_id, account_id, article_id, draft_sync_id, publish_id, status,
+                        scheduled_at, raw_response, error_message, created_at, updated_at, active_key
+                    ) VALUES (
+                        :id, 1, 1, :article_id, :draft_sync_id, '', 'scheduled', NULL,
+                        '{}', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL
+                    )
+                """),
+                {"id": article_id * 10 + 1, "article_id": article_id, "draft_sync_id": article_id * 10 + 1},
+            )
+            connection.execute(
+                text("""
+                    INSERT INTO wechat_mp_publish_jobs (
+                        id, user_id, account_id, article_id, draft_sync_id, publish_id, status,
+                        scheduled_at, raw_response, error_message, created_at, updated_at, active_key
+                    ) VALUES (
+                        :id, 1, 1, :article_id, :draft_sync_id, '', :status, NULL,
+                        '{}', '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL
+                    )
+                """),
+                {
+                    "id": article_id * 10 + 2,
+                    "article_id": article_id,
+                    "draft_sync_id": article_id * 10 + 2,
+                    "status": remote_status,
+                },
+            )
+
+    command.upgrade(cfg, "20260721_wmp005")
+
+    with engine.connect() as connection:
+        rows = connection.execute(text("""
+            SELECT id, status, active_key
+            FROM wechat_mp_publish_jobs
+            ORDER BY id
+        """)).mappings().all()
+
+    assert [(row["status"], row["active_key"] is None) for row in rows] == [
+        ("cancelled", True), ("pending", False),
+        ("cancelled", True), ("submitted", False),
+        ("cancelled", True), ("publishing", False),
+    ]
+
+
 def test_database_initialization_normalizes_legacy_gpt_54_model_name(tmp_path):
     from backend.app.core.database import _normalize_model_config_names
 
@@ -6340,20 +6420,36 @@ def test_run_due_publish_jobs_for_all_users_executes_each_due_user(tmp_path):
 
 
 def test_due_publish_scheduler_registers_interval_job():
-    from backend.app.services.scheduler_service import build_due_publish_scheduler, shutdown_due_publish_scheduler
+    from backend.app.services.scheduler_service import (
+        build_due_publish_scheduler,
+        build_wechat_mp_publish_scheduler,
+        shutdown_due_publish_scheduler,
+    )
 
     scheduler = build_due_publish_scheduler(interval_seconds=17, job_func=lambda: None)
+    wechat_mp_scheduler = build_wechat_mp_publish_scheduler(interval_seconds=17)
 
     try:
         jobs = scheduler.get_jobs()
-        assert {job.id for job in jobs} == {"due_publish_runner", "monitoring_refresh_runner", "auto_tasks_runner", "cookie_health_checker"}
+        assert {job.id for job in jobs} == {
+            "due_publish_runner",
+            "monitoring_refresh_runner",
+            "auto_tasks_runner",
+            "cookie_health_checker",
+        }
         job_intervals = {job.id: job.trigger.interval.total_seconds() for job in jobs}
         assert job_intervals["due_publish_runner"] == 17
         assert job_intervals["monitoring_refresh_runner"] == 17
         assert job_intervals["auto_tasks_runner"] == 60
         assert job_intervals["cookie_health_checker"] == 7200
+        wechat_job = wechat_mp_scheduler.get_job("wechat_mp_due_publish_runner")
+        assert wechat_job is not None
+        assert wechat_job.trigger.interval.total_seconds() == 17
+        assert wechat_job.max_instances == 1
+        assert wechat_job.coalesce is True
     finally:
         shutdown_due_publish_scheduler(scheduler)
+        shutdown_due_publish_scheduler(wechat_mp_scheduler)
 
 
 def test_run_monitoring_refresh_for_all_users_refreshes_active_targets(tmp_path):

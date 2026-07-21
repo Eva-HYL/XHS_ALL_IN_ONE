@@ -24,6 +24,11 @@ import { XhsImageStudioPage } from "../pages/platforms/xhs/image-studio-page";
 import { XhsPublishPage } from "../pages/platforms/xhs/publish-page";
 import { XhsVideoStudioPage } from "../pages/platforms/xhs/video-studio-page";
 import { XhsSectionPage } from "../pages/platforms/xhs/xhs-section-page";
+import { WechatMpAccountsPage } from "../pages/platforms/wechat-mp/accounts-page";
+import { WechatMpAssetsPage } from "../pages/platforms/wechat-mp/assets-page";
+import { WechatMpDashboardPage } from "../pages/platforms/wechat-mp/dashboard-page";
+import { WechatMpPublishPage } from "../pages/platforms/wechat-mp/publish-page";
+import { WechatMpWriterPage } from "../pages/platforms/wechat-mp/writer-page";
 
 export function AppRouter() {
   return (
@@ -75,6 +80,11 @@ export function AppRouter() {
           <Route path="/platforms/xhs/publish" element={<XhsPublishPage />} />
           <Route path="/platforms/xhs/auto-ops" element={<AutoOpsPage />} />
           <Route path="/platforms/xhs/:section" element={<XhsSectionPage />} />
+          <Route path="/platforms/wechat-mp/dashboard" element={<WechatMpDashboardPage />} />
+          <Route path="/platforms/wechat-mp/accounts" element={<WechatMpAccountsPage />} />
+          <Route path="/platforms/wechat-mp/writer" element={<WechatMpWriterPage />} />
+          <Route path="/platforms/wechat-mp/assets" element={<WechatMpAssetsPage />} />
+          <Route path="/platforms/wechat-mp/publish" element={<WechatMpPublishPage />} />
           <Route path="/tasks" element={<TaskCenterPage />} />
           <Route path="/billing" element={<BillingCenterPage />} />
           <Route path="/models" element={<ModelConfigPage />} />
