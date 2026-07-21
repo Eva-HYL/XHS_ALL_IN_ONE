@@ -823,6 +823,43 @@ def test_wechat_mp_account_test_returns_404_for_nonexistent_account(api_client, 
     assert response.status_code == 404
 
 
+def test_wechat_mp_account_test_surfaces_wechat_error_detail(api_client, auth_headers, monkeypatch):
+    client, session_factory = api_client
+    account = _create_wechat_account(client, auth_headers)
+
+    class FakeWechatMpAdapter:
+        def get_access_token(self, *, app_id, app_secret):
+            from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiError
+
+            raise WechatMpApiError(
+                "wechat access_token request failed",
+                errcode=40164,
+                payload={"errcode": 40164, "errmsg": "invalid ip 124.160.245.210, not in whitelist"},
+            )
+
+    from backend.app.api.platforms.wechat_mp.accounts import get_wechat_mp_api_adapter
+    from backend.app.main import app
+
+    app.dependency_overrides[get_wechat_mp_api_adapter] = lambda: FakeWechatMpAdapter()
+    try:
+        response = client.post(f"/api/platforms/wechat-mp/accounts/{account['id']}/test", headers=auth_headers)
+    finally:
+        app.dependency_overrides.pop(get_wechat_mp_api_adapter, None)
+
+    assert response.status_code == 502
+    assert "not in whitelist" in response.json()["detail"]
+    assert "40164" in response.json()["detail"]
+
+    from backend.app.models import WechatMpAccount
+
+    session = session_factory()
+    try:
+        stored = session.get(WechatMpAccount, account["id"])
+        assert stored.connection_status == "error"
+    finally:
+        session.close()
+
+
 def test_wechat_mp_account_test_caches_successful_token(api_client, auth_headers, monkeypatch):
     client, session_factory = api_client
     account = _create_wechat_account(client, auth_headers)
