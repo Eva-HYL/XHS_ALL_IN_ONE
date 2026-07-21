@@ -63,3 +63,16 @@ None for the requested scope. The bare `pytest` executable is absent from `PATH`
    - `1 passed`
 3. `PYTHONPATH=. .venv/bin/pytest tests/backend/test_wechat_mp.py -q`
    - `22 passed`
+
+### Remaining Validation Fix
+
+- `_parse_token_count()` now accepts only non-negative `int` values, explicitly rejecting `bool`, strings, and fractional numeric values instead of coercing them with `int()`.
+- Added a fractional-token regression case using `prompt_tokens=1.75`; the prompt endpoint returns HTTP 502 and does not create a successful 201 response.
+
+### Verification
+
+1. `PYTHONPATH=. .venv/bin/pytest tests/backend/test_wechat_mp.py -k malformed_prompt_model_output -q`
+   - `3 passed, 20 deselected`
+2. `PYTHONPATH=. .venv/bin/pytest tests/backend/test_wechat_mp.py -q`
+   - `23 passed`
+3. Both runs emitted the existing Starlette/httpx and SQLAlchemy `datetime.utcnow` deprecation warnings.

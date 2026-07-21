@@ -16,15 +16,11 @@ _PROMPT_SYSTEM = "You write concise image prompts for Chinese WeChat article ill
 
 
 def _parse_token_count(value: Any) -> int:
-    if isinstance(value, bool):
+    if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError("token count must be an integer")
-    try:
-        token_count = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("token count must be an integer") from exc
-    if token_count < 0:
+    if value < 0:
         raise ValueError("token count must not be negative")
-    return token_count
+    return value
 
 
 def _call_prompt_model(*, article_title: str, section_summary: str, skill_name: str, model_name: str) -> dict[str, Any]:
