@@ -22,6 +22,7 @@ def record_text_usage(
     platform: str | None = None,
     resource_type: str | None = None,
     resource_id: int | None = None,
+    commit: bool = True,
 ) -> UsageRecord:
     cost = calculate_text_cost(model, input_tokens, output_tokens)
     snapshot = get_pricing()["text_models"][model]
@@ -40,8 +41,9 @@ def record_text_usage(
         cost_yuan=cost,
     )
     db.add(rec)
-    db.commit()
-    db.refresh(rec)
+    if commit:
+        db.commit()
+        db.refresh(rec)
     return rec
 
 

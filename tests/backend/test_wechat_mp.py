@@ -344,6 +344,60 @@ def test_generate_prompts_creates_shotlist_and_records_article_usage(api_client,
         session.close()
 
 
+def test_generate_prompts_rolls_back_all_records_when_a_later_model_call_fails(api_client, auth_headers, created_wechat_article, monkeypatch):
+    from backend.app.models import UsageRecord, WechatMpArticleSection, WechatMpImagePrompt
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    calls = 0
+
+    def fake_prompt_call(**kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise ValueError("prompt provider failed")
+        return {"prompt": "一只小猫整理便签", "input_tokens": 12, "output_tokens": 24, "model_name": kwargs["model_name"]}
+
+    monkeypatch.setattr(prompt_service, "_call_prompt_model", fake_prompt_call)
+    client, session_factory = api_client
+    response = client.post(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts", headers=auth_headers)
+
+    assert response.status_code == 502
+    session = session_factory()
+    try:
+        assert session.query(WechatMpArticleSection).filter_by(article_id=created_wechat_article.id).count() == 0
+        assert session.query(WechatMpImagePrompt).filter_by(article_id=created_wechat_article.id).count() == 0
+        assert session.query(UsageRecord).filter_by(resource_id=created_wechat_article.id, step="generate_image_prompt").count() == 0
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"choices": [{"message": {"content": None}}], "usage": {"prompt_tokens": 1, "completion_tokens": 1}},
+        {"choices": [{"message": {"content": "一只小猫整理便签"}}], "usage": {"prompt_tokens": None, "completion_tokens": 1}},
+    ],
+)
+def test_generate_prompts_returns_502_for_malformed_prompt_model_output(api_client, auth_headers, created_wechat_article, monkeypatch, payload):
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return payload
+
+    monkeypatch.setenv("WECHAT_MP_PROMPT_BASE_URL", "https://prompt.example")
+    monkeypatch.setenv("WECHAT_MP_PROMPT_API_KEY", "test-key")
+    monkeypatch.setattr(prompt_service.requests, "post", lambda *args, **kwargs: FakeResponse())
+    client, _ = api_client
+
+    response = client.post(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts", headers=auth_headers)
+
+    assert response.status_code == 502
+
+
 def test_edit_and_regenerate_prompt_increment_version(api_client, auth_headers, created_wechat_article, monkeypatch):
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
 

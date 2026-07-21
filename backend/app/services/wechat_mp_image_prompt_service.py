@@ -15,6 +15,18 @@ from backend.app.services.wechat_mp_shotlist_service import generate_article_sho
 _PROMPT_SYSTEM = "You write concise image prompts for Chinese WeChat article illustrations. Return only the image prompt."
 
 
+def _parse_token_count(value: Any) -> int:
+    if isinstance(value, bool):
+        raise ValueError("token count must be an integer")
+    try:
+        token_count = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("token count must be an integer") from exc
+    if token_count < 0:
+        raise ValueError("token count must not be negative")
+    return token_count
+
+
 def _call_prompt_model(*, article_title: str, section_summary: str, skill_name: str, model_name: str) -> dict[str, Any]:
     """Call the configured prompt model; kept narrow for monkeypatch-based tests."""
     base_url = os.getenv("WECHAT_MP_PROMPT_BASE_URL", "").rstrip("/")
@@ -36,16 +48,23 @@ def _call_prompt_model(*, article_title: str, section_summary: str, skill_name: 
         )
         response.raise_for_status()
         payload = response.json()
-        prompt = payload["choices"][0]["message"]["content"].strip()
-    except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as exc:
+        content = payload["choices"][0]["message"]["content"]
+        if not isinstance(content, str):
+            raise ValueError("prompt content must be a string")
+        prompt = content.strip()
+        usage = payload.get("usage") or {}
+        if not isinstance(usage, dict):
+            raise ValueError("usage must be an object")
+        input_tokens = _parse_token_count(usage.get("prompt_tokens", 0))
+        output_tokens = _parse_token_count(usage.get("completion_tokens", 0))
+    except (requests.RequestException, KeyError, IndexError, TypeError, ValueError, AttributeError) as exc:
         raise ValueError("WeChat MP prompt model returned malformed output") from exc
     if not prompt:
         raise ValueError("WeChat MP prompt model returned an empty prompt")
-    usage = payload.get("usage") or {}
     return {
         "prompt": prompt,
-        "input_tokens": int(usage.get("prompt_tokens", 0)),
-        "output_tokens": int(usage.get("completion_tokens", 0)),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
         "model_name": model_name,
     }
 
@@ -55,44 +74,48 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
     if article is None:
         raise LookupError("WeChat MP article not found")
     selected_skill = skill_name or article.illustration_skill or "xiaomao-illustrations"
-    sections = generate_article_shotlist(db=db, user_id=user_id, article_id=article_id, text_model=text_model)
-
-    prompts = []
-    for section in sections:
-        result = _call_prompt_model(
-            article_title=article.title,
-            section_summary=section.summary,
-            skill_name=selected_skill,
-            model_name=text_model,
-        )
-        prompt = WechatMpImagePrompt(
-            user_id=user_id,
-            article_id=article.id,
-            section_id=section.id,
-            skill_name=selected_skill,
-            prompt=result["prompt"],
-            editable_prompt=result["prompt"],
-            version=1,
-            status="prompt_ready",
-        )
-        db.add(prompt)
-        db.flush()
-        record_text_usage(
-            db=db,
-            user_id=user_id,
-            pipeline_run_id=None,
-            step="generate_image_prompt",
-            model=result["model_name"],
-            input_tokens=int(result["input_tokens"]),
-            output_tokens=int(result["output_tokens"]),
-            platform="wechat_mp",
-            resource_type="wechat_mp_article",
-            resource_id=article.id,
-        )
-        prompts.append(prompt)
-    article.illustration_skill = selected_skill
-    article.status = "prompts_ready"
-    db.commit()
+    try:
+        sections = generate_article_shotlist(db=db, user_id=user_id, article_id=article_id, text_model=text_model)
+        prompts = []
+        for section in sections:
+            result = _call_prompt_model(
+                article_title=article.title,
+                section_summary=section.summary,
+                skill_name=selected_skill,
+                model_name=text_model,
+            )
+            prompt = WechatMpImagePrompt(
+                user_id=user_id,
+                article_id=article.id,
+                section_id=section.id,
+                skill_name=selected_skill,
+                prompt=result["prompt"],
+                editable_prompt=result["prompt"],
+                version=1,
+                status="prompt_ready",
+            )
+            db.add(prompt)
+            db.flush()
+            record_text_usage(
+                db=db,
+                user_id=user_id,
+                pipeline_run_id=None,
+                step="generate_image_prompt",
+                model=result["model_name"],
+                input_tokens=int(result["input_tokens"]),
+                output_tokens=int(result["output_tokens"]),
+                platform="wechat_mp",
+                resource_type="wechat_mp_article",
+                resource_id=article.id,
+                commit=False,
+            )
+            prompts.append(prompt)
+        article.illustration_skill = selected_skill
+        article.status = "prompts_ready"
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     for prompt in prompts:
         db.refresh(prompt)
     return prompts
