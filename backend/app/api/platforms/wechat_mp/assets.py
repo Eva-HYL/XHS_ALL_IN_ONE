@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -9,7 +10,7 @@ from sqlalchemy.orm import Session
 from backend.app.core.config import get_settings
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
-from backend.app.models import User, WechatMpAsset
+from backend.app.models import User, WechatMpArticle, WechatMpAsset, WechatMpImagePrompt
 from backend.app.schemas.common import paginated
 from backend.app.schemas.wechat_mp import WechatMpAssetResponse
 
@@ -51,6 +52,21 @@ def delete_asset(
     db: Session = Depends(get_db),
 ):
     asset = _get_owned_asset(db, current_user.id, asset_id)
+    article = db.get(WechatMpArticle, asset.article_id)
+    prompt = db.get(WechatMpImagePrompt, asset.prompt_id) if asset.prompt_id else None
+    if article is not None:
+        image_pattern = re.compile(
+            r'<img\b[^>]*\bsrc=["\']' + re.escape(asset.public_url) + r'["\'][^>]*>',
+            re.IGNORECASE,
+        )
+        replacement = f"{{{{image:prompt-{prompt.id}}}}}" if prompt is not None else ""
+        article.html_body = image_pattern.sub(replacement, article.html_body)
+        if prompt is not None:
+            prompt.status = "prompt_ready"
+        from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
+        invalidate_synced_drafts(
+            db, article, next_status="prompts_ready" if prompt is not None else "images_partial",
+        )
     _delete_local_media(asset.file_path)
     db.delete(asset)
     db.commit()

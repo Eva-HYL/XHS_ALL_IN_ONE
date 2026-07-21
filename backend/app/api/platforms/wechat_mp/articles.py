@@ -7,7 +7,11 @@ from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
 from backend.app.models import User, WechatMpArticle, WechatMpImagePrompt
 from backend.app.schemas.wechat_mp import WechatMpArticleCreateRequest, WechatMpArticleResponse, WechatMpAssetResponse, WechatMpImagePromptResponse
-from backend.app.services.wechat_mp_image_service import generate_asset_for_prompt
+from backend.app.services.wechat_mp_image_service import (
+    WechatMpImageValidationError,
+    generate_asset_for_prompt,
+    generate_cover_asset,
+)
 from backend.app.services.wechat_mp_image_prompt_service import generate_image_prompts, regenerate_image_prompt
 from backend.app.services.wechat_mp_layout_service import render_wechat_html
 from backend.app.services.wechat_mp_writer_service import generate_wechat_article
@@ -15,8 +19,6 @@ from backend.app.services.wechat_mp_writer_service import generate_wechat_articl
 
 router = APIRouter(prefix="/platforms/wechat-mp/articles", tags=["wechat-mp-articles"])
 image_router = APIRouter(prefix="/platforms/wechat-mp", tags=["wechat-mp-assets"])
-_WRITER_TEXT_MODEL = "qwen3.7-plus"
-_PROMPT_TEXT_MODEL = "qwen3.7-plus"
 
 
 class WechatMpArticleUpdateRequest(BaseModel):
@@ -36,7 +38,7 @@ class WechatMpPromptUpdateRequest(BaseModel):
 
 
 class WechatMpImageGenerateRequest(BaseModel):
-    image_model: str = Field(min_length=1, max_length=128)
+    image_model: str | None = Field(default=None, min_length=1, max_length=128)
     size: str = Field(default="16:9", min_length=1, max_length=32)
 
 
@@ -57,7 +59,7 @@ def _get_owned_prompt(db: Session, article: WechatMpArticle, prompt_id: int) -> 
 @router.post("", response_model=WechatMpArticleResponse, status_code=status.HTTP_201_CREATED)
 def create_article(payload: WechatMpArticleCreateRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
-        return generate_wechat_article(db=db, user_id=current_user.id, request=payload, text_model=_WRITER_TEXT_MODEL)
+        return generate_wechat_article(db=db, user_id=current_user.id, request=payload)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
@@ -74,13 +76,19 @@ def get_article(article_id: int, current_user: User = Depends(get_current_user),
 
 @router.patch("/{article_id}", response_model=WechatMpArticleResponse)
 def update_article(article_id: int, payload: WechatMpArticleUpdateRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
+
     article = _get_owned_article(db, current_user, article_id)
+    changed = False
     for field in ("title", "markdown_body", "html_body", "digest", "illustration_skill"):
         value = getattr(payload, field)
-        if value is not None:
+        if value is not None and value != getattr(article, field):
             setattr(article, field, value)
+            changed = True
     if payload.markdown_body is not None and payload.html_body is None:
         article.html_body = render_wechat_html(payload.markdown_body, image_placeholders=[])
+    if changed:
+        invalidate_synced_drafts(db, article, next_status="layout_ready")
     db.commit()
     db.refresh(article)
     return article
@@ -100,7 +108,6 @@ def create_prompts(
             user_id=current_user.id,
             article_id=article.id,
             skill_name=payload.skill_name if payload else None,
-            text_model=_PROMPT_TEXT_MODEL,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
@@ -154,6 +161,29 @@ def generate_image(
         )
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except WechatMpImageValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+
+@router.post("/{article_id}/cover", response_model=WechatMpAssetResponse, status_code=status.HTTP_201_CREATED)
+def generate_cover(
+    article_id: int,
+    payload: WechatMpImageGenerateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _get_owned_article(db, current_user, article_id)
+    try:
+        return generate_cover_asset(
+            db=db, user_id=current_user.id, article_id=article_id,
+            image_model=payload.image_model, size=payload.size,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except WechatMpImageValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
@@ -168,6 +198,6 @@ def regenerate_prompt(
     article = _get_owned_article(db, current_user, article_id)
     prompt = _get_owned_prompt(db, article, prompt_id)
     try:
-        return regenerate_image_prompt(db=db, prompt=prompt, article=article, text_model=_PROMPT_TEXT_MODEL)
+        return regenerate_image_prompt(db=db, prompt=prompt, article=article)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc

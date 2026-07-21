@@ -9,8 +9,8 @@ WechatMpArticleStatus = Literal[
     "images_ready", "synced_to_wechat", "publish_pending", "published", "failed",
 ]
 WechatMpImageStatus = Literal["prompt_ready", "generating", "generated", "failed", "skipped"]
-WechatMpDraftSyncStatus = Literal["synced", "failed"]
-WechatMpPublishStatus = Literal["scheduled", "publishing", "published", "failed"]
+WechatMpDraftSyncStatus = Literal["pending", "synced", "stale", "failed"]
+WechatMpPublishStatus = Literal["pending", "scheduled", "submitted", "publishing", "published", "failed", "cancelled"]
 
 
 class WechatMpArticleCreateRequest(BaseModel):
@@ -51,6 +51,7 @@ class WechatMpArticleResponse(BaseModel):
     cover_brief: str
     status: WechatMpArticleStatus
     illustration_skill: str
+    revision: int
     cost_estimate: dict
     created_at: datetime
     updated_at: datetime

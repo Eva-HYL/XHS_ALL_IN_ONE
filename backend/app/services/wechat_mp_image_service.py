@@ -38,10 +38,16 @@ def _save_image_response(image_ref: str, user_id: int) -> tuple[str, str]:
     return str(path), f"/api/files/media/{file_name}"
 
 
-def _call_image_model(*, prompt: str, model_name: str, size: str) -> dict[str, Any]:
+class WechatMpImageValidationError(ValueError):
+    pass
+
+
+def _call_image_model(
+    *, prompt: str, model_name: str, size: str, base_url: str = "", api_key: str = "",
+) -> dict[str, Any]:
     """Call the configured image provider; tests monkeypatch this narrow seam."""
-    base_url = os.getenv("WECHAT_MP_IMAGE_BASE_URL", "").rstrip("/")
-    api_key = os.getenv("WECHAT_MP_IMAGE_API_KEY", "")
+    base_url = (base_url or os.getenv("WECHAT_MP_IMAGE_BASE_URL", "")).rstrip("/")
+    api_key = api_key or os.getenv("WECHAT_MP_IMAGE_API_KEY", "")
     if not base_url or not api_key:
         raise ValueError("WeChat MP image model is not configured")
     try:
@@ -72,7 +78,7 @@ def generate_asset_for_prompt(
     db: Session,
     user_id: int,
     prompt_id: int,
-    image_model: str,
+    image_model: str | None,
     size: str = "16:9",
 ) -> WechatMpAsset:
     prompt = db.scalar(select(WechatMpImagePrompt).where(
@@ -87,9 +93,21 @@ def generate_asset_for_prompt(
     section = db.get(WechatMpArticleSection, prompt.section_id)
     if article is None or article.user_id != user_id or section is None or section.article_id != article.id:
         raise LookupError("WeChat MP prompt not found")
+    if prompt.skill_name == "none" or article.illustration_skill == "none":
+        raise WechatMpImageValidationError("Image generation is disabled when illustration skill is none")
+
+    from backend.app.services.wechat_mp_model_service import resolve_wechat_mp_model
+    from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
+
+    model = resolve_wechat_mp_model(
+        db=db, user_id=user_id, model_type="image", requested_model=image_model,
+    )
 
     try:
-        result = _call_image_model(prompt=prompt.editable_prompt, model_name=image_model, size=size)
+        result = _call_image_model(
+            prompt=prompt.editable_prompt, model_name=model.model_name, size=size,
+            base_url=model.base_url, api_key=model.api_key,
+        )
         if isinstance(result.get("image_ref"), str):
             file_path, public_url = _save_image_response(result["image_ref"], user_id)
         else:
@@ -104,13 +122,14 @@ def generate_asset_for_prompt(
             public_url=public_url,
             prompt=prompt.editable_prompt,
             skill_name=prompt.skill_name,
-            model_name=image_model,
+            model_name=model.model_name,
             status="generated",
             provider_response=result.get("provider_response") if isinstance(result.get("provider_response"), dict) else {},
         )
         db.add(asset)
         prompt.status = "generated"
         _backfill_article_html(article, prompt, section, asset.public_url)
+        invalidate_synced_drafts(db, article, next_status="images_partial")
         remaining = db.scalars(select(WechatMpImagePrompt.status).where(
             WechatMpImagePrompt.article_id == article.id,
             WechatMpImagePrompt.id != prompt.id,
@@ -122,7 +141,7 @@ def generate_asset_for_prompt(
             user_id=user_id,
             pipeline_run_id=None,
             step="image_gen",
-            model=image_model,
+            model=model.model_name,
             image_count=1,
             platform="wechat_mp",
             resource_type="wechat_mp_article",
@@ -137,5 +156,69 @@ def generate_asset_for_prompt(
             prompt.status = "failed"
             db.commit()
         raise
+    db.refresh(asset)
+    return asset
+
+
+def generate_cover_asset(
+    *, db: Session, user_id: int, article_id: int, image_model: str | None, size: str = "16:9",
+) -> WechatMpAsset:
+    article = db.scalar(select(WechatMpArticle).where(
+        WechatMpArticle.id == article_id,
+        WechatMpArticle.user_id == user_id,
+    ))
+    if article is None:
+        raise LookupError("WeChat MP article not found")
+    if article.illustration_skill == "none":
+        raise WechatMpImageValidationError("Image generation is disabled when illustration skill is none")
+
+    from backend.app.services.wechat_mp_image_prompt_service import build_skill_prompt
+    from backend.app.services.wechat_mp_model_service import resolve_wechat_mp_model
+    from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
+
+    model = resolve_wechat_mp_model(
+        db=db, user_id=user_id, model_type="image", requested_model=image_model,
+    )
+    prompt_text = build_skill_prompt(
+        article.illustration_skill, article.title, article.cover_brief or article.title,
+    )
+    result = _call_image_model(
+        prompt=prompt_text, model_name=model.model_name, size=size,
+        base_url=model.base_url, api_key=model.api_key,
+    )
+    if isinstance(result.get("image_ref"), str):
+        file_path, public_url = _save_image_response(result["image_ref"], user_id)
+    else:
+        file_path = str(result["file_path"])
+        public_url = str(result["public_url"])
+    asset = WechatMpAsset(
+        user_id=user_id,
+        article_id=article.id,
+        prompt_id=None,
+        role="cover",
+        file_path=file_path,
+        public_url=public_url,
+        prompt=prompt_text,
+        skill_name=article.illustration_skill,
+        model_name=model.model_name,
+        status="generated",
+        provider_response=result.get("provider_response") if isinstance(result.get("provider_response"), dict) else {},
+    )
+    db.add(asset)
+    invalidate_synced_drafts(db, article, next_status="images_partial")
+    db.flush()
+    usage = record_image_usage(
+        db=db, user_id=user_id, pipeline_run_id=None, step="cover_image_gen",
+        model=model.model_name, image_count=1, platform="wechat_mp",
+        resource_type="wechat_mp_article", resource_id=article.id, commit=False,
+    )
+    current = article.cost_estimate or {}
+    from decimal import Decimal
+    total = Decimal(str(current.get("total_yuan", "0"))) + Decimal(str(usage.cost_yuan))
+    article.cost_estimate = {
+        "currency": "CNY", "total_yuan": str(total.quantize(Decimal("0.0001"))),
+        "calls": int(current.get("calls", 0)) + 1,
+    }
+    db.commit()
     db.refresh(asset)
     return asset

@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiAdapter
+from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiError
 from backend.app.models import WechatMpAccount, WechatMpArticle, WechatMpAsset, WechatMpDraftSync
 from backend.app.services.wechat_mp_crypto_service import decrypt_secret
 from backend.app.services.wechat_mp_token_service import get_cached_access_token, normalize_token_cache
+
+class WechatMpDraftValidationError(ValueError):
+    pass
+
 
 
 def _get_access_token(account: WechatMpAccount, adapter: WechatMpApiAdapter) -> str:
@@ -34,49 +42,86 @@ def sync_article_to_wechat_draft(db: Session, user_id: int, article_id: int, acc
         WechatMpAsset.article_id == article.id,
         WechatMpAsset.user_id == user_id,
         WechatMpAsset.status == "generated",
-    )).all()
+    ).order_by(WechatMpAsset.id.desc())).all()
     cover = next((asset for asset in assets if asset.role == "cover"), None)
     if cover is None:
-        raise ValueError("WeChat MP article requires a generated cover image")
-
-    adapter = WechatMpApiAdapter()
-    access_token = _get_access_token(account, adapter)
-    thumbnail = adapter.upload_permanent_image(access_token=access_token, file_path=cover.file_path)
-    thumb_media_id = thumbnail.get("media_id")
-    if not isinstance(thumb_media_id, str) or not thumb_media_id:
-        raise ValueError("WeChat MP cover upload response is missing media_id")
-
-    content = article.html_body
+        raise WechatMpDraftValidationError("WeChat MP article requires a generated cover image")
+    if "{{image:" in article.html_body:
+        raise WechatMpDraftValidationError("WeChat MP article still contains unresolved image placeholders")
+    known_urls = {asset.public_url for asset in assets}
+    local_urls = set(re.findall(r'src=["\'](/api/files/media/[^"\']+)["\']', article.html_body))
+    if local_urls - known_urls:
+        raise WechatMpDraftValidationError("WeChat MP article contains missing local assets")
     for asset in assets:
-        if asset.id == cover.id or asset.public_url not in content:
-            continue
-        uploaded = adapter.upload_content_image(access_token=access_token, file_path=asset.file_path)
-        url = uploaded.get("url")
-        if not isinstance(url, str) or not url:
-            raise ValueError("WeChat MP content image upload response is missing url")
-        content = content.replace(asset.public_url, url)
-
-    response = adapter.add_draft(access_token=access_token, article={
-        "title": article.title,
-        "digest": article.digest,
-        "content": content,
-        "thumb_media_id": thumb_media_id,
-    })
-    media_id = response.get("media_id")
-    if not isinstance(media_id, str) or not media_id:
-        raise ValueError("WeChat MP draft response is missing media_id")
+        if (asset.role == "cover" or asset.public_url in article.html_body) and not Path(asset.file_path).is_file():
+            raise WechatMpDraftValidationError("WeChat MP article contains missing local asset files")
+    existing_pending = db.scalar(select(WechatMpDraftSync).where(
+        WechatMpDraftSync.article_id == article.id,
+        WechatMpDraftSync.account_id == account.id,
+        WechatMpDraftSync.article_revision == article.revision,
+        WechatMpDraftSync.status == "pending",
+    ))
+    if existing_pending is not None:
+        raise WechatMpDraftValidationError("A WeChat MP draft sync is already pending reconciliation")
 
     draft_sync = WechatMpDraftSync(
         user_id=user_id,
         account_id=account.id,
         article_id=article.id,
-        wechat_media_id=media_id,
-        status="synced",
-        raw_response=response,
+        article_revision=article.revision,
+        wechat_media_id="",
+        status="pending",
+        raw_response={},
     )
+    db.add(draft_sync)
+    db.commit()
+    db.refresh(draft_sync)
+
+    adapter = WechatMpApiAdapter()
+    try:
+        access_token = _get_access_token(account, adapter)
+        thumbnail = adapter.upload_permanent_image(access_token=access_token, file_path=cover.file_path)
+        thumb_media_id = thumbnail.get("media_id")
+        if not isinstance(thumb_media_id, str) or not thumb_media_id:
+            raise ValueError("WeChat MP cover upload response is missing media_id")
+
+        content = article.html_body
+        for asset in assets:
+            if asset.id == cover.id or asset.public_url not in content:
+                continue
+            uploaded = adapter.upload_content_image(access_token=access_token, file_path=asset.file_path)
+            url = uploaded.get("url")
+            if not isinstance(url, str) or not url:
+                raise ValueError("WeChat MP content image upload response is missing url")
+            content = content.replace(asset.public_url, url)
+
+        response = adapter.add_draft(access_token=access_token, article={
+            "title": article.title,
+            "digest": article.digest,
+            "content": content,
+            "thumb_media_id": thumb_media_id,
+        })
+        media_id = response.get("media_id")
+        if not isinstance(media_id, str) or not media_id:
+            raise ValueError("WeChat MP draft response is missing media_id")
+    except Exception as exc:
+        draft_sync.status = "failed"
+        draft_sync.raw_response = exc.payload if isinstance(exc, WechatMpApiError) else {"error": str(exc)}
+        draft_sync.error_message = str(exc)
+        db.commit()
+        raise
+
+    for previous in db.scalars(select(WechatMpDraftSync).where(
+        WechatMpDraftSync.article_id == article.id,
+        WechatMpDraftSync.status == "synced",
+        WechatMpDraftSync.id != draft_sync.id,
+    )):
+        previous.status = "stale"
+    draft_sync.wechat_media_id = media_id
+    draft_sync.status = "synced"
+    draft_sync.raw_response = response
     article.account_id = account.id
     article.status = "synced_to_wechat"
-    db.add(draft_sync)
     db.commit()
     db.refresh(draft_sync)
     return draft_sync

@@ -8,7 +8,8 @@ from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiError
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
 from backend.app.models import User, WechatMpDraftSync
-from backend.app.services.wechat_mp_draft_service import sync_article_to_wechat_draft
+from backend.app.schemas.wechat_mp import WechatMpDraftSyncStatus
+from backend.app.services.wechat_mp_draft_service import WechatMpDraftValidationError, sync_article_to_wechat_draft
 
 
 router = APIRouter(prefix="/platforms/wechat-mp/articles", tags=["wechat-mp-drafts"])
@@ -24,7 +25,8 @@ class WechatMpDraftSyncResponse(BaseModel):
     account_id: int
     article_id: int
     wechat_media_id: str
-    status: str
+    article_revision: int
+    status: WechatMpDraftSyncStatus
     raw_response: dict
     error_message: str
     created_at: datetime
@@ -43,6 +45,8 @@ def sync_draft(
         return sync_article_to_wechat_draft(db=db, user_id=current_user.id, article_id=article_id, account_id=payload.account_id)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except WechatMpDraftValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except WechatMpApiError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

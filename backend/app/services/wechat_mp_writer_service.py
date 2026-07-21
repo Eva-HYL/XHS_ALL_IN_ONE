@@ -17,13 +17,16 @@ _WRITER_PROMPT = """你是微信公众号文章编辑。根据输入写一篇中
 JSON 必须包含 title、markdown_body、digest、cover_brief。正文使用 Markdown。"""
 
 
-def _call_writer_model(*, topic: str, source_material: str, target_reader: str, tone: str, model_name: str) -> dict[str, Any]:
+def _call_writer_model(
+    *, topic: str, source_material: str, target_reader: str, tone: str,
+    model_name: str, base_url: str = "", api_key: str = "",
+) -> dict[str, Any]:
     """Call the configured OpenAI-compatible writer endpoint.
 
     This intentionally narrow function is the monkeypatch seam for article generation.
     """
-    base_url = os.getenv("WECHAT_MP_WRITER_BASE_URL", "").rstrip("/")
-    api_key = os.getenv("WECHAT_MP_WRITER_API_KEY", "")
+    base_url = (base_url or os.getenv("WECHAT_MP_WRITER_BASE_URL", "")).rstrip("/")
+    api_key = api_key or os.getenv("WECHAT_MP_WRITER_API_KEY", "")
     if not base_url or not api_key:
         raise ValueError("WeChat MP writer model is not configured")
     try:
@@ -61,13 +64,18 @@ def _call_writer_model(*, topic: str, source_material: str, target_reader: str, 
     }
 
 
-def generate_wechat_article(*, db: Session, user_id: int, request: WechatMpArticleCreateRequest, text_model: str) -> WechatMpArticle:
+def generate_wechat_article(*, db: Session, user_id: int, request: WechatMpArticleCreateRequest) -> WechatMpArticle:
+    from backend.app.services.wechat_mp_model_service import resolve_wechat_mp_model
+
+    model = resolve_wechat_mp_model(db=db, user_id=user_id, model_type="text")
     result = _call_writer_model(
         topic=request.topic,
         source_material=request.source_material,
         target_reader=request.target_reader,
         tone=request.tone,
-        model_name=text_model,
+        model_name=model.model_name,
+        base_url=model.base_url,
+        api_key=model.api_key,
     )
     try:
         article = WechatMpArticle(
@@ -82,7 +90,7 @@ def generate_wechat_article(*, db: Session, user_id: int, request: WechatMpArtic
         )
         db.add(article)
         db.flush()
-        record_text_usage(
+        usage = record_text_usage(
             db=db,
             user_id=user_id,
             pipeline_run_id=None,
@@ -93,7 +101,14 @@ def generate_wechat_article(*, db: Session, user_id: int, request: WechatMpArtic
             platform="wechat_mp",
             resource_type="wechat_mp_article",
             resource_id=article.id,
+            commit=False,
         )
+        article.cost_estimate = {
+            "currency": "CNY",
+            "total_yuan": str(usage.cost_yuan),
+            "calls": 1,
+        }
+        db.commit()
         db.refresh(article)
         return article
     except (KeyError, TypeError, ValueError) as exc:

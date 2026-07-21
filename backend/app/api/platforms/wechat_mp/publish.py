@@ -8,8 +8,10 @@ from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiError
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
 from backend.app.models import User, WechatMpPublishJob
+from backend.app.schemas.wechat_mp import WechatMpPublishStatus
 from backend.app.services.wechat_mp_publish_service import (
     WechatMpPublishValidationError,
+    cancel_publish_job,
     poll_publish_job,
     submit_publish_job,
 )
@@ -30,7 +32,7 @@ class WechatMpPublishJobResponse(BaseModel):
     article_id: int
     draft_sync_id: int
     publish_id: str
-    status: str
+    status: WechatMpPublishStatus
     scheduled_at: datetime | None
     raw_response: dict
     error_message: str
@@ -73,3 +75,17 @@ def poll_publish(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except (WechatMpApiError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="WeChat MP publish status check failed") from exc
+
+
+@router.post("/publish-jobs/{job_id}/cancel", response_model=WechatMpPublishJobResponse)
+def cancel_publish(
+    job_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        return cancel_publish_job(db, current_user.id, job_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except WechatMpPublishValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

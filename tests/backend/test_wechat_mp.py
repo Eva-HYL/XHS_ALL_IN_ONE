@@ -186,11 +186,12 @@ def created_wechat_account(api_client, auth_headers):
     )
     assert response.status_code == 201
     from backend.app.models import WechatMpAccount
+    from backend.app.services.wechat_mp_token_service import normalize_token_cache
 
     session = session_factory()
     try:
         account = session.get(WechatMpAccount, response.json()["id"])
-        account.token_cache = {"access_token": "cached-token", "expires_at": time.time() + 3600}
+        account.token_cache = normalize_token_cache({"access_token": "cached-token", "expires_in": 3600})
         session.commit()
     finally:
         session.close()
@@ -198,26 +199,16 @@ def created_wechat_account(api_client, auth_headers):
 
 
 @pytest.fixture
-def created_wechat_article_with_image(api_client, auth_headers, created_wechat_article, tmp_path):
+def created_wechat_article_with_image(api_client, auth_headers, created_wechat_article, tmp_path, monkeypatch):
     _, session_factory = api_client
     from backend.app.models import User, WechatMpAsset
+    from backend.app.services import wechat_mp_image_service as image_service
 
     image_path = tmp_path / "wechat-inline.png"
     image_path.write_bytes(b"fake-image")
     session = session_factory()
     try:
         owner = session.query(User).filter_by(username="wechat-owner").one()
-        cover = WechatMpAsset(
-            user_id=owner.id,
-            article_id=created_wechat_article.id,
-            role="cover",
-            file_path=str(image_path),
-            public_url="/api/files/media/wechat-cover.png",
-            prompt="测试封面",
-            skill_name="xiaomao-illustrations",
-            model_name="test-model",
-            status="generated",
-        )
         asset = WechatMpAsset(
             user_id=owner.id,
             article_id=created_wechat_article.id,
@@ -231,12 +222,29 @@ def created_wechat_article_with_image(api_client, auth_headers, created_wechat_a
         )
         article = session.get(type(created_wechat_article), created_wechat_article.id)
         article.html_body = '<p><img src="/api/files/media/wechat-inline.png" /></p>'
-        session.add(cover)
         session.add(asset)
         session.commit()
-        return created_wechat_article
     finally:
         session.close()
+
+    monkeypatch.setattr(
+        image_service,
+        "_call_image_model",
+        lambda **kwargs: {
+            "file_path": str(image_path),
+            "public_url": "/api/files/media/wechat-cover.png",
+            "provider_response": {"ok": True},
+        },
+    )
+    client, _ = api_client
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/cover",
+        json={"image_model": "test-model", "size": "16:9"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 201
+    assert response.json()["role"] == "cover"
+    return created_wechat_article
 
 
 def test_sync_wechat_mp_article_creates_draft_sync(api_client, auth_headers, created_wechat_article_with_image, created_wechat_account, monkeypatch):
@@ -660,7 +668,7 @@ def test_generate_wechat_mp_image_saves_only_wechat_asset_and_backfills_article(
         lambda **kwargs: {"prompt": "一只小猫开始最小动作", "input_tokens": 12, "output_tokens": 24, "model_name": kwargs["model_name"]},
     )
 
-    def fake_generate(*, prompt, model_name, size):
+    def fake_generate(*, prompt, model_name, size, **kwargs):
         assert prompt == "一只小猫开始最小动作"
         assert model_name == "doubao-seedream-4-0-250828"
         assert size == "16:9"
@@ -839,7 +847,9 @@ def test_wechat_mp_account_test_caches_successful_token(api_client, auth_headers
     session = session_factory()
     try:
         stored = session.get(WechatMpAccount, account["id"])
-        assert stored.token_cache["access_token"] == "token-value"
+        from backend.app.services.wechat_mp_token_service import get_cached_access_token
+        assert "token-value" not in str(stored.token_cache)
+        assert get_cached_access_token(stored.token_cache) == "token-value"
         assert stored.token_cache["expires_in"] == 7200
         assert time.time() + 7100 < stored.token_cache["expires_at"] < time.time() + 7200
     finally:
@@ -850,7 +860,7 @@ def test_create_wechat_mp_article_generates_markdown_html_and_usage(api_client, 
     from backend.app.models import UsageRecord
     from backend.app.services import wechat_mp_writer_service as writer
 
-    def fake_call(*, topic, source_material, target_reader, tone, model_name):
+    def fake_call(*, topic, source_material, target_reader, tone, model_name, **kwargs):
         return {
             "title": "会偷懒的人，反而更稳定",
             "markdown_body": "## 开头\n正文第一段\n\n## 方法\n正文第二段",
@@ -885,7 +895,7 @@ def test_create_wechat_mp_article_generates_markdown_html_and_usage(api_client, 
 def test_generate_prompts_defaults_to_xiaomao_skill(api_client, auth_headers, created_wechat_article, monkeypatch):
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
 
-    def fake_prompt_call(*, article_title, section_summary, skill_name, model_name):
+    def fake_prompt_call(*, article_title, section_summary, skill_name, model_name, **kwargs):
         assert skill_name == "xiaomao-illustrations"
         return {
             "prompt": "Generate one 16:9 Chinese article illustration. 小猫 lazily presses a messy note stack.",
@@ -940,6 +950,7 @@ def test_generate_prompts_creates_shotlist_and_records_article_usage(api_client,
 
     assert response.status_code == 201
     assert 1 <= len(response.json()) <= 8
+    assert all(prompt["cost_estimate"]["total_yuan"] != "" for prompt in response.json())
     session = session_factory()
     try:
         usages = session.query(UsageRecord).filter_by(step="generate_image_prompt").all()
@@ -1035,7 +1046,7 @@ def test_regenerating_embedded_prompt_restores_marker_for_next_image(api_client,
         session.close()
 
 
-def test_generate_prompts_rolls_back_all_records_when_a_later_model_call_fails(api_client, auth_headers, created_wechat_article, monkeypatch):
+def test_generate_prompts_records_completed_calls_when_a_later_model_call_fails(api_client, auth_headers, created_wechat_article, monkeypatch):
     from backend.app.models import UsageRecord, WechatMpArticleSection, WechatMpImagePrompt
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
 
@@ -1055,9 +1066,9 @@ def test_generate_prompts_rolls_back_all_records_when_a_later_model_call_fails(a
     assert response.status_code == 502
     session = session_factory()
     try:
-        assert session.query(WechatMpArticleSection).filter_by(article_id=created_wechat_article.id).count() == 0
-        assert session.query(WechatMpImagePrompt).filter_by(article_id=created_wechat_article.id).count() == 0
-        assert session.query(UsageRecord).filter_by(resource_id=created_wechat_article.id, step="generate_image_prompt").count() == 0
+        assert session.query(WechatMpArticleSection).filter_by(article_id=created_wechat_article.id).count() >= 2
+        assert session.query(WechatMpImagePrompt).filter_by(article_id=created_wechat_article.id).count() == 1
+        assert session.query(UsageRecord).filter_by(resource_id=created_wechat_article.id, step="generate_image_prompt").count() == 1
     finally:
         session.close()
 
@@ -1308,3 +1319,321 @@ def test_wechat_mp_adapter_raises_for_http_status_error(monkeypatch):
         WechatMpApiAdapter().get_access_token(app_id="wx123", app_secret="secret-value")
 
     assert error.value.payload == {"errmsg": "service unavailable"}
+
+
+def test_wechat_mp_publish_status_includes_submitted():
+    from typing import get_args
+    from backend.app.schemas.wechat_mp import WechatMpPublishStatus
+
+    assert "submitted" in get_args(WechatMpPublishStatus)
+
+
+def test_xiaomao_prompt_contract_is_applied_server_side():
+    from backend.app.services.wechat_mp_image_prompt_service import build_skill_prompt
+
+    prompt = build_skill_prompt("xiaomao-illustrations", "稳定输出", "先做最小动作")
+    for required in ("白色背景", "16:9", "手绘", "慵懒", "玳瑁猫"):
+        assert required in prompt
+
+
+def test_none_skill_rejects_image_generation(api_client, auth_headers, created_wechat_prompt):
+    from backend.app.models import WechatMpArticle, WechatMpImagePrompt
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        prompt = session.get(WechatMpImagePrompt, created_wechat_prompt.id)
+        article = session.get(WechatMpArticle, created_wechat_prompt.article_id)
+        prompt.skill_name = "none"
+        article.illustration_skill = "none"
+        session.commit()
+    finally:
+        session.close()
+
+    response = client.post(
+        f"/api/platforms/wechat-mp/prompts/{created_wechat_prompt.id}/image",
+        json={"size": "16:9"}, headers=auth_headers,
+    )
+    assert response.status_code == 400
+    assert "none" in str(response.json()["detail"]).lower()
+
+
+def test_wechat_mp_writer_uses_configured_default_text_model(api_client, auth_headers, monkeypatch):
+    from backend.app.core.security import encrypt_text
+    from backend.app.models import ModelConfig, User
+    from backend.app.services import wechat_mp_writer_service as writer_service
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        session.add(ModelConfig(
+            user_id=owner.id, name="公众号默认文本模型", model_type="text",
+            provider="openai-compatible", model_name="configured-writer",
+            base_url="https://models.example/v1", encrypted_api_key=encrypt_text("configured-key"),
+            is_default=True,
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    captured = {}
+    def fake_writer_call(**kwargs):
+        captured.update(kwargs)
+        return {
+            "title": "配置模型文章", "markdown_body": "正文", "digest": "摘要", "cover_brief": "封面",
+            "input_tokens": 10, "output_tokens": 20, "model_name": kwargs["model_name"],
+        }
+
+    monkeypatch.setattr(writer_service, "_call_writer_model", fake_writer_call)
+    response = client.post(
+        "/api/platforms/wechat-mp/articles",
+        json={"title": "配置模型文章", "topic": "配置模型"}, headers=auth_headers,
+    )
+    assert response.status_code == 201
+    assert captured["model_name"] == "configured-writer"
+    assert captured["base_url"] == "https://models.example/v1"
+    assert captured["api_key"] == "configured-key"
+    assert response.json()["cost_estimate"]["total_yuan"] != ""
+
+
+def test_article_edit_invalidates_synced_revision_and_blocks_publish(api_client, auth_headers, synced_wechat_article, monkeypatch):
+    from backend.app.models import WechatMpDraftSync
+    from backend.app.services import wechat_mp_publish_service as publish_service
+
+    class NeverCalledAdapter:
+        def submit_publish(self, **kwargs):
+            raise AssertionError("stale drafts must not be published")
+
+    monkeypatch.setattr(publish_service, "WechatMpApiAdapter", lambda: NeverCalledAdapter())
+    client, session_factory = api_client
+    updated = client.patch(
+        f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}",
+        json={"markdown_body": "## 新正文\n内容已变化"}, headers=auth_headers,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["revision"] == 2
+    assert updated.json()["status"] == "layout_ready"
+    publish = client.post(
+        f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/publish",
+        json={"confirm": True}, headers=auth_headers,
+    )
+    assert publish.status_code == 400
+    session = session_factory()
+    try:
+        sync = session.query(WechatMpDraftSync).filter_by(article_id=synced_wechat_article.id).one()
+        assert sync.status == "stale"
+        assert sync.article_revision == 1
+    finally:
+        session.close()
+
+
+def test_prompt_generation_invalidates_synced_article_revision(api_client, auth_headers, synced_wechat_article, monkeypatch):
+    from backend.app.models import WechatMpDraftSync
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    monkeypatch.setattr(
+        prompt_service,
+        "_call_prompt_model",
+        lambda **kwargs: {
+            "prompt": "小猫处理新结构", "input_tokens": 12, "output_tokens": 24,
+            "model_name": kwargs["model_name"],
+        },
+    )
+    client, session_factory = api_client
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/prompts",
+        headers=auth_headers,
+    )
+    assert response.status_code == 201
+    article = client.get(
+        f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}", headers=auth_headers,
+    ).json()
+    assert article["revision"] == 2
+    session = session_factory()
+    try:
+        assert session.query(WechatMpDraftSync).filter_by(article_id=synced_wechat_article.id).one().status == "stale"
+    finally:
+        session.close()
+
+
+def test_failed_draft_sync_is_journaled(api_client, auth_headers, created_wechat_article_with_image, created_wechat_account, monkeypatch):
+    from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiError
+    from backend.app.models import WechatMpDraftSync
+    from backend.app.services import wechat_mp_draft_service as draft_service
+
+    class FailingAdapter:
+        def upload_permanent_image(self, **kwargs): return {"media_id": "thumb"}
+        def upload_content_image(self, **kwargs): return {"url": "https://mmbiz.qpic.cn/content.png"}
+        def add_draft(self, **kwargs):
+            raise WechatMpApiError("draft failed", errcode=40001, payload={"errcode": 40001, "errmsg": "invalid"})
+
+    monkeypatch.setattr(draft_service, "WechatMpApiAdapter", lambda: FailingAdapter())
+    client, session_factory = api_client
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/sync-draft",
+        json={"account_id": created_wechat_account.id}, headers=auth_headers,
+    )
+    assert response.status_code == 502
+    session = session_factory()
+    try:
+        record = session.query(WechatMpDraftSync).filter_by(article_id=created_wechat_article_with_image.id).one()
+        assert record.status == "failed"
+        assert record.raw_response["errcode"] == 40001
+        assert record.error_message
+    finally:
+        session.close()
+
+
+def test_failed_publish_submit_is_journaled(api_client, auth_headers, synced_wechat_article, monkeypatch):
+    from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiError
+    from backend.app.models import WechatMpPublishJob
+    from backend.app.services import wechat_mp_publish_service as publish_service
+
+    class FailingAdapter:
+        def submit_publish(self, **kwargs):
+            raise WechatMpApiError("publish failed", errcode=40001, payload={"errcode": 40001, "errmsg": "invalid"})
+
+    monkeypatch.setattr(publish_service, "WechatMpApiAdapter", lambda: FailingAdapter())
+    client, session_factory = api_client
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/publish",
+        json={"confirm": True}, headers=auth_headers,
+    )
+    assert response.status_code == 502
+    session = session_factory()
+    try:
+        record = session.query(WechatMpPublishJob).filter_by(article_id=synced_wechat_article.id).one()
+        assert record.status == "failed"
+        assert record.raw_response["errcode"] == 40001
+        assert record.error_message
+    finally:
+        session.close()
+
+
+def test_due_publish_runner_executes_only_due_jobs(api_client, auth_headers, synced_wechat_article, monkeypatch):
+    from datetime import datetime
+    from backend.app.models import WechatMpPublishJob
+    from backend.app.services import wechat_mp_publish_service as publish_service
+
+    client, session_factory = api_client
+    due = client.post(
+        f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/publish",
+        json={"confirm": True, "scheduled_at": "2026-07-20T00:00:00"}, headers=auth_headers,
+    )
+    future = client.post(
+        f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/publish",
+        json={"confirm": True, "scheduled_at": "2026-07-22T00:00:00"}, headers=auth_headers,
+    )
+    assert due.status_code == future.status_code == 201
+    calls = []
+
+    class FakeAdapter:
+        def submit_publish(self, **kwargs):
+            calls.append(kwargs)
+            return {"publish_id": "due-publish-id"}
+
+    monkeypatch.setattr(publish_service, "_get_access_token", lambda account, adapter: "token")
+    session = session_factory()
+    try:
+        result = publish_service.run_due_publish_jobs(
+            db=session, now=datetime(2026, 7, 21), adapter_factory=FakeAdapter,
+        )
+        assert result["executed_count"] == 1
+        assert session.get(WechatMpPublishJob, due.json()["id"]).status == "submitted"
+        assert session.get(WechatMpPublishJob, future.json()["id"]).status == "scheduled"
+    finally:
+        session.close()
+    assert len(calls) == 1
+
+
+def test_scheduled_publish_can_be_cancelled(api_client, auth_headers, synced_wechat_article):
+    client, _ = api_client
+    scheduled = client.post(
+        f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/publish",
+        json={"confirm": True, "scheduled_at": "2030-01-02T03:04:05"}, headers=auth_headers,
+    )
+    cancelled = client.post(
+        f"/api/platforms/wechat-mp/publish-jobs/{scheduled.json()['id']}/cancel", headers=auth_headers,
+    )
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+
+
+def test_wechat_mp_due_runner_is_registered_with_scheduler():
+    from backend.app.services.scheduler_service import build_due_publish_scheduler
+
+    scheduler = build_due_publish_scheduler(60, lambda: None)
+    try:
+        assert scheduler.get_job("wechat_mp_due_publish_runner") is not None
+    finally:
+        scheduler.shutdown(wait=False) if scheduler.running else None
+
+
+def test_token_cache_encrypts_access_token_at_rest_and_can_decrypt():
+    from backend.app.services.wechat_mp_token_service import get_cached_access_token, normalize_token_cache
+
+    cache = normalize_token_cache({"access_token": "raw-wechat-token", "expires_in": 7200})
+    assert "raw-wechat-token" not in str(cache)
+    assert get_cached_access_token(cache) == "raw-wechat-token"
+
+
+def test_deleted_generated_asset_removes_broken_url_before_sync(
+    api_client, auth_headers, created_wechat_article_with_image, created_wechat_account, monkeypatch
+):
+    from backend.app.models import WechatMpAsset
+    from backend.app.services import wechat_mp_draft_service as draft_service
+
+    class FakeAdapter:
+        def upload_permanent_image(self, **kwargs): return {"media_id": "thumb"}
+        def add_draft(self, **kwargs):
+            assert "/api/files/media/wechat-inline.png" not in kwargs["article"]["content"]
+            return {"media_id": "clean-draft"}
+
+    monkeypatch.setattr(draft_service, "WechatMpApiAdapter", lambda: FakeAdapter())
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        inline = session.query(WechatMpAsset).filter_by(
+            article_id=created_wechat_article_with_image.id, role="inline_illustration",
+        ).one()
+        inline_id = inline.id
+    finally:
+        session.close()
+
+    deleted = client.delete(f"/api/platforms/wechat-mp/assets/{inline_id}", headers=auth_headers)
+    assert deleted.status_code == 200
+    article = client.get(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}", headers=auth_headers,
+    ).json()
+    assert "/api/files/media/wechat-inline.png" not in article["html_body"]
+    sync = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/sync-draft",
+        json={"account_id": created_wechat_account.id}, headers=auth_headers,
+    )
+    assert sync.status_code == 201
+
+
+def test_draft_sync_rejects_missing_local_asset_file(
+    api_client, auth_headers, created_wechat_article_with_image, created_wechat_account
+):
+    from pathlib import Path
+    from backend.app.models import WechatMpAsset
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        cover = session.query(WechatMpAsset).filter_by(
+            article_id=created_wechat_article_with_image.id, role="cover",
+        ).one()
+        Path(cover.file_path).unlink()
+    finally:
+        session.close()
+
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/sync-draft",
+        json={"account_id": created_wechat_account.id}, headers=auth_headers,
+    )
+    assert response.status_code == 400
+    assert "missing local asset" in response.json()["detail"]

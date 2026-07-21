@@ -16,6 +16,19 @@ from backend.app.services.wechat_mp_shotlist_service import generate_article_sho
 
 
 _PROMPT_SYSTEM = "You write concise image prompts for Chinese WeChat article illustrations. Return only the image prompt."
+_XIAOMAO_STYLE_DNA = (
+    "白色背景，16:9 横版构图，轻微抖动的手绘线稿，少量浅橙、红、蓝批注；"
+    "主角必须是一只胖胖慵懒、半推半就但会把活干完的玳瑁猫，"
+    "身体以黑白色块为主，背、头、尾只有约 15-25% 小块橙斑，半闭眼、冷淡表情；"
+    "小猫必须承担画面的核心概念动作，不能只做装饰，不穿衣、不直立、不画成可爱吉祥物；"
+    "画面留白充足，一图一个核心结构，不使用写实摄影、3D 渲染、复杂背景或大段文字。"
+)
+
+
+def build_skill_prompt(skill_name: str, article_title: str, section_summary: str) -> str:
+    if skill_name == "xiaomao-illustrations":
+        return f"{_XIAOMAO_STYLE_DNA}\n文章：{article_title}\n场景：{section_summary}"
+    return f"16:9 微信公众号正文插画。\n文章：{article_title}\n场景：{section_summary}"
 
 
 def _insert_prompt_placeholder(article: WechatMpArticle, section: WechatMpArticleSection, prompt: WechatMpImagePrompt) -> None:
@@ -59,10 +72,13 @@ def _parse_token_count(value: Any) -> int:
     return value
 
 
-def _call_prompt_model(*, article_title: str, section_summary: str, skill_name: str, model_name: str) -> dict[str, Any]:
+def _call_prompt_model(
+    *, article_title: str, section_summary: str, skill_name: str, model_name: str,
+    base_url: str = "", api_key: str = "",
+) -> dict[str, Any]:
     """Call the configured prompt model; kept narrow for monkeypatch-based tests."""
-    base_url = os.getenv("WECHAT_MP_PROMPT_BASE_URL", "").rstrip("/")
-    api_key = os.getenv("WECHAT_MP_PROMPT_API_KEY", "")
+    base_url = (base_url or os.getenv("WECHAT_MP_PROMPT_BASE_URL", "")).rstrip("/")
+    api_key = api_key or os.getenv("WECHAT_MP_PROMPT_API_KEY", "")
     if not base_url or not api_key:
         raise ValueError("WeChat MP prompt model is not configured")
     try:
@@ -72,8 +88,8 @@ def _call_prompt_model(*, article_title: str, section_summary: str, skill_name: 
             json={
                 "model": model_name,
                 "messages": [
-                    {"role": "system", "content": _PROMPT_SYSTEM},
-                    {"role": "user", "content": f"Title: {article_title}\nSection: {section_summary}\nSkill: {skill_name}"},
+                    {"role": "system", "content": f"{_PROMPT_SYSTEM}\n{build_skill_prompt(skill_name, article_title, section_summary)}"},
+                    {"role": "user", "content": build_skill_prompt(skill_name, article_title, section_summary)},
                 ],
             },
             timeout=180,
@@ -94,21 +110,37 @@ def _call_prompt_model(*, article_title: str, section_summary: str, skill_name: 
     if not prompt:
         raise ValueError("WeChat MP prompt model returned an empty prompt")
     return {
-        "prompt": prompt,
+        "prompt": f"{build_skill_prompt(skill_name, article_title, section_summary)}\n具体画面：{prompt}",
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "model_name": model_name,
     }
 
 
-def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_name: str | None, text_model: str) -> list[WechatMpImagePrompt]:
+def _add_article_cost(article: WechatMpArticle, cost_yuan: object) -> None:
+    from decimal import Decimal
+
+    current = article.cost_estimate or {}
+    total = Decimal(str(current.get("total_yuan", "0"))) + Decimal(str(cost_yuan))
+    article.cost_estimate = {
+        "currency": "CNY",
+        "total_yuan": str(total.quantize(Decimal("0.0001"))),
+        "calls": int(current.get("calls", 0)) + 1,
+    }
+
+
+def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_name: str | None) -> list[WechatMpImagePrompt]:
+    from backend.app.services.wechat_mp_model_service import resolve_wechat_mp_model
+
     article = db.scalar(select(WechatMpArticle).where(WechatMpArticle.id == article_id, WechatMpArticle.user_id == user_id))
     if article is None:
         raise LookupError("WeChat MP article not found")
     selected_skill = skill_name or article.illustration_skill or "xiaomao-illustrations"
+    model = resolve_wechat_mp_model(db=db, user_id=user_id, model_type="text")
     try:
-        sections = generate_article_shotlist(db=db, user_id=user_id, article_id=article_id, text_model=text_model)
+        sections = generate_article_shotlist(db=db, user_id=user_id, article_id=article_id, text_model=model.model_name)
         prompts = []
+        revision_invalidated = False
         for section in sections:
             prompt = db.scalar(
                 select(WechatMpImagePrompt)
@@ -119,7 +151,9 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
                 article_title=article.title,
                 section_summary=section.summary,
                 skill_name=selected_skill,
-                model_name=text_model,
+                model_name=model.model_name,
+                base_url=model.base_url,
+                api_key=model.api_key,
             )
             if prompt is None:
                 prompt = WechatMpImagePrompt(
@@ -142,7 +176,7 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
                 prompt.version += 1
                 prompt.status = "prompt_ready"
             _insert_prompt_placeholder(article, section, prompt)
-            record_text_usage(
+            usage = record_text_usage(
                 db=db,
                 user_id=user_id,
                 pipeline_run_id=None,
@@ -155,10 +189,20 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
                 resource_id=article.id,
                 commit=False,
             )
+            prompt.cost_estimate = {
+                "currency": "CNY", "total_yuan": str(usage.cost_yuan), "calls": 1,
+            }
+            _add_article_cost(article, usage.cost_yuan)
             prompts.append(prompt)
-        article.illustration_skill = selected_skill
-        article.status = "prompts_ready"
-        db.commit()
+            article.illustration_skill = selected_skill
+            if not revision_invalidated:
+                from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
+                invalidate_synced_drafts(db, article, next_status="prompts_ready")
+                revision_invalidated = True
+            else:
+                article.status = "prompts_ready"
+            # Each completed provider call is durable even if a later section fails.
+            db.commit()
     except Exception:
         db.rollback()
         raise
@@ -167,22 +211,27 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
     return prompts
 
 
-def regenerate_image_prompt(*, db: Session, prompt: WechatMpImagePrompt, article: WechatMpArticle, text_model: str) -> WechatMpImagePrompt:
+def regenerate_image_prompt(*, db: Session, prompt: WechatMpImagePrompt, article: WechatMpArticle) -> WechatMpImagePrompt:
+    from backend.app.services.wechat_mp_model_service import resolve_wechat_mp_model
+
     section = db.get(WechatMpArticleSection, prompt.section_id)
     if section is None or section.article_id != article.id:
         raise LookupError("WeChat MP prompt not found")
+    model = resolve_wechat_mp_model(db=db, user_id=article.user_id, model_type="text")
     result = _call_prompt_model(
         article_title=article.title,
         section_summary=section.summary,
         skill_name=prompt.skill_name,
-        model_name=text_model,
+        model_name=model.model_name,
+        base_url=model.base_url,
+        api_key=model.api_key,
     )
     prompt.prompt = result["prompt"]
     prompt.editable_prompt = result["prompt"]
     prompt.version += 1
     prompt.status = "prompt_ready"
     _restore_prompt_placeholder(db, article, section, prompt)
-    record_text_usage(
+    usage = record_text_usage(
         db=db,
         user_id=article.user_id,
         pipeline_run_id=None,
@@ -195,7 +244,12 @@ def regenerate_image_prompt(*, db: Session, prompt: WechatMpImagePrompt, article
         resource_id=article.id,
         commit=False,
     )
-    article.status = "prompts_ready"
+    prompt.cost_estimate = {
+        "currency": "CNY", "total_yuan": str(usage.cost_yuan), "calls": 1,
+    }
+    _add_article_cost(article, usage.cost_yuan)
+    from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
+    invalidate_synced_drafts(db, article, next_status="prompts_ready")
     db.commit()
     db.refresh(prompt)
     return prompt

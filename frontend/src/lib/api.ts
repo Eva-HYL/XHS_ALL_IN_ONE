@@ -1066,8 +1066,13 @@ export async function regenerateWechatMpPrompt(articleId: number, promptId: numb
   return response.data;
 }
 
-export async function generateWechatMpImage(promptId: number, payload: { image_model: string; size?: string }): Promise<WechatMpAsset> {
+export async function generateWechatMpImage(promptId: number, payload: { image_model?: string; size?: string }): Promise<WechatMpAsset> {
   const response = await http.post<WechatMpAsset>(`/platforms/wechat-mp/prompts/${promptId}/image`, payload);
+  return response.data;
+}
+
+export async function generateWechatMpCover(articleId: number, payload: { image_model?: string; size?: string }): Promise<WechatMpAsset> {
+  const response = await http.post<WechatMpAsset>(`/platforms/wechat-mp/articles/${articleId}/cover`, payload);
   return response.data;
 }
 
@@ -1093,5 +1098,10 @@ export async function publishWechatMpArticle(articleId: number, payload: { confi
 
 export async function pollWechatMpPublishJob(jobId: number): Promise<WechatMpPublishJob> {
   const response = await http.post<WechatMpPublishJob>(`/platforms/wechat-mp/publish-jobs/${jobId}/poll`);
+  return response.data;
+}
+
+export async function cancelWechatMpPublishJob(jobId: number): Promise<WechatMpPublishJob> {
+  const response = await http.post<WechatMpPublishJob>(`/platforms/wechat-mp/publish-jobs/${jobId}/cancel`);
   return response.data;
 }

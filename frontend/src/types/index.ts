@@ -817,6 +817,7 @@ export interface WechatMpArticle {
   digest: string;
   status: string;
   illustration_skill: string;
+  revision: number;
   cost_estimate: Record<string, unknown>;
   user_id?: number;
   account_id?: number | null;
@@ -878,6 +879,7 @@ export type WechatMpDraftSync = {
   account_id: number;
   article_id: number;
   wechat_media_id: string;
+  article_revision: number;
   status: string;
   raw_response: Record<string, unknown>;
   error_message: string;

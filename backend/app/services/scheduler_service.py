@@ -697,12 +697,23 @@ def check_all_account_cookies_once() -> None:
 
 
 def build_due_publish_scheduler(interval_seconds: int, job_func, monitoring_job_func=None) -> BackgroundScheduler:
+    from backend.app.services.wechat_mp_publish_service import run_due_wechat_mp_publish_jobs_once
+
     scheduler = BackgroundScheduler(timezone="UTC")
     scheduler.add_job(
         job_func,
         "interval",
         seconds=interval_seconds,
         id="due_publish_runner",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    scheduler.add_job(
+        run_due_wechat_mp_publish_jobs_once,
+        "interval",
+        seconds=interval_seconds,
+        id="wechat_mp_due_publish_runner",
         replace_existing=True,
         max_instances=1,
         coalesce=True,

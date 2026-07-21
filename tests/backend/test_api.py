@@ -6346,7 +6346,13 @@ def test_due_publish_scheduler_registers_interval_job():
 
     try:
         jobs = scheduler.get_jobs()
-        assert {job.id for job in jobs} == {"due_publish_runner", "monitoring_refresh_runner", "auto_tasks_runner", "cookie_health_checker"}
+        assert {job.id for job in jobs} == {
+            "due_publish_runner",
+            "wechat_mp_due_publish_runner",
+            "monitoring_refresh_runner",
+            "auto_tasks_runner",
+            "cookie_health_checker",
+        }
         job_intervals = {job.id: job.trigger.interval.total_seconds() for job in jobs}
         assert job_intervals["due_publish_runner"] == 17
         assert job_intervals["monitoring_refresh_runner"] == 17
