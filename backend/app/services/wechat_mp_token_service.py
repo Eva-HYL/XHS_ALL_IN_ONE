@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 
 
@@ -25,6 +26,13 @@ def get_cached_access_token(token_cache: dict | None) -> str | None:
     cached = token_cache if isinstance(token_cache, dict) else {}
     token = cached.get("access_token")
     expires_at = cached.get("expires_at")
-    if isinstance(token, str) and token and isinstance(expires_at, (int, float)) and not isinstance(expires_at, bool) and expires_at > time.time():
+    if (
+        isinstance(token, str)
+        and token
+        and isinstance(expires_at, (int, float))
+        and not isinstance(expires_at, bool)
+        and math.isfinite(expires_at)
+        and expires_at > time.time()
+    ):
         return token
     return None

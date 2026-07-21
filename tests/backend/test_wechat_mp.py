@@ -353,6 +353,13 @@ def test_sync_wechat_mp_draft_refreshes_expired_token_cache(api_client, auth_hea
     assert calls[-1][1]["access_token"] == "refreshed-token"
 
 
+@pytest.mark.parametrize("expires_at", [float("inf"), float("-inf"), float("nan")])
+def test_wechat_mp_token_cache_rejects_non_finite_expiry(expires_at):
+    from backend.app.services.wechat_mp_token_service import get_cached_access_token
+
+    assert get_cached_access_token({"access_token": "cached-token", "expires_at": expires_at}) is None
+
+
 def test_sync_wechat_mp_draft_hides_foreign_article_and_account(api_client, auth_headers, created_wechat_article_with_image, created_wechat_account):
     client, _ = api_client
     other = client.post("/api/auth/register", json={"username": "wechat-other", "password": "secret123"})
