@@ -2,6 +2,7 @@ import type { PlatformMeta } from "../types";
 
 export const fallbackPlatforms: PlatformMeta[] = [
   { id: "xhs", name_cn: "小红书", name_en: "XiaoHongShu", enabled: true, status: "enabled", accent_color: "#ff2442", icon: "xhs" },
+  { id: "wechat-mp", name_cn: "微信公众号", name_en: "WeChat MP", enabled: true, status: "enabled", accent_color: "#07c160", icon: "wechat-mp" },
   { id: "douyin", name_cn: "抖音", name_en: "Douyin", enabled: false, status: "coming_soon", accent_color: "#111111", icon: "douyin" },
   { id: "kuaishou", name_cn: "快手", name_en: "Kuaishou", enabled: false, status: "coming_soon", accent_color: "#ff7a00", icon: "kuaishou" },
   { id: "weibo", name_cn: "微博", name_en: "Weibo", enabled: false, status: "coming_soon", accent_color: "#e6162d", icon: "weibo" },

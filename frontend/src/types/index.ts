@@ -1,4 +1,4 @@
-export type PlatformId = "xhs" | "douyin" | "kuaishou" | "weibo" | "xianyu" | "taobao";
+export type PlatformId = "xhs" | "wechat-mp" | "douyin" | "kuaishou" | "weibo" | "xianyu" | "taobao";
 
 export type PlatformMeta = {
   id: PlatformId;

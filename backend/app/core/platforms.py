@@ -7,6 +7,7 @@ from typing import List
 
 class PlatformId(str, Enum):
     XHS = "xhs"
+    WECHAT_MP = "wechat-mp"
     DOUYIN = "douyin"
     KUAISHOU = "kuaishou"
     WEIBO = "weibo"
@@ -32,6 +33,7 @@ class PlatformMeta:
 
 _PLATFORMS: List[PlatformMeta] = [
     PlatformMeta(PlatformId.XHS, "小红书", "XiaoHongShu", True, "enabled", "#ff2442", "xhs"),
+    PlatformMeta(PlatformId.WECHAT_MP, "微信公众号", "WeChat MP", True, "enabled", "#07c160", "wechat-mp"),
     PlatformMeta(PlatformId.DOUYIN, "抖音", "Douyin", False, "coming_soon", "#111111", "douyin"),
     PlatformMeta(PlatformId.KUAISHOU, "快手", "Kuaishou", False, "coming_soon", "#ff7a00", "kuaishou"),
     PlatformMeta(PlatformId.WEIBO, "微博", "Weibo", False, "coming_soon", "#e6162d", "weibo"),

@@ -57,7 +57,7 @@ export function PlatformSelectPage() {
               选择平台工作区
             </Title>
             <Text type="secondary">
-              小红书已开放，其它平台保留扩展入口。
+              小红书和微信公众号已开放，其它平台保留扩展入口。
             </Text>
           </div>
           <Button
