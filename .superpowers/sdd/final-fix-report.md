@@ -87,3 +87,30 @@ The current environment still uses Node.js `18.15.0`; Vite 7 warns that Node `20
 ### Concern
 
 The current environment still uses Node.js `18.15.0`; Vite 7 warns that Node `20.19+` or `22.12+` is supported. The production build completed successfully. Existing bundle-size and Python/Starlette deprecation warnings remain non-blocking.
+
+## Fourth Final Fix
+
+**Status:** DONE_WITH_CONCERNS
+
+**Implementation commit:** `28aabde fix: resolve fourth wechat mp final review`
+
+### Findings Resolved
+
+1. Active publish identity is now scoped to account, article, and article revision instead of a replaceable draft-sync row. Re-syncing an unchanged revision after an indeterminate publish returns the original guarded job and cannot submit a second remote publish request.
+2. Publish token acquisition is classified as a definite pre-submit stage. Token timeouts and malformed token responses fail the journal row, clear its active key, and allow a safe retry; only uncertainty from or after `submit_publish` retains the pending guard.
+3. Draft sync now has a database-backed unique active key per account, article, and revision. Token and media-upload failures fail and release the key, explicit WeChat `draft/add` rejections fail and release it, while transport or malformed-result uncertainty after `draft/add` starts remains pending and blocks duplicate remote draft creation.
+4. The `none` workflow again creates shotlists and editable prompts. These prompts remain `skipped`, never add or restore HTML markers, can be edited or regenerated, sync without prompt-related rejection, and remain rejected by the inline-image endpoint. Frontend guidance and action availability match this behavior.
+5. Migration `20260721_wmp005` adds the draft-sync active key, widens/rekeys publish active keys, preserves canonical active rows, and closes pre-existing duplicate active rows during upgrade.
+
+### Verification
+
+- Fourth-review focused regressions: `7 passed`.
+- WeChat MP backend: `81 passed`.
+- Full backend: `227 passed`.
+- Alembic: fresh SQLite upgrade through `20260721_wmp005` passed; unique draft/publish active-key indexes and `VARCHAR(200)` columns were inspected.
+- Static checks: `git diff --check` and Python module compilation passed.
+- Frontend: `npm run build` passed (`tsc` + Vite, 3235 modules transformed).
+
+### Concern
+
+The current environment still uses Node.js `18.15.0`; Vite 7 warns that Node `20.19+` or `22.12+` is supported. The production build completed successfully. Existing bundle-size and Python/Starlette deprecation warnings remain non-blocking.
