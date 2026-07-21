@@ -131,3 +131,22 @@ The current environment still uses Node.js `18.15.0`; Vite 7 warns that Node `20
 - Full backend: `229 passed`.
 - Static checks: `git diff --check` and Python module compilation passed.
 - Frontend: not run; no frontend files changed.
+
+## Sixth Final Fix
+
+**Status:** DONE
+
+### Findings Resolved
+
+1. Draft re-sync now rebinds scheduled publish jobs with a single conditional SQL update. The update requires `status = "scheduled"` at write time, so a due runner that has already claimed a job as `pending` cannot have its remote-active draft binding changed.
+
+### Verification
+
+- Focused pending-job rebinding regressions: `2 passed`.
+- WeChat MP backend: `83 passed`.
+- Full backend: `230 passed`.
+- Static checks: `git diff --check` and Python module compilation passed.
+
+### Concern
+
+None.

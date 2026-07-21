@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -148,18 +148,21 @@ def sync_article_to_wechat_draft(db: Session, user_id: int, article_id: int, acc
         WechatMpDraftSync.id != draft_sync.id,
     )):
         previous.status = "stale"
-    for scheduled_job in db.scalars(
-        select(WechatMpPublishJob)
-        .join(WechatMpDraftSync, WechatMpDraftSync.id == WechatMpPublishJob.draft_sync_id)
+    rebindable_draft_sync_ids = select(WechatMpDraftSync.id).where(
+        WechatMpDraftSync.article_id == article.id,
+        WechatMpDraftSync.article_revision == draft_sync.article_revision,
+    )
+    db.execute(
+        update(WechatMpPublishJob)
         .where(
             WechatMpPublishJob.user_id == user_id,
             WechatMpPublishJob.account_id == account.id,
             WechatMpPublishJob.article_id == article.id,
             WechatMpPublishJob.status == "scheduled",
-            WechatMpDraftSync.article_revision == draft_sync.article_revision,
+            WechatMpPublishJob.draft_sync_id.in_(rebindable_draft_sync_ids),
         )
-    ):
-        scheduled_job.draft_sync_id = draft_sync.id
+        .values(draft_sync_id=draft_sync.id)
+    )
     draft_sync.wechat_media_id = media_id
     draft_sync.status = "synced"
     draft_sync.active_key = None

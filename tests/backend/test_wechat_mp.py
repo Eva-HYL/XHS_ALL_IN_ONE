@@ -1861,6 +1861,57 @@ def test_resync_rebinds_scheduled_publish_to_current_draft(
     assert submit_calls == [{"access_token": "token", "media_id": "draft-b"}]
 
 
+def test_resync_does_not_rebind_pending_publish_job(
+    api_client, auth_headers, created_wechat_article_with_image, created_wechat_account, monkeypatch
+):
+    from backend.app.models import WechatMpPublishJob
+    from backend.app.services import wechat_mp_draft_service as draft_service
+
+    draft_ids = iter(("draft-a", "draft-b"))
+
+    class DraftAdapter:
+        def upload_permanent_image(self, **kwargs):
+            return {"media_id": "thumb-media-id"}
+
+        def upload_content_image(self, **kwargs):
+            return {"url": "https://mmbiz.qpic.cn/content.png"}
+
+        def add_draft(self, **kwargs):
+            return {"media_id": next(draft_ids)}
+
+    monkeypatch.setattr(draft_service, "WechatMpApiAdapter", lambda: DraftAdapter())
+    client, session_factory = api_client
+    sync_url = f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/sync-draft"
+    publish_url = f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/publish"
+
+    first_sync = client.post(sync_url, json={"account_id": created_wechat_account.id}, headers=auth_headers)
+    scheduled = client.post(
+        publish_url,
+        json={"confirm": True, "scheduled_at": "2026-07-20T00:00:00"},
+        headers=auth_headers,
+    )
+    assert first_sync.status_code == scheduled.status_code == 201
+
+    session = session_factory()
+    try:
+        job = session.get(WechatMpPublishJob, scheduled.json()["id"])
+        job.status = "pending"
+        session.commit()
+    finally:
+        session.close()
+
+    second_sync = client.post(sync_url, json={"account_id": created_wechat_account.id}, headers=auth_headers)
+    assert second_sync.status_code == 201
+
+    session = session_factory()
+    try:
+        job = session.get(WechatMpPublishJob, scheduled.json()["id"])
+        assert job.status == "pending"
+        assert job.draft_sync_id == first_sync.json()["id"]
+    finally:
+        session.close()
+
+
 @pytest.mark.parametrize("token_outcome", ["timeout", "malformed"])
 def test_publish_token_failure_is_definite_and_allows_retry(
     api_client, auth_headers, synced_wechat_article, monkeypatch, token_outcome
