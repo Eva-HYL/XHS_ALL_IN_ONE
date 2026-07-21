@@ -191,7 +191,6 @@ def created_wechat_prompt(api_client, auth_headers, created_wechat_article):
         )
         session.add(prompt)
         session.flush()
-        article.html_body = f'<p>开头</p>{{{{image:prompt-{prompt.id}}}}}<p>结尾</p>'
         article.status = "prompts_ready"
         session.commit()
         session.refresh(prompt)
@@ -200,9 +199,16 @@ def created_wechat_prompt(api_client, auth_headers, created_wechat_article):
         session.close()
 
 
-def test_generate_wechat_mp_image_saves_only_wechat_asset_and_backfills_article(api_client, auth_headers, created_wechat_prompt, monkeypatch):
+def test_generate_wechat_mp_image_saves_only_wechat_asset_and_backfills_article(api_client, auth_headers, created_wechat_article, monkeypatch):
     from backend.app.models import IllustrationAsset, UsageRecord, WechatMpArticle, WechatMpAsset, WechatMpImagePrompt
     from backend.app.services import wechat_mp_image_service as image_service
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    monkeypatch.setattr(
+        prompt_service,
+        "_call_prompt_model",
+        lambda **kwargs: {"prompt": "一只小猫开始最小动作", "input_tokens": 12, "output_tokens": 24, "model_name": kwargs["model_name"]},
+    )
 
     def fake_generate(*, prompt, model_name, size):
         assert prompt == "一只小猫开始最小动作"
@@ -216,23 +222,35 @@ def test_generate_wechat_mp_image_saves_only_wechat_asset_and_backfills_article(
 
     monkeypatch.setattr(image_service, "_call_image_model", fake_generate)
     client, session_factory = api_client
+    prompts_response = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts",
+        headers=auth_headers,
+    )
+    assert prompts_response.status_code == 201
+    prompts = prompts_response.json()
+    prompt_id = prompts[0]["id"]
+    html_body = client.get(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers
+    ).json()["html_body"]
+    assert all(html_body.count(f"{{{{image:prompt-{prompt['id']}}}}}") == 1 for prompt in prompts)
+
     response = client.post(
-        f"/api/platforms/wechat-mp/prompts/{created_wechat_prompt.id}/image",
+        f"/api/platforms/wechat-mp/prompts/{prompt_id}/image",
         json={"image_model": "doubao-seedream-4-0-250828", "size": "16:9"},
         headers=auth_headers,
     )
 
     assert response.status_code == 201
-    assert response.json()["prompt_id"] == created_wechat_prompt.id
+    assert response.json()["prompt_id"] == prompt_id
     session = session_factory()
     try:
         assert session.query(WechatMpAsset).count() == 1
         assert session.query(IllustrationAsset).count() == 0
-        assert session.get(WechatMpImagePrompt, created_wechat_prompt.id).status == "generated"
-        article = session.get(WechatMpArticle, created_wechat_prompt.article_id)
+        assert session.get(WechatMpImagePrompt, prompt_id).status == "generated"
+        article = session.get(WechatMpArticle, created_wechat_article.id)
         assert 'src="/api/files/media/wechat-mp-u1-p1.png"' in article.html_body
-        assert "{{image:prompt-" not in article.html_body
-        assert article.status == "images_ready"
+        assert f"{{{{image:prompt-{prompt_id}}}}}" not in article.html_body
+        assert article.status == ("images_ready" if len(prompts) == 1 else "images_partial")
         usage = session.query(UsageRecord).filter_by(step="image_gen", resource_id=article.id).one()
         assert usage.platform == "wechat_mp"
         assert usage.resource_type == "wechat_mp_article"
@@ -531,6 +549,10 @@ def test_edit_and_regenerate_prompt_increment_version(api_client, auth_headers, 
     client, _ = api_client
     created = client.post(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts", headers=auth_headers)
     prompt_id = created.json()[0]["id"]
+    marker = f"{{{{image:prompt-{prompt_id}}}}}"
+    assert client.get(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers
+    ).json()["html_body"].count(marker) == 1
 
     edited = client.patch(
         f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts/{prompt_id}",
@@ -554,6 +576,9 @@ def test_edit_and_regenerate_prompt_increment_version(api_client, auth_headers, 
     assert regenerated.json()["prompt"] == "再生成的提示词"
     assert regenerated.json()["editable_prompt"] == "再生成的提示词"
     assert regenerated.json()["version"] == 3
+    assert client.get(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers
+    ).json()["html_body"].count(marker) == 1
 
 
 def test_prompt_endpoints_hide_foreign_article_and_prompt(api_client, auth_headers, created_wechat_article, monkeypatch):

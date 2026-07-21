@@ -9,10 +9,24 @@ from sqlalchemy.orm import Session
 
 from backend.app.models import WechatMpArticle, WechatMpArticleSection, WechatMpImagePrompt
 from backend.app.services.usage_recording_service import record_text_usage
+from backend.app.services.wechat_mp_layout_service import render_wechat_html
 from backend.app.services.wechat_mp_shotlist_service import generate_article_shotlist
 
 
 _PROMPT_SYSTEM = "You write concise image prompts for Chinese WeChat article illustrations. Return only the image prompt."
+
+
+def _insert_prompt_placeholder(article: WechatMpArticle, section: WechatMpArticleSection, prompt: WechatMpImagePrompt) -> None:
+    """Add the stable image marker near its source section without duplicating it."""
+    marker = f"{{{{image:prompt-{prompt.id}}}}}"
+    if marker in article.html_body:
+        return
+
+    section_html = render_wechat_html(section.source_excerpt, image_placeholders=[])
+    if section_html and section_html in article.html_body:
+        article.html_body = article.html_body.replace(section_html, f"{section_html}\n{marker}", 1)
+    else:
+        article.html_body = f"{article.html_body}\n{marker}" if article.html_body else marker
 
 
 def _parse_token_count(value: Any) -> int:
@@ -92,6 +106,7 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
             )
             db.add(prompt)
             db.flush()
+            _insert_prompt_placeholder(article, section, prompt)
             record_text_usage(
                 db=db,
                 user_id=user_id,

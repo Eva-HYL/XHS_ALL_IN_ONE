@@ -65,3 +65,30 @@ Complete. Implemented only the WeChat MP image generation path, independent asse
 ## Concerns
 
 None.
+
+## Review Fix: Prompt Placeholder Backfill
+
+### Root Cause
+
+The article writer rendered `html_body` without image placeholders. Prompt generation created `WechatMpImagePrompt` rows but did not insert their stable markers into the article, so generated `WechatMpAsset` records could not be embedded by the image backfill service.
+
+### Fix
+
+1. Prompt generation now inserts one stable `{{image:prompt-<id>}}` marker per prompt into `article.html_body`, directly after the matching rendered source section when possible and otherwise at the end of the article.
+2. Marker insertion is idempotent, so existing markers are never duplicated. Prompt regeneration retains the same prompt ID and marker.
+3. The image test now executes the real article -> prompt -> image flow; no test fixture manually injects a marker.
+4. Independent `WechatMpAsset` persistence, owner scoping, usage records, and the absence of XHS `IllustrationAsset` writes remain covered.
+
+### Verification
+
+```bash
+PYTHONPATH=. .venv/bin/pytest tests/backend/test_wechat_mp.py -k "prompt or image or asset" -q
+```
+
+Result: `12 passed, 13 deselected`.
+
+```bash
+PYTHONPATH=. .venv/bin/pytest tests/backend/test_wechat_mp.py -q
+```
+
+Result: `25 passed`.
