@@ -70,3 +70,27 @@ class WechatMpApiAdapter:
         except requests.RequestException as exc:
             raise WechatMpApiError("wechat draft add failed") from exc
         return self._checked_json(response, "wechat draft add failed")
+
+    def submit_publish(self, *, access_token: str, media_id: str) -> dict:
+        try:
+            response = requests.post(
+                f"{self.base_url}/cgi-bin/freepublish/submit",
+                params={"access_token": access_token},
+                json={"media_id": media_id},
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise WechatMpApiError("wechat publish submit failed") from exc
+        return self._checked_json(response, "wechat publish submit failed")
+
+    def get_publish_status(self, *, access_token: str, publish_id: str) -> dict:
+        try:
+            response = requests.post(
+                f"{self.base_url}/cgi-bin/freepublish/get",
+                params={"access_token": access_token},
+                json={"publish_id": publish_id},
+                timeout=30,
+            )
+        except requests.RequestException as exc:
+            raise WechatMpApiError("wechat publish status failed") from exc
+        return self._checked_json(response, "wechat publish status failed")

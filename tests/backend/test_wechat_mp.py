@@ -414,6 +414,136 @@ def test_sync_wechat_mp_draft_maps_api_errors_to_502(api_client, auth_headers, c
 
 
 @pytest.fixture
+def synced_wechat_article(api_client, auth_headers, created_wechat_article, created_wechat_account):
+    _, session_factory = api_client
+    from backend.app.models import User, WechatMpDraftSync
+
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        draft_sync = WechatMpDraftSync(
+            user_id=owner.id,
+            account_id=created_wechat_account.id,
+            article_id=created_wechat_article.id,
+            wechat_media_id="wechat_draft_media_id",
+            status="synced",
+            raw_response={"media_id": "wechat_draft_media_id"},
+        )
+        session.add(draft_sync)
+        session.commit()
+        return created_wechat_article
+    finally:
+        session.close()
+
+
+def test_submit_publish_job_requires_synced_draft_and_records_publish_id(api_client, auth_headers, synced_wechat_article, monkeypatch):
+    from backend.app.services import wechat_mp_publish_service as publish_service
+
+    class FakeAdapter:
+        def submit_publish(self, **kwargs):
+            return {"publish_id": "publish_001"}
+
+    monkeypatch.setattr(publish_service, "WechatMpApiAdapter", lambda: FakeAdapter())
+    client, _ = api_client
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/publish",
+        json={"confirm": True},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["publish_id"] == "publish_001"
+    assert data["status"] == "submitted"
+
+
+def test_submit_publish_job_schedules_without_calling_wechat(api_client, auth_headers, synced_wechat_article, monkeypatch):
+    from backend.app.services import wechat_mp_publish_service as publish_service
+
+    class FakeAdapter:
+        def submit_publish(self, **kwargs):
+            raise AssertionError("scheduled jobs must not be submitted immediately")
+
+    monkeypatch.setattr(publish_service, "WechatMpApiAdapter", lambda: FakeAdapter())
+    client, _ = api_client
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/publish",
+        json={"confirm": True, "scheduled_at": "2030-01-02T03:04:05"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["status"] == "scheduled"
+    assert response.json()["publish_id"] == ""
+
+
+def test_submit_publish_job_requires_confirmation(api_client, auth_headers, synced_wechat_article):
+    client, _ = api_client
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/publish",
+        json={"confirm": False},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+
+
+def test_poll_publish_job_maps_wechat_status_and_stores_response(api_client, auth_headers, synced_wechat_article, monkeypatch):
+    from backend.app.services import wechat_mp_publish_service as publish_service
+
+    class FakeAdapter:
+        def submit_publish(self, **kwargs):
+            return {"publish_id": "publish_001"}
+
+        def get_publish_status(self, **kwargs):
+            return {"publish_id": "publish_001", "publish_status": 0, "article_id": "article_001"}
+
+    monkeypatch.setattr(publish_service, "WechatMpApiAdapter", lambda: FakeAdapter())
+    client, _ = api_client
+    submitted = client.post(
+        f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/publish",
+        json={"confirm": True},
+        headers=auth_headers,
+    )
+    response = client.post(
+        f"/api/platforms/wechat-mp/publish-jobs/{submitted.json()['id']}/poll",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "published"
+    assert response.json()["raw_response"]["article_id"] == "article_001"
+
+
+def test_publish_routes_hide_foreign_article_and_map_api_failure_to_502(api_client, auth_headers, synced_wechat_article, monkeypatch):
+    from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiError
+    from backend.app.services import wechat_mp_publish_service as publish_service
+
+    class FailingAdapter:
+        def submit_publish(self, **kwargs):
+            raise WechatMpApiError("wechat publish submit failed", errcode=40001, payload={"errcode": 40001})
+
+    monkeypatch.setattr(publish_service, "WechatMpApiAdapter", lambda: FailingAdapter())
+    client, _ = api_client
+    other = client.post("/api/auth/register", json={"username": "publish-other", "password": "secret123"})
+    other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
+
+    foreign = client.post(
+        f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/publish",
+        json={"confirm": True},
+        headers=other_headers,
+    )
+    failed = client.post(
+        f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/publish",
+        json={"confirm": True},
+        headers=auth_headers,
+    )
+
+    assert foreign.status_code == 404
+    assert failed.status_code == 502
+
+
+@pytest.fixture
 def created_wechat_prompt(api_client, auth_headers, created_wechat_article):
     client, session_factory = api_client
     from backend.app.models import User, WechatMpArticle, WechatMpArticleSection, WechatMpImagePrompt
