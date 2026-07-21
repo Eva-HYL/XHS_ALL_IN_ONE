@@ -11,6 +11,17 @@ class WechatMpApiError(RuntimeError):
 class WechatMpApiAdapter:
     base_url = "https://api.weixin.qq.com"
 
+    def _checked_json(self, response: requests.Response, message: str) -> dict:
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise WechatMpApiError(message) from exc
+        if not isinstance(payload, dict):
+            raise WechatMpApiError(message, payload={})
+        if response.status_code >= 400 or "errcode" in payload:
+            raise WechatMpApiError(message, errcode=payload.get("errcode"), payload=payload)
+        return payload
+
     def get_access_token(self, *, app_id: str, app_secret: str) -> dict:
         try:
             response = requests.get(
@@ -18,16 +29,44 @@ class WechatMpApiAdapter:
                 params={"grant_type": "client_credential", "appid": app_id, "secret": app_secret},
                 timeout=20,
             )
-            payload = response.json()
         except (requests.RequestException, ValueError) as exc:
             raise WechatMpApiError("wechat access_token request failed") from exc
+        return self._checked_json(response, "wechat access_token request failed")
 
-        if not isinstance(payload, dict):
-            raise WechatMpApiError("wechat access_token request failed", payload={})
-        if response.status_code >= 400 or "errcode" in payload:
-            raise WechatMpApiError(
-                "wechat access_token request failed",
-                errcode=payload.get("errcode"),
-                payload=payload,
+    def upload_permanent_image(self, *, access_token: str, file_path: str) -> dict:
+        try:
+            with open(file_path, "rb") as image_file:
+                response = requests.post(
+                    f"{self.base_url}/cgi-bin/material/add_material",
+                    params={"access_token": access_token, "type": "image"},
+                    files={"media": image_file},
+                    timeout=60,
+                )
+        except (OSError, requests.RequestException) as exc:
+            raise WechatMpApiError("wechat permanent image upload failed") from exc
+        return self._checked_json(response, "wechat permanent image upload failed")
+
+    def upload_content_image(self, *, access_token: str, file_path: str) -> dict:
+        try:
+            with open(file_path, "rb") as image_file:
+                response = requests.post(
+                    f"{self.base_url}/cgi-bin/media/uploadimg",
+                    params={"access_token": access_token},
+                    files={"media": image_file},
+                    timeout=60,
+                )
+        except (OSError, requests.RequestException) as exc:
+            raise WechatMpApiError("wechat content image upload failed") from exc
+        return self._checked_json(response, "wechat content image upload failed")
+
+    def add_draft(self, *, access_token: str, article: dict) -> dict:
+        try:
+            response = requests.post(
+                f"{self.base_url}/cgi-bin/draft/add",
+                params={"access_token": access_token},
+                json={"articles": [article]},
+                timeout=30,
             )
-        return payload
+        except requests.RequestException as exc:
+            raise WechatMpApiError("wechat draft add failed") from exc
+        return self._checked_json(response, "wechat draft add failed")

@@ -163,6 +163,165 @@ def created_wechat_article(api_client, auth_headers):
 
 
 @pytest.fixture
+def created_wechat_account(api_client, auth_headers):
+    client, session_factory = api_client
+    response = client.post(
+        "/api/platforms/wechat-mp/accounts",
+        json={"name": "测试公众号", "app_id": "wx-test", "app_secret": "secret-value"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 201
+    from backend.app.models import WechatMpAccount
+
+    session = session_factory()
+    try:
+        account = session.get(WechatMpAccount, response.json()["id"])
+        account.token_cache = {"access_token": "cached-token"}
+        session.commit()
+    finally:
+        session.close()
+    return type("WechatMpAccountFixture", (), {"id": response.json()["id"]})()
+
+
+@pytest.fixture
+def created_wechat_article_with_image(api_client, auth_headers, created_wechat_article, tmp_path):
+    _, session_factory = api_client
+    from backend.app.models import User, WechatMpAsset
+
+    image_path = tmp_path / "wechat-inline.png"
+    image_path.write_bytes(b"fake-image")
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        cover = WechatMpAsset(
+            user_id=owner.id,
+            article_id=created_wechat_article.id,
+            role="cover",
+            file_path=str(image_path),
+            public_url="/api/files/media/wechat-cover.png",
+            prompt="测试封面",
+            skill_name="xiaomao-illustrations",
+            model_name="test-model",
+            status="generated",
+        )
+        asset = WechatMpAsset(
+            user_id=owner.id,
+            article_id=created_wechat_article.id,
+            role="inline_illustration",
+            file_path=str(image_path),
+            public_url="/api/files/media/wechat-inline.png",
+            prompt="测试插图",
+            skill_name="xiaomao-illustrations",
+            model_name="test-model",
+            status="generated",
+        )
+        article = session.get(type(created_wechat_article), created_wechat_article.id)
+        article.html_body = '<p><img src="/api/files/media/wechat-inline.png" /></p>'
+        session.add(cover)
+        session.add(asset)
+        session.commit()
+        return created_wechat_article
+    finally:
+        session.close()
+
+
+def test_sync_wechat_mp_article_creates_draft_sync(api_client, auth_headers, created_wechat_article_with_image, created_wechat_account, monkeypatch):
+    from backend.app.services import wechat_mp_draft_service as draft_service
+    from backend.app.models import WechatMpArticle, WechatMpDraftSync
+
+    client, _ = api_client
+    calls = []
+
+    class FakeAdapter:
+        def upload_permanent_image(self, **kwargs):
+            calls.append(("cover", kwargs))
+            return {"media_id": "thumb_media_id"}
+
+        def upload_content_image(self, **kwargs):
+            calls.append(("inline", kwargs))
+            return {"url": "https://mmbiz.qpic.cn/fake.png"}
+
+        def add_draft(self, **kwargs):
+            calls.append(("draft", kwargs))
+            return {"media_id": "wechat_draft_media_id"}
+
+    monkeypatch.setattr(draft_service, "WechatMpApiAdapter", lambda: FakeAdapter())
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/sync-draft",
+        json={"account_id": created_wechat_account.id},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["wechat_media_id"] == "wechat_draft_media_id"
+    assert data["status"] == "synced"
+    assert [name for name, _ in calls] == ["cover", "inline", "draft"]
+    assert calls[-1][1]["article"]["content"] == '<p><img src="https://mmbiz.qpic.cn/fake.png" /></p>'
+
+    _, session_factory = api_client
+    session = session_factory()
+    try:
+        assert session.query(WechatMpDraftSync).filter_by(article_id=created_wechat_article_with_image.id).count() == 1
+        assert session.get(WechatMpArticle, created_wechat_article_with_image.id).status == "synced_to_wechat"
+    finally:
+        session.close()
+
+
+def test_sync_wechat_mp_draft_hides_foreign_article_and_account(api_client, auth_headers, created_wechat_article_with_image, created_wechat_account):
+    client, _ = api_client
+    other = client.post("/api/auth/register", json={"username": "wechat-other", "password": "secret123"})
+    assert other.status_code == 200
+    other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
+
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/sync-draft",
+        json={"account_id": created_wechat_account.id},
+        headers=other_headers,
+    )
+
+    assert response.status_code == 404
+
+    foreign_account = client.post(
+        "/api/platforms/wechat-mp/accounts",
+        json={"name": "其他公众号", "app_id": "wx-other", "app_secret": "secret-value"},
+        headers=other_headers,
+    )
+    assert foreign_account.status_code == 201
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/sync-draft",
+        json={"account_id": foreign_account.json()["id"]},
+        headers=auth_headers,
+    )
+    assert response.status_code == 404
+
+
+def test_sync_wechat_mp_draft_maps_api_errors_to_502(api_client, auth_headers, created_wechat_article_with_image, created_wechat_account, monkeypatch):
+    from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiError
+    from backend.app.services import wechat_mp_draft_service as draft_service
+
+    client, _ = api_client
+
+    class FailingAdapter:
+        def upload_permanent_image(self, **kwargs):
+            raise WechatMpApiError("wechat permanent image upload failed", errcode=40001, payload={"errcode": 40001, "errmsg": "invalid credential"})
+
+    monkeypatch.setattr(draft_service, "WechatMpApiAdapter", lambda: FailingAdapter())
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/sync-draft",
+        json={"account_id": created_wechat_account.id},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == {
+        "message": "WeChat draft sync failed",
+        "errcode": 40001,
+        "payload": {"errcode": 40001, "errmsg": "invalid credential"},
+    }
+
+
+@pytest.fixture
 def created_wechat_prompt(api_client, auth_headers, created_wechat_article):
     client, session_factory = api_client
     from backend.app.models import User, WechatMpArticle, WechatMpArticleSection, WechatMpImagePrompt
