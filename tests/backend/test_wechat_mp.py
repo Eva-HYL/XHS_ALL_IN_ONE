@@ -162,6 +162,127 @@ def created_wechat_article(api_client, auth_headers):
         session.close()
 
 
+@pytest.fixture
+def created_wechat_prompt(api_client, auth_headers, created_wechat_article):
+    client, session_factory = api_client
+    from backend.app.models import User, WechatMpArticle, WechatMpArticleSection, WechatMpImagePrompt
+
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        article = session.get(WechatMpArticle, created_wechat_article.id)
+        section = WechatMpArticleSection(
+            user_id=owner.id,
+            article_id=article.id,
+            section_index=0,
+            summary="先完成最小动作",
+            source_excerpt="先做最小动作。",
+        )
+        session.add(section)
+        session.flush()
+        prompt = WechatMpImagePrompt(
+            user_id=owner.id,
+            article_id=article.id,
+            section_id=section.id,
+            skill_name="xiaomao-illustrations",
+            prompt="一只小猫开始最小动作",
+            editable_prompt="一只小猫开始最小动作",
+            status="prompt_ready",
+        )
+        session.add(prompt)
+        session.flush()
+        article.html_body = f'<p>开头</p>{{{{image:prompt-{prompt.id}}}}}<p>结尾</p>'
+        article.status = "prompts_ready"
+        session.commit()
+        session.refresh(prompt)
+        return prompt
+    finally:
+        session.close()
+
+
+def test_generate_wechat_mp_image_saves_only_wechat_asset_and_backfills_article(api_client, auth_headers, created_wechat_prompt, monkeypatch):
+    from backend.app.models import IllustrationAsset, UsageRecord, WechatMpArticle, WechatMpAsset, WechatMpImagePrompt
+    from backend.app.services import wechat_mp_image_service as image_service
+
+    def fake_generate(*, prompt, model_name, size):
+        assert prompt == "一只小猫开始最小动作"
+        assert model_name == "doubao-seedream-4-0-250828"
+        assert size == "16:9"
+        return {
+            "file_path": "/api/files/media/wechat-mp-u1-p1.png",
+            "public_url": "/api/files/media/wechat-mp-u1-p1.png",
+            "provider_response": {"ok": True},
+        }
+
+    monkeypatch.setattr(image_service, "_call_image_model", fake_generate)
+    client, session_factory = api_client
+    response = client.post(
+        f"/api/platforms/wechat-mp/prompts/{created_wechat_prompt.id}/image",
+        json={"image_model": "doubao-seedream-4-0-250828", "size": "16:9"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["prompt_id"] == created_wechat_prompt.id
+    session = session_factory()
+    try:
+        assert session.query(WechatMpAsset).count() == 1
+        assert session.query(IllustrationAsset).count() == 0
+        assert session.get(WechatMpImagePrompt, created_wechat_prompt.id).status == "generated"
+        article = session.get(WechatMpArticle, created_wechat_prompt.article_id)
+        assert 'src="/api/files/media/wechat-mp-u1-p1.png"' in article.html_body
+        assert "{{image:prompt-" not in article.html_body
+        assert article.status == "images_ready"
+        usage = session.query(UsageRecord).filter_by(step="image_gen", resource_id=article.id).one()
+        assert usage.platform == "wechat_mp"
+        assert usage.resource_type == "wechat_mp_article"
+        assert usage.image_count == 1
+    finally:
+        session.close()
+
+
+def test_wechat_mp_assets_are_owner_scoped_and_delete_local_media(api_client, auth_headers, created_wechat_prompt, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from backend.app.models import User, WechatMpAsset
+    from backend.app.api.platforms.wechat_mp import assets as assets_api
+
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    local_file = media_dir / "wechat-mp-u1-delete.png"
+    local_file.write_bytes(b"image")
+    monkeypatch.setattr(assets_api, "get_settings", lambda: SimpleNamespace(storage_dir=tmp_path))
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        asset = WechatMpAsset(
+            user_id=owner.id,
+            article_id=created_wechat_prompt.article_id,
+            prompt_id=created_wechat_prompt.id,
+            role="inline_illustration",
+            file_path=str(local_file),
+            public_url="/api/files/media/wechat-mp-u1-delete.png",
+            prompt="一只小猫",
+            skill_name="xiaomao-illustrations",
+            model_name="doubao-seedream-4-0-250828",
+        )
+        session.add(asset)
+        session.commit()
+        asset_id = asset.id
+    finally:
+        session.close()
+
+    assert client.get("/api/platforms/wechat-mp/assets", headers=auth_headers).json()["items"][0]["id"] == asset_id
+    other = client.post("/api/auth/register", json={"username": "wechat-asset-other", "password": "secret123"})
+    other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
+    assert client.get("/api/platforms/wechat-mp/assets", headers=other_headers).json()["items"] == []
+    assert client.delete(f"/api/platforms/wechat-mp/assets/{asset_id}", headers=other_headers).status_code == 404
+
+    deleted = client.delete(f"/api/platforms/wechat-mp/assets/{asset_id}", headers=auth_headers)
+    assert deleted.status_code == 200
+    assert not local_file.exists()
 def _create_wechat_account(client, headers):
     response = client.post(
         "/api/platforms/wechat-mp/accounts",

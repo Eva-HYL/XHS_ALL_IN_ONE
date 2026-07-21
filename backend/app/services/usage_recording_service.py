@@ -55,12 +55,19 @@ def record_image_usage(
     step: str,
     model: str,
     image_count: int,
+    platform: str | None = None,
+    resource_type: str | None = None,
+    resource_id: int | None = None,
+    commit: bool = True,
 ) -> UsageRecord:
     cost = calculate_image_cost(model, image_count)
     snapshot = get_pricing()["image_models"][model]
     rec = UsageRecord(
         user_id=user_id,
         pipeline_run_id=pipeline_run_id,
+        platform=platform,
+        resource_type=resource_type,
+        resource_id=resource_id,
         step=step,
         model=model,
         input_tokens=None,
@@ -70,6 +77,7 @@ def record_image_usage(
         cost_yuan=cost,
     )
     db.add(rec)
-    db.commit()
-    db.refresh(rec)
+    if commit:
+        db.commit()
+        db.refresh(rec)
     return rec

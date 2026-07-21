@@ -6,13 +6,15 @@ from sqlalchemy.orm import Session
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
 from backend.app.models import User, WechatMpArticle, WechatMpImagePrompt
-from backend.app.schemas.wechat_mp import WechatMpArticleCreateRequest, WechatMpArticleResponse, WechatMpImagePromptResponse
+from backend.app.schemas.wechat_mp import WechatMpArticleCreateRequest, WechatMpArticleResponse, WechatMpAssetResponse, WechatMpImagePromptResponse
+from backend.app.services.wechat_mp_image_service import generate_asset_for_prompt
 from backend.app.services.wechat_mp_image_prompt_service import generate_image_prompts, regenerate_image_prompt
 from backend.app.services.wechat_mp_layout_service import render_wechat_html
 from backend.app.services.wechat_mp_writer_service import generate_wechat_article
 
 
 router = APIRouter(prefix="/platforms/wechat-mp/articles", tags=["wechat-mp-articles"])
+image_router = APIRouter(prefix="/platforms/wechat-mp", tags=["wechat-mp-assets"])
 _WRITER_TEXT_MODEL = "qwen3.7-plus"
 _PROMPT_TEXT_MODEL = "qwen3.7-plus"
 
@@ -31,6 +33,11 @@ class WechatMpPromptGenerateRequest(BaseModel):
 
 class WechatMpPromptUpdateRequest(BaseModel):
     editable_prompt: str = Field(min_length=1)
+
+
+class WechatMpImageGenerateRequest(BaseModel):
+    image_model: str = Field(min_length=1, max_length=128)
+    size: str = Field(default="16:9", min_length=1, max_length=32)
 
 
 def _get_owned_article(db: Session, current_user: User, article_id: int) -> WechatMpArticle:
@@ -114,6 +121,27 @@ def update_prompt(
     db.commit()
     db.refresh(prompt)
     return prompt
+
+
+@image_router.post("/prompts/{prompt_id}/image", response_model=WechatMpAssetResponse, status_code=status.HTTP_201_CREATED)
+def generate_image(
+    prompt_id: int,
+    payload: WechatMpImageGenerateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        return generate_asset_for_prompt(
+            db=db,
+            user_id=current_user.id,
+            prompt_id=prompt_id,
+            image_model=payload.image_model,
+            size=payload.size,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 
 @router.post("/{article_id}/prompts/{prompt_id}/regenerate", response_model=WechatMpImagePromptResponse)
