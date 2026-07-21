@@ -11,6 +11,15 @@ from backend.app.models.platform_account import AccountCookieVersion, PlatformAc
 from backend.app.models.publish import PublishAsset, PublishJob
 from backend.app.models.task import Task
 from backend.app.models.user import User
+from backend.app.models.wechat_mp import (
+    WechatMpAccount,
+    WechatMpArticle,
+    WechatMpArticleSection,
+    WechatMpAsset,
+    WechatMpDraftSync,
+    WechatMpImagePrompt,
+    WechatMpPublishJob,
+)
 
 __all__ = [
     "AccountCookieVersion",
@@ -39,5 +48,12 @@ __all__ = [
     "Task",
     "UsageRecord",
     "User",
+    "WechatMpAccount",
+    "WechatMpArticle",
+    "WechatMpArticleSection",
+    "WechatMpAsset",
+    "WechatMpDraftSync",
+    "WechatMpImagePrompt",
+    "WechatMpPublishJob",
     "note_tags",
 ]
