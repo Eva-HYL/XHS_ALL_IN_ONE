@@ -150,3 +150,22 @@ The current environment still uses Node.js `18.15.0`; Vite 7 warns that Node `20
 ### Concern
 
 None.
+
+## Seventh Final Fix
+
+**Status:** DONE
+
+### Findings Resolved
+
+1. Scheduled WeChat MP publish cancellation now uses one conditional SQL update scoped to the owner and job ID and guarded by `status = "scheduled"`. A job claimed by the due runner as `pending` cannot be cancelled or have its active key cleared; a zero-row update returns the existing non-scheduled-job validation error.
+
+### Verification
+
+- Focused scheduled-cancel regressions: `2 passed`.
+- WeChat MP backend: `84 passed`.
+- Full backend: `231 passed`.
+- Static checks: `git diff --check` and Python module compilation passed.
+
+### Concern
+
+None.

@@ -243,18 +243,23 @@ def run_due_wechat_mp_publish_jobs_once() -> dict:
 
 
 def cancel_publish_job(db: Session, user_id: int, publish_job_id: int) -> WechatMpPublishJob:
+    cancelled = db.execute(
+        update(WechatMpPublishJob)
+        .where(
+            WechatMpPublishJob.id == publish_job_id,
+            WechatMpPublishJob.user_id == user_id,
+            WechatMpPublishJob.status == "scheduled",
+        )
+        .values(status="cancelled", active_key=None)
+    )
+    if cancelled.rowcount != 1:
+        raise WechatMpPublishValidationError("Only scheduled WeChat MP publish jobs can be cancelled")
+    db.commit()
     job = db.scalar(select(WechatMpPublishJob).where(
         WechatMpPublishJob.id == publish_job_id,
         WechatMpPublishJob.user_id == user_id,
     ))
-    if job is None:
-        raise LookupError("WeChat MP publish job not found")
-    if job.status != "scheduled":
-        raise WechatMpPublishValidationError("Only scheduled WeChat MP publish jobs can be cancelled")
-    job.status = "cancelled"
-    job.active_key = None
-    db.commit()
-    db.refresh(job)
+    assert job is not None
     return job
 
 

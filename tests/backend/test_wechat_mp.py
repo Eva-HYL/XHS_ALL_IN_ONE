@@ -2008,6 +2008,47 @@ def test_scheduled_publish_can_be_cancelled(api_client, auth_headers, synced_wec
     assert cancelled.json()["status"] == "cancelled"
 
 
+def test_cancelling_job_claimed_by_due_runner_does_not_clear_active_state(
+    api_client, auth_headers, synced_wechat_article, monkeypatch
+):
+    from backend.app.models import WechatMpPublishJob
+    from backend.app.services import wechat_mp_publish_service as publish_service
+
+    client, session_factory = api_client
+    scheduled = client.post(
+        f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/publish",
+        json={"confirm": True, "scheduled_at": "2030-01-02T03:04:05"}, headers=auth_headers,
+    )
+    assert scheduled.status_code == 201
+
+    session = session_factory()
+    try:
+        job = session.get(WechatMpPublishJob, scheduled.json()["id"])
+        assert job is not None
+        active_key = job.active_key
+        execute = session.execute
+
+        def claim_before_cancel_update(statement, *args, **kwargs):
+            if statement.is_update and statement.table.name == "wechat_mp_publish_jobs":
+                job.status = "pending"
+                session.flush()
+            return execute(statement, *args, **kwargs)
+
+        monkeypatch.setattr(session, "execute", claim_before_cancel_update)
+        with pytest.raises(
+            publish_service.WechatMpPublishValidationError,
+            match="Only scheduled WeChat MP publish jobs can be cancelled",
+        ):
+            publish_service.cancel_publish_job(session, job.user_id, job.id)
+
+        session.expire_all()
+        persisted = session.get(WechatMpPublishJob, job.id)
+        assert persisted.status == "pending"
+        assert persisted.active_key == active_key
+    finally:
+        session.close()
+
+
 def test_wechat_mp_due_runner_is_registered_with_scheduler():
     from backend.app.services.scheduler_service import build_wechat_mp_publish_scheduler
 
