@@ -174,7 +174,7 @@ export function WechatMpWriterPage() {
     try {
       setPrompts(await generateWechatMpPrompts(article.id, skill));
       setArticle(await fetchWechatMpArticle(article.id));
-      setNotice("配图提示词已生成。none 模式会跳过正文配图，但仍可生成封面。");
+      setNotice("配图提示词已生成。none 模式保留可编辑提示词，但不会嵌入正文或生成正文图片。");
     } catch {
       setError("提示词生成失败。");
     } finally {
@@ -187,7 +187,10 @@ export function WechatMpWriterPage() {
       const updated = await updateWechatMpPrompt(prompt.article_id, prompt.id, prompt.editable_prompt);
       setPrompts((items) => items.map((item) => item.id === updated.id ? updated : item));
       setArticle(await fetchWechatMpArticle(prompt.article_id));
-      setNotice("提示词已保存；旧配图已从正文预览移除，可重新生成。");
+      setNotice(prompt.skill_name === "none"
+        ? "提示词已保存；none 模式不会将提示词或图片嵌入正文。"
+        : "提示词已保存；旧配图已从正文预览移除，可重新生成。"
+      );
     } catch {
       setError("提示词保存失败。");
     }
@@ -282,8 +285,8 @@ export function WechatMpWriterPage() {
       </Row>
 
       <Card title="4. 生成配图提示词" style={{ marginTop: 16 }}>
-        <Paragraph>当前技能：<Text code>{skill}</Text>。<Text code>none</Text> 只跳过正文插画，公众号封面仍可生成。</Paragraph>
-        <Paragraph type="secondary">提示词预估：按文本模型 token 计费；选择 <Text code>none</Text> 时为 ¥0。</Paragraph>
+        <Paragraph>当前技能：<Text code>{skill}</Text>。<Text code>none</Text> 仍生成可编辑提示词，但不嵌入正文、不生成正文图片；公众号封面仍可生成。</Paragraph>
+        <Paragraph type="secondary">提示词预估：所有技能均按文本模型 token 计费；<Text code>none</Text> 仅免去正文图片生成费用。</Paragraph>
         <Button type="primary" icon={<PictureOutlined />} loading={busy} onClick={() => void makePrompts()}>重新生成提示词</Button>
       </Card>
 
@@ -292,13 +295,13 @@ export function WechatMpWriterPage() {
           <Select placeholder="使用后端默认图片模型" allowClear value={imageModel} onChange={setImageModel} options={imageModels.map((model) => ({ value: model.model_name, label: `${model.name}${model.is_default ? "（默认）" : ""}` }))} />
           <Text type="secondary">{estimatedCost}；执行后会写入上方累计实际费用。</Text>
           <Button type="primary" icon={<PictureOutlined />} loading={busy} onClick={() => void generateCover()}>生成 16:9 公众号封面</Button>
-          {prompts.length === 0 ? <Empty description={skill === "none" ? "none 模式不生成正文配图提示词" : "提示词生成后在此编辑并生图"} /> : prompts.map((prompt) =>
+          {prompts.length === 0 ? <Empty description="提示词生成后在此编辑；非 none 技能可继续生图" /> : prompts.map((prompt) =>
             <Card key={prompt.id} size="small" title={`段落 #${prompt.section_id}`} extra={<Tag>{prompt.status}</Tag>}>
               <TextArea value={prompt.editable_prompt} onChange={(event) => setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, editable_prompt: event.target.value } : item))} rows={3} />
               <Space style={{ marginTop: 8 }} wrap>
                 <Button icon={<SaveOutlined />} onClick={() => void savePrompt(prompt)}>保存提示词</Button>
                 <Button onClick={() => void regenerate(prompt)} loading={busy}>重新生成</Button>
-                <Button type="primary" icon={<PictureOutlined />} disabled={skill === "none"} loading={busy} onClick={() => void generateImage(prompt)}>生成正文图片</Button>
+                <Button type="primary" icon={<PictureOutlined />} disabled={prompt.skill_name === "none"} loading={busy} onClick={() => void generateImage(prompt)}>生成正文图片</Button>
               </Space>
             </Card>
           )}

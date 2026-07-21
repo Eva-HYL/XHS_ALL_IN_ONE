@@ -1582,8 +1582,104 @@ def test_failed_draft_sync_is_journaled(api_client, auth_headers, created_wechat
     try:
         record = session.query(WechatMpDraftSync).filter_by(article_id=created_wechat_article_with_image.id).one()
         assert record.status == "failed"
+        assert record.active_key is None
         assert record.raw_response["errcode"] == 40001
         assert record.error_message
+    finally:
+        session.close()
+
+
+@pytest.mark.parametrize("outcome", ["timeout", "malformed"])
+def test_ambiguous_draft_add_keeps_guard_and_prevents_duplicate_retry(
+    api_client, auth_headers, created_wechat_article_with_image, created_wechat_account,
+    monkeypatch, outcome,
+):
+    from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiError
+    from backend.app.models import WechatMpDraftSync
+    from backend.app.services import wechat_mp_draft_service as draft_service
+
+    calls = []
+
+    class AmbiguousAdapter:
+        def upload_permanent_image(self, **kwargs):
+            return {"media_id": "thumb"}
+
+        def upload_content_image(self, **kwargs):
+            return {"url": "https://mmbiz.qpic.cn/content.png"}
+
+        def add_draft(self, **kwargs):
+            calls.append(kwargs)
+            if outcome == "timeout":
+                raise WechatMpApiError("wechat draft add timed out")
+            return {}
+
+    monkeypatch.setattr(draft_service, "WechatMpApiAdapter", lambda: AmbiguousAdapter())
+    client, session_factory = api_client
+    url = f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/sync-draft"
+    payload = {"account_id": created_wechat_account.id}
+
+    first = client.post(url, json=payload, headers=auth_headers)
+    repeated = client.post(url, json=payload, headers=auth_headers)
+
+    assert first.status_code == 502
+    assert repeated.status_code == 400
+    assert len(calls) == 1
+    session = session_factory()
+    try:
+        record = session.query(WechatMpDraftSync).filter_by(
+            article_id=created_wechat_article_with_image.id,
+        ).one()
+        assert record.status == "pending"
+        assert record.active_key == (
+            f"account:{created_wechat_account.id}:article:"
+            f"{created_wechat_article_with_image.id}:revision:{record.article_revision}"
+        )
+    finally:
+        session.close()
+
+
+def test_pre_draft_upload_failure_releases_guard_and_allows_retry(
+    api_client, auth_headers, created_wechat_article_with_image, created_wechat_account, monkeypatch
+):
+    from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiError
+    from backend.app.models import WechatMpDraftSync
+    from backend.app.services import wechat_mp_draft_service as draft_service
+
+    upload_attempts = 0
+    draft_calls = []
+
+    class RetryableAdapter:
+        def upload_permanent_image(self, **kwargs):
+            nonlocal upload_attempts
+            upload_attempts += 1
+            if upload_attempts == 1:
+                raise WechatMpApiError("cover upload timed out")
+            return {"media_id": "thumb"}
+
+        def upload_content_image(self, **kwargs):
+            return {"url": "https://mmbiz.qpic.cn/content.png"}
+
+        def add_draft(self, **kwargs):
+            draft_calls.append(kwargs)
+            return {"media_id": "retry-draft"}
+
+    monkeypatch.setattr(draft_service, "WechatMpApiAdapter", lambda: RetryableAdapter())
+    client, session_factory = api_client
+    url = f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/sync-draft"
+    payload = {"account_id": created_wechat_account.id}
+
+    first = client.post(url, json=payload, headers=auth_headers)
+    retried = client.post(url, json=payload, headers=auth_headers)
+
+    assert first.status_code == 502
+    assert retried.status_code == 201
+    assert len(draft_calls) == 1
+    session = session_factory()
+    try:
+        records = session.query(WechatMpDraftSync).order_by(WechatMpDraftSync.id).all()
+        assert [record.status for record in records] == ["failed", "synced"]
+        assert records[0].active_key is None
+        assert records[1].active_key is None
     finally:
         session.close()
 
@@ -1643,8 +1739,118 @@ def test_publish_timeout_keeps_active_guard_and_prevents_duplicate_retry(
         job = session.query(WechatMpPublishJob).filter_by(article_id=synced_wechat_article.id).one()
         assert repeated.json()["id"] == job.id
         assert job.status == "pending"
-        assert job.active_key == f"draft:{job.draft_sync_id}"
+        assert job.active_key == (
+            f"account:{job.account_id}:article:{job.article_id}:revision:1"
+        )
         assert "timed out" in job.error_message
+    finally:
+        session.close()
+
+
+def test_publish_timeout_guard_survives_resync_of_same_revision(
+    api_client, auth_headers, created_wechat_article_with_image, created_wechat_account, monkeypatch
+):
+    from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiError
+    from backend.app.services import wechat_mp_draft_service as draft_service
+    from backend.app.services import wechat_mp_publish_service as publish_service
+
+    draft_ids = iter(("draft-a", "draft-b"))
+
+    class DraftAdapter:
+        def upload_permanent_image(self, **kwargs):
+            return {"media_id": "thumb"}
+
+        def upload_content_image(self, **kwargs):
+            return {"url": "https://mmbiz.qpic.cn/content.png"}
+
+        def add_draft(self, **kwargs):
+            return {"media_id": next(draft_ids)}
+
+    submit_calls = []
+
+    class PublishAdapter:
+        def submit_publish(self, **kwargs):
+            submit_calls.append(kwargs)
+            raise WechatMpApiError("wechat publish submit timed out")
+
+    monkeypatch.setattr(draft_service, "WechatMpApiAdapter", lambda: DraftAdapter())
+    monkeypatch.setattr(publish_service, "WechatMpApiAdapter", lambda: PublishAdapter())
+    client, session_factory = api_client
+    sync_url = f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/sync-draft"
+    publish_url = f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/publish"
+
+    first_sync = client.post(
+        sync_url, json={"account_id": created_wechat_account.id}, headers=auth_headers,
+    )
+    first_publish = client.post(publish_url, json={"confirm": True}, headers=auth_headers)
+    session = session_factory()
+    try:
+        from backend.app.models import WechatMpPublishJob
+        guarded_job_id = session.query(WechatMpPublishJob.id).scalar()
+    finally:
+        session.close()
+    second_sync = client.post(
+        sync_url, json={"account_id": created_wechat_account.id}, headers=auth_headers,
+    )
+    second_publish = client.post(publish_url, json={"confirm": True}, headers=auth_headers)
+
+    assert first_sync.status_code == 201
+    assert first_publish.status_code == 502
+    assert second_sync.status_code == 201
+    assert second_sync.json()["id"] != first_sync.json()["id"]
+    assert second_publish.status_code == 201
+    assert second_publish.json()["id"] == guarded_job_id
+    assert len(submit_calls) == 1
+
+
+@pytest.mark.parametrize("token_outcome", ["timeout", "malformed"])
+def test_publish_token_failure_is_definite_and_allows_retry(
+    api_client, auth_headers, synced_wechat_article, monkeypatch, token_outcome
+):
+    from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiError
+    from backend.app.models import WechatMpAccount, WechatMpPublishJob
+    from backend.app.services import wechat_mp_publish_service as publish_service
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        account = session.query(WechatMpAccount).one()
+        account.token_cache = None
+        session.commit()
+    finally:
+        session.close()
+
+    token_attempts = 0
+    submit_calls = []
+
+    class TokenRetryAdapter:
+        def get_access_token(self, **kwargs):
+            nonlocal token_attempts
+            token_attempts += 1
+            if token_attempts == 1:
+                if token_outcome == "timeout":
+                    raise WechatMpApiError("wechat access_token request timed out")
+                return {}
+            return {"access_token": "retry-token", "expires_in": 7200}
+
+        def submit_publish(self, **kwargs):
+            submit_calls.append(kwargs)
+            return {"publish_id": "retry-publish"}
+
+    monkeypatch.setattr(publish_service, "WechatMpApiAdapter", lambda: TokenRetryAdapter())
+    url = f"/api/platforms/wechat-mp/articles/{synced_wechat_article.id}/publish"
+
+    first = client.post(url, json={"confirm": True}, headers=auth_headers)
+    retried = client.post(url, json={"confirm": True}, headers=auth_headers)
+
+    assert first.status_code == 502
+    assert retried.status_code == 201
+    assert len(submit_calls) == 1
+    session = session_factory()
+    try:
+        jobs = session.query(WechatMpPublishJob).order_by(WechatMpPublishJob.id).all()
+        assert [job.status for job in jobs] == ["failed", "submitted"]
+        assert jobs[0].active_key is None
     finally:
         session.close()
 
@@ -1828,7 +2034,9 @@ def test_repeated_scheduled_publish_returns_existing_job_and_lists_it(
     session = session_factory()
     try:
         job = session.query(WechatMpPublishJob).one()
-        assert job.active_key == f"draft:{job.draft_sync_id}"
+        assert job.active_key == (
+            f"account:{job.account_id}:article:{job.article_id}:revision:1"
+        )
     finally:
         session.close()
 
@@ -2005,7 +2213,7 @@ def test_none_skill_allows_cover_but_still_uses_normalized_doubao_size(
     assert captured["size"] == "2732x1536"
 
 
-def test_none_workflow_skips_inline_prompts_and_syncs_with_cover(
+def test_none_workflow_creates_editable_skipped_prompts_without_markers_and_syncs(
     api_client, auth_headers, created_wechat_article, created_wechat_account, monkeypatch, tmp_path
 ):
     from backend.app.services import wechat_mp_draft_service as draft_service
@@ -2014,8 +2222,13 @@ def test_none_workflow_skips_inline_prompts_and_syncs_with_cover(
 
     monkeypatch.setattr(
         prompt_service,
-        "generate_article_shotlist",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("none must skip shotlisting")),
+        "_call_prompt_model",
+        lambda **kwargs: {
+            "prompt": f"可编辑提示词：{kwargs['section_summary']}",
+            "input_tokens": 12,
+            "output_tokens": 24,
+            "model_name": kwargs["model_name"],
+        },
     )
     client, _ = api_client
     updated = client.patch(
@@ -2030,10 +2243,43 @@ def test_none_workflow_skips_inline_prompts_and_syncs_with_cover(
         headers=auth_headers,
     )
     assert prompts.status_code == 201
-    assert prompts.json() == []
+    assert prompts.json()
+    assert all(prompt["skill_name"] == "none" for prompt in prompts.json())
+    assert all(prompt["status"] == "skipped" for prompt in prompts.json())
     assert "{{image:" not in client.get(
         f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers,
     ).json()["html_body"]
+
+    prompt_id = prompts.json()[0]["id"]
+    edited = client.patch(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts/{prompt_id}",
+        json={"editable_prompt": "编辑后的 none 提示词"},
+        headers=auth_headers,
+    )
+    assert edited.status_code == 200
+    assert edited.json()["editable_prompt"] == "编辑后的 none 提示词"
+    assert edited.json()["status"] == "skipped"
+    assert "{{image:" not in client.get(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers,
+    ).json()["html_body"]
+
+    regenerated = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts/{prompt_id}/regenerate",
+        headers=auth_headers,
+    )
+    assert regenerated.status_code == 200
+    assert regenerated.json()["status"] == "skipped"
+    assert "{{image:" not in client.get(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers,
+    ).json()["html_body"]
+
+    image = client.post(
+        f"/api/platforms/wechat-mp/prompts/{prompt_id}/image",
+        json={"image_model": "doubao-seedream-4-0-250828"},
+        headers=auth_headers,
+    )
+    assert image.status_code == 400
+    assert "none" in str(image.json()["detail"]).lower()
 
     cover_path = tmp_path / "none-cover.png"
     cover_path.write_bytes(b"cover")

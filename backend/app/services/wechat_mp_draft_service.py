@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiAdapter
@@ -14,7 +15,6 @@ from backend.app.services.wechat_mp_token_service import get_cached_access_token
 
 class WechatMpDraftValidationError(ValueError):
     pass
-
 
 
 def _get_access_token(account: WechatMpAccount, adapter: WechatMpApiAdapter) -> str:
@@ -28,6 +28,25 @@ def _get_access_token(account: WechatMpAccount, adapter: WechatMpApiAdapter) -> 
         raise ValueError("WeChat MP access token response is missing access_token")
     account.token_cache = normalize_token_cache(payload)
     return token
+
+
+def _draft_active_key(account_id: int, article_id: int, article_revision: int) -> str:
+    return f"account:{account_id}:article:{article_id}:revision:{article_revision}"
+
+
+def _record_draft_failure(
+    db: Session,
+    draft_sync: WechatMpDraftSync,
+    exc: Exception,
+    *,
+    indeterminate: bool,
+) -> None:
+    draft_sync.status = "pending" if indeterminate else "failed"
+    if not indeterminate:
+        draft_sync.active_key = None
+    draft_sync.raw_response = exc.payload if isinstance(exc, WechatMpApiError) else {"error": str(exc)}
+    draft_sync.error_message = str(exc)
+    db.commit()
 
 
 def sync_article_to_wechat_draft(db: Session, user_id: int, article_id: int, account_id: int) -> WechatMpDraftSync:
@@ -55,10 +74,9 @@ def sync_article_to_wechat_draft(db: Session, user_id: int, article_id: int, acc
     for asset in assets:
         if (asset.role == "cover" or asset.public_url in article.html_body) and not Path(asset.file_path).is_file():
             raise WechatMpDraftValidationError("WeChat MP article contains missing local asset files")
+    active_key = _draft_active_key(account.id, article.id, article.revision)
     existing_pending = db.scalar(select(WechatMpDraftSync).where(
-        WechatMpDraftSync.article_id == article.id,
-        WechatMpDraftSync.account_id == account.id,
-        WechatMpDraftSync.article_revision == article.revision,
+        WechatMpDraftSync.active_key == active_key,
         WechatMpDraftSync.status == "pending",
     ))
     if existing_pending is not None:
@@ -70,11 +88,22 @@ def sync_article_to_wechat_draft(db: Session, user_id: int, article_id: int, acc
         article_id=article.id,
         article_revision=article.revision,
         wechat_media_id="",
+        active_key=active_key,
         status="pending",
         raw_response={},
     )
     db.add(draft_sync)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing_pending = db.scalar(select(WechatMpDraftSync).where(
+            WechatMpDraftSync.active_key == active_key,
+            WechatMpDraftSync.status == "pending",
+        ))
+        if existing_pending is None:
+            raise
+        raise WechatMpDraftValidationError("A WeChat MP draft sync is already pending reconciliation")
     db.refresh(draft_sync)
 
     adapter = WechatMpApiAdapter()
@@ -94,7 +123,11 @@ def sync_article_to_wechat_draft(db: Session, user_id: int, article_id: int, acc
             if not isinstance(url, str) or not url:
                 raise ValueError("WeChat MP content image upload response is missing url")
             content = content.replace(asset.public_url, url)
+    except Exception as exc:
+        _record_draft_failure(db, draft_sync, exc, indeterminate=False)
+        raise
 
+    try:
         response = adapter.add_draft(access_token=access_token, article={
             "title": article.title,
             "digest": article.digest,
@@ -105,10 +138,8 @@ def sync_article_to_wechat_draft(db: Session, user_id: int, article_id: int, acc
         if not isinstance(media_id, str) or not media_id:
             raise ValueError("WeChat MP draft response is missing media_id")
     except Exception as exc:
-        draft_sync.status = "failed"
-        draft_sync.raw_response = exc.payload if isinstance(exc, WechatMpApiError) else {"error": str(exc)}
-        draft_sync.error_message = str(exc)
-        db.commit()
+        definitive_rejection = isinstance(exc, WechatMpApiError) and exc.is_definitive_rejection
+        _record_draft_failure(db, draft_sync, exc, indeterminate=not definitive_rejection)
         raise
 
     for previous in db.scalars(select(WechatMpDraftSync).where(
@@ -119,6 +150,7 @@ def sync_article_to_wechat_draft(db: Session, user_id: int, article_id: int, acc
         previous.status = "stale"
     draft_sync.wechat_media_id = media_id
     draft_sync.status = "synced"
+    draft_sync.active_key = None
     draft_sync.raw_response = response
     article.account_id = account.id
     article.status = "synced_to_wechat"

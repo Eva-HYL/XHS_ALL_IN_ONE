@@ -89,14 +89,14 @@ def generate_asset_for_prompt(
     ))
     if prompt is None:
         raise LookupError("WeChat MP prompt not found")
-    if prompt.status not in {"prompt_ready", "failed"}:
-        raise ValueError("WeChat MP prompt is not ready for image generation")
     article = db.get(WechatMpArticle, prompt.article_id)
     section = db.get(WechatMpArticleSection, prompt.section_id)
     if article is None or article.user_id != user_id or section is None or section.article_id != article.id:
         raise LookupError("WeChat MP prompt not found")
     if prompt.skill_name == "none" or article.illustration_skill == "none":
         raise WechatMpImageValidationError("Image generation is disabled when illustration skill is none")
+    if prompt.status not in {"prompt_ready", "failed"}:
+        raise ValueError("WeChat MP prompt is not ready for image generation")
 
     from backend.app.services.wechat_mp_model_service import resolve_wechat_mp_model
     from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts

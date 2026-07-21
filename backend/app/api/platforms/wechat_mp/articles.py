@@ -163,8 +163,9 @@ def update_prompt(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="WeChat MP prompt not found")
     prompt.editable_prompt = payload.editable_prompt
     prompt.version += 1
-    prompt.status = "prompt_ready"
-    _restore_prompt_placeholder(db, article, section, prompt)
+    prompt.status = "skipped" if prompt.skill_name == "none" else "prompt_ready"
+    if prompt.skill_name != "none":
+        _restore_prompt_placeholder(db, article, section, prompt)
     from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
     invalidate_synced_drafts(db, article, next_status="prompts_ready")
     db.commit()

@@ -18,15 +18,15 @@ class WechatMpPublishValidationError(ValueError):
 _ACTIVE_PUBLISH_STATUSES = ("scheduled", "pending", "submitted", "publishing")
 
 
-def _publish_active_key(draft_sync_id: int) -> str:
-    return f"draft:{draft_sync_id}"
+def _publish_active_key(account_id: int, article_id: int, article_revision: int) -> str:
+    return f"account:{account_id}:article:{article_id}:revision:{article_revision}"
 
 
-def _get_active_publish_job(db: Session, draft_sync_id: int) -> WechatMpPublishJob | None:
+def _get_active_publish_job(db: Session, active_key: str) -> WechatMpPublishJob | None:
     return db.scalar(
         select(WechatMpPublishJob)
         .where(
-            WechatMpPublishJob.draft_sync_id == draft_sync_id,
+            WechatMpPublishJob.active_key == active_key,
             WechatMpPublishJob.status.in_(_ACTIVE_PUBLISH_STATUSES),
         )
         .order_by(WechatMpPublishJob.id)
@@ -39,7 +39,7 @@ def _commit_new_publish_job(db: Session, job: WechatMpPublishJob) -> WechatMpPub
         db.commit()
     except IntegrityError:
         db.rollback()
-        existing = _get_active_publish_job(db, job.draft_sync_id)
+        existing = _get_active_publish_job(db, job.active_key or "")
         if existing is None:
             raise
         return existing
@@ -86,7 +86,8 @@ def submit_publish_job(
     article = _get_owned_article(db, user_id, article_id)
     draft_sync = _get_latest_synced_draft(db, user_id, article)
     account = _get_owned_account(db, user_id, draft_sync.account_id)
-    existing_active = _get_active_publish_job(db, draft_sync.id)
+    active_key = _publish_active_key(account.id, article.id, draft_sync.article_revision)
+    existing_active = _get_active_publish_job(db, active_key)
     if existing_active is not None:
         return existing_active
 
@@ -96,7 +97,7 @@ def submit_publish_job(
             account_id=account.id,
             article_id=article_id,
             draft_sync_id=draft_sync.id,
-            active_key=_publish_active_key(draft_sync.id),
+            active_key=active_key,
             status="scheduled",
             scheduled_at=scheduled_at,
         )
@@ -107,7 +108,7 @@ def submit_publish_job(
         account_id=account.id,
         article_id=article_id,
         draft_sync_id=draft_sync.id,
-        active_key=_publish_active_key(draft_sync.id),
+        active_key=active_key,
         status="pending",
         raw_response={},
     )
@@ -134,8 +135,18 @@ def _submit_existing_job(
         raise WechatMpPublishValidationError(job.error_message)
 
     try:
+        access_token = _get_access_token(account, adapter)
+    except Exception as exc:
+        job.status = "failed"
+        job.active_key = None
+        job.raw_response = exc.payload if isinstance(exc, WechatMpApiError) else {"error": str(exc)}
+        job.error_message = str(exc)
+        db.commit()
+        raise
+
+    try:
         response = adapter.submit_publish(
-            access_token=_get_access_token(account, adapter),
+            access_token=access_token,
             media_id=draft_sync.wechat_media_id,
         )
         publish_id = response.get("publish_id")
@@ -171,10 +182,21 @@ def run_due_publish_jobs(*, db: Session, now: datetime, adapter_factory=WechatMp
     failed_count = 0
     items = []
     for job in jobs:
+        draft_sync = db.get(WechatMpDraftSync, job.draft_sync_id)
+        if draft_sync is None:
+            job.status = "failed"
+            job.active_key = None
+            job.error_message = "Scheduled publish draft no longer exists"
+            db.commit()
+            failed_count += 1
+            continue
         active_jobs = db.scalars(
             select(WechatMpPublishJob)
+            .join(WechatMpDraftSync, WechatMpDraftSync.id == WechatMpPublishJob.draft_sync_id)
             .where(
-                WechatMpPublishJob.draft_sync_id == job.draft_sync_id,
+                WechatMpPublishJob.account_id == job.account_id,
+                WechatMpPublishJob.article_id == job.article_id,
+                WechatMpDraftSync.article_revision == draft_sync.article_revision,
                 WechatMpPublishJob.status.in_(_ACTIVE_PUBLISH_STATUSES),
             )
             .order_by(WechatMpPublishJob.id)

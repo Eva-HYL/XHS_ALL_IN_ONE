@@ -167,19 +167,13 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
     if article is None:
         raise LookupError("WeChat MP article not found")
     selected_skill = skill_name or article.illustration_skill or "xiaomao-illustrations"
-    if selected_skill == "none":
+    if selected_skill == "none" and article.illustration_skill != "none":
         has_inline_state = bool(db.scalar(
             select(WechatMpImagePrompt.id).where(WechatMpImagePrompt.article_id == article.id).limit(1)
         )) or "{{image:prompt-" in article.html_body
-        skill_changed = article.illustration_skill != "none"
         if has_inline_state:
             reset_inline_illustrations(db, article)
         article.illustration_skill = "none"
-        if has_inline_state or skill_changed:
-            from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
-            invalidate_synced_drafts(db, article, next_status="layout_ready")
-            db.commit()
-        return []
     model = resolve_wechat_mp_model(db=db, user_id=user_id, model_type="text")
     try:
         sections = generate_article_shotlist(db=db, user_id=user_id, article_id=article_id, text_model=model.model_name)
@@ -199,6 +193,7 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
                 base_url=model.base_url,
                 api_key=model.api_key,
             )
+            prompt_status = "skipped" if selected_skill == "none" else "prompt_ready"
             if prompt is None:
                 prompt = WechatMpImagePrompt(
                     user_id=user_id,
@@ -208,18 +203,20 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
                     prompt=result["prompt"],
                     editable_prompt=result["prompt"],
                     version=1,
-                    status="prompt_ready",
+                    status=prompt_status,
                 )
                 db.add(prompt)
                 db.flush()
             else:
-                _restore_prompt_placeholder(db, article, section, prompt)
+                if selected_skill != "none":
+                    _restore_prompt_placeholder(db, article, section, prompt)
                 prompt.skill_name = selected_skill
                 prompt.prompt = result["prompt"]
                 prompt.editable_prompt = result["prompt"]
                 prompt.version += 1
-                prompt.status = "prompt_ready"
-            _insert_prompt_placeholder(article, section, prompt)
+                prompt.status = prompt_status
+            if selected_skill != "none":
+                _insert_prompt_placeholder(article, section, prompt)
             usage = record_text_usage(
                 db=db,
                 user_id=user_id,
@@ -273,8 +270,9 @@ def regenerate_image_prompt(*, db: Session, prompt: WechatMpImagePrompt, article
     prompt.prompt = result["prompt"]
     prompt.editable_prompt = result["prompt"]
     prompt.version += 1
-    prompt.status = "prompt_ready"
-    _restore_prompt_placeholder(db, article, section, prompt)
+    prompt.status = "skipped" if prompt.skill_name == "none" else "prompt_ready"
+    if prompt.skill_name != "none":
+        _restore_prompt_placeholder(db, article, section, prompt)
     usage = record_text_usage(
         db=db,
         user_id=article.user_id,
