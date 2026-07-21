@@ -24,6 +24,13 @@ def _get_owned_account(db: Session, current_user: User, account_id: int) -> Wech
     return account
 
 
+def _format_wechat_error_detail(exc: WechatMpApiError) -> str:
+    errmsg = str(exc.payload.get("errmsg") or exc)
+    if exc.errcode is None:
+        return f"WeChat MP connection test failed: {errmsg}"
+    return f"WeChat MP connection test failed: {errmsg} (errcode: {exc.errcode})"
+
+
 @router.post("", response_model=WechatMpAccountResponse, status_code=status.HTTP_201_CREATED)
 def create_account(
     payload: WechatMpAccountCreateRequest,
@@ -73,5 +80,8 @@ def test_account(
     except WechatMpApiError as exc:
         account.connection_status = "error"
         db.commit()
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="WeChat MP connection test failed") from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=_format_wechat_error_detail(exc),
+        ) from exc
     return account
