@@ -229,6 +229,117 @@ def test_wechat_mp_account_test_caches_successful_token(api_client, auth_headers
         session.close()
 
 
+def test_create_wechat_mp_article_generates_markdown_html_and_usage(api_client, auth_headers, monkeypatch):
+    from backend.app.models import UsageRecord
+    from backend.app.services import wechat_mp_writer_service as writer
+
+    def fake_call(*, topic, source_material, target_reader, tone, model_name):
+        return {
+            "title": "会偷懒的人，反而更稳定",
+            "markdown_body": "## 开头\n正文第一段\n\n## 方法\n正文第二段",
+            "digest": "一篇关于稳定输出的文章",
+            "cover_brief": "小猫压住一张计划表",
+            "input_tokens": 100,
+            "output_tokens": 200,
+            "model_name": model_name,
+        }
+
+    monkeypatch.setattr(writer, "_call_writer_model", fake_call)
+    client, session_factory = api_client
+    response = client.post(
+        "/api/platforms/wechat-mp/articles",
+        json={"title": "稳定输出", "topic": "稳定输出", "illustration_skill": "xiaomao-illustrations"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["title"] == "会偷懒的人，反而更稳定"
+    assert "<h2>开头</h2>" in data["html_body"]
+    assert data["illustration_skill"] == "xiaomao-illustrations"
+
+    session = session_factory()
+    try:
+        assert session.query(UsageRecord).filter_by(platform="wechat_mp", step="write_article").count() == 1
+    finally:
+        session.close()
+
+
+def test_wechat_mp_layout_renderer_supports_article_blocks():
+    from backend.app.services.wechat_mp_layout_service import render_wechat_html
+
+    html = render_wechat_html(
+        "# 标题\n## 小节\n> 引文\n- 无序项\n1. 有序项\n\n{{image:cover}}",
+        [{"placeholder": "{{image:cover}}", "url": "https://example.com/cover.png", "alt": "封面"}],
+    )
+
+    assert "<h1>标题</h1>" in html
+    assert "<h2>小节</h2>" in html
+    assert "<blockquote" in html
+    assert "<ul " in html
+    assert "<ol " in html
+    assert 'src="https://example.com/cover.png"' in html
+
+
+def test_wechat_mp_articles_are_owner_scoped_and_patch_renders_markdown(api_client, auth_headers):
+    client, session_factory = api_client
+    from backend.app.models import User, WechatMpArticle
+
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        article = WechatMpArticle(
+            user_id=owner.id,
+            title="初稿",
+            markdown_body="初稿正文",
+            html_body="<p>初稿正文</p>",
+            digest="摘要",
+            cover_brief="封面说明",
+            status="layout_ready",
+            illustration_skill="xiaomao-illustrations",
+        )
+        session.add(article)
+        session.commit()
+        article_id = article.id
+    finally:
+        session.close()
+
+    assert client.get("/api/platforms/wechat-mp/articles", headers=auth_headers).json()[0]["id"] == article_id
+    assert client.get(f"/api/platforms/wechat-mp/articles/{article_id}", headers=auth_headers).status_code == 200
+    update = client.patch(
+        f"/api/platforms/wechat-mp/articles/{article_id}",
+        json={"title": "更新标题", "markdown_body": "## 更新\n更新正文", "illustration_skill": "custom-skill"},
+        headers=auth_headers,
+    )
+    assert update.status_code == 200
+    assert update.json()["title"] == "更新标题"
+    assert "<h2>更新</h2>" in update.json()["html_body"]
+    assert update.json()["illustration_skill"] == "custom-skill"
+
+    other = client.post("/api/auth/register", json={"username": "wechat-other", "password": "secret123"})
+    other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
+    assert client.get("/api/platforms/wechat-mp/articles", headers=other_headers).json() == []
+    assert client.get(f"/api/platforms/wechat-mp/articles/{article_id}", headers=other_headers).status_code == 404
+    assert client.patch(f"/api/platforms/wechat-mp/articles/{article_id}", json={"title": "越权"}, headers=other_headers).status_code == 404
+
+
+def test_wechat_mp_article_writer_value_error_maps_to_502(api_client, auth_headers, monkeypatch):
+    from backend.app.services import wechat_mp_writer_service as writer
+
+    def malformed_response(**kwargs):
+        raise ValueError("invalid JSON")
+
+    monkeypatch.setattr(writer, "_call_writer_model", malformed_response)
+    client, _ = api_client
+    response = client.post(
+        "/api/platforms/wechat-mp/articles",
+        json={"title": "稳定输出", "topic": "稳定输出"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 502
+
+
 def test_wechat_mp_crypto_round_trip_and_rejects_empty_secret():
     from backend.app.services.wechat_mp_crypto_service import decrypt_secret, encrypt_secret
 

@@ -19,12 +19,18 @@ def record_text_usage(
     model: str,
     input_tokens: int,
     output_tokens: int,
+    platform: str | None = None,
+    resource_type: str | None = None,
+    resource_id: int | None = None,
 ) -> UsageRecord:
     cost = calculate_text_cost(model, input_tokens, output_tokens)
     snapshot = get_pricing()["text_models"][model]
     rec = UsageRecord(
         user_id=user_id,
         pipeline_run_id=pipeline_run_id,
+        platform=platform,
+        resource_type=resource_type,
+        resource_id=resource_id,
         step=step,
         model=model,
         input_tokens=input_tokens,
