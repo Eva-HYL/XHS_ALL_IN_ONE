@@ -190,6 +190,14 @@ def test_wechat_mp_account_test_hides_foreign_account(api_client, auth_headers):
     assert response.status_code == 404
 
 
+def test_wechat_mp_account_test_returns_404_for_nonexistent_account(api_client, auth_headers):
+    client, _ = api_client
+
+    response = client.post("/api/platforms/wechat-mp/accounts/999999/test", headers=auth_headers)
+
+    assert response.status_code == 404
+
+
 def test_wechat_mp_account_test_caches_successful_token(api_client, auth_headers, monkeypatch):
     client, session_factory = api_client
     account = _create_wechat_account(client, auth_headers)
@@ -277,3 +285,20 @@ def test_wechat_mp_adapter_raises_for_wechat_error(monkeypatch):
 
     assert error.value.errcode == 40013
     assert error.value.payload["errmsg"] == "invalid appid"
+
+
+def test_wechat_mp_adapter_raises_for_http_status_error(monkeypatch):
+    from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiAdapter, WechatMpApiError
+
+    class FakeResponse:
+        status_code = 503
+
+        def json(self):
+            return {"errmsg": "service unavailable"}
+
+    monkeypatch.setattr("requests.get", lambda *args, **kwargs: FakeResponse())
+
+    with pytest.raises(WechatMpApiError) as error:
+        WechatMpApiAdapter().get_access_token(app_id="wx123", app_secret="secret-value")
+
+    assert error.value.payload == {"errmsg": "service unavailable"}

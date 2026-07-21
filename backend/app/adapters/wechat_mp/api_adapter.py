@@ -12,12 +12,18 @@ class WechatMpApiAdapter:
     base_url = "https://api.weixin.qq.com"
 
     def get_access_token(self, *, app_id: str, app_secret: str) -> dict:
-        response = requests.get(
-            f"{self.base_url}/cgi-bin/token",
-            params={"grant_type": "client_credential", "appid": app_id, "secret": app_secret},
-            timeout=20,
-        )
-        payload = response.json()
+        try:
+            response = requests.get(
+                f"{self.base_url}/cgi-bin/token",
+                params={"grant_type": "client_credential", "appid": app_id, "secret": app_secret},
+                timeout=20,
+            )
+            payload = response.json()
+        except (requests.RequestException, ValueError) as exc:
+            raise WechatMpApiError("wechat access_token request failed") from exc
+
+        if not isinstance(payload, dict):
+            raise WechatMpApiError("wechat access_token request failed", payload={})
         if response.status_code >= 400 or "errcode" in payload:
             raise WechatMpApiError(
                 "wechat access_token request failed",
