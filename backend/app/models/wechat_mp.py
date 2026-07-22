@@ -76,6 +76,19 @@ class WechatMpImagePrompt(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class WechatMpIllustrationCharacter(Base):
+    __tablename__ = "wechat_mp_illustration_characters"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    skill_name: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class WechatMpAsset(Base):
     __tablename__ = "wechat_mp_assets"
 

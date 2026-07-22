@@ -24,6 +24,25 @@ class WechatMpArticleCreateRequest(BaseModel):
     illustration_skill: str = "xiaomao-illustrations"
 
 
+class WechatMpIllustrationCharacterCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    prompt: str = Field(min_length=1)
+
+
+class WechatMpIllustrationCharacterResponse(BaseModel):
+    id: int | None
+    user_id: int | None = None
+    name: str
+    skill_name: str
+    prompt: str
+    status: str
+    is_builtin: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
 class WechatMpAccountCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     app_id: str = Field(min_length=1, max_length=128)

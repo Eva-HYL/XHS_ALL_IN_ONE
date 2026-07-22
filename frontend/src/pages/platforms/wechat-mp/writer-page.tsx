@@ -6,10 +6,12 @@ import { useSearchParams } from "react-router-dom";
 import { PageHeader } from "../../../components/layout/app-shell";
 import {
   createWechatMpArticle,
+  createWechatMpIllustrationCharacter,
   fetchModelConfigs,
   fetchWechatMpArticle,
   fetchWechatMpAssets,
   fetchWechatMpImageCostEstimate,
+  fetchWechatMpIllustrationCharacters,
   fetchWechatMpMaterials,
   fetchWechatMpPrompts,
   generateWechatMpCover,
@@ -25,6 +27,7 @@ import type {
   WechatMpAsset,
   WechatMpImageCostEstimate,
   WechatMpImagePrompt,
+  WechatMpIllustrationCharacter,
   WechatMpMaterial,
 } from "../../../types";
 import { WechatMpLayout } from "./wechat-mp-layout";
@@ -61,6 +64,7 @@ export function WechatMpWriterPage() {
   const [prompts, setPrompts] = useState<WechatMpImagePrompt[]>([]);
   const [assets, setAssets] = useState<WechatMpAsset[]>([]);
   const [materials, setMaterials] = useState<WechatMpMaterial[]>([]);
+  const [characters, setCharacters] = useState<WechatMpIllustrationCharacter[]>([]);
   const [selectedMaterialIds, setSelectedMaterialIds] = useState<number[]>([]);
   const [imageModels, setImageModels] = useState<ModelConfig[]>([]);
   const [imageModel, setImageModel] = useState<string | undefined>();
@@ -70,6 +74,8 @@ export function WechatMpWriterPage() {
   const [material, setMaterial] = useState("");
   const [reader, setReader] = useState("");
   const [tone, setTone] = useState("");
+  const [newCharacterName, setNewCharacterName] = useState("");
+  const [newCharacterPrompt, setNewCharacterPrompt] = useState("");
   const [editTitle, setEditTitle] = useState("");
   const [editMarkdown, setEditMarkdown] = useState("");
   const [skill, setSkill] = useState(DEFAULT_SKILL);
@@ -103,6 +109,12 @@ export function WechatMpWriterPage() {
     void fetchWechatMpMaterials({ page_size: 100 })
       .then((response) => setMaterials(response.items))
       .catch(() => setError("公众号资料库加载失败。"));
+  }, []);
+
+  useEffect(() => {
+    void fetchWechatMpIllustrationCharacters()
+      .then(setCharacters)
+      .catch(() => setError("公众号形象库加载失败。"));
   }, []);
 
   useEffect(() => {
@@ -298,6 +310,30 @@ export function WechatMpWriterPage() {
     }
   }
 
+  async function createCharacter() {
+    if (!newCharacterName.trim() || !newCharacterPrompt.trim()) {
+      setError("请填写形象名称和自定义形象提示词。");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const created = await createWechatMpIllustrationCharacter({
+        name: newCharacterName.trim(),
+        prompt: newCharacterPrompt.trim(),
+      });
+      setCharacters((items) => [...items, created]);
+      setSkill(created.skill_name);
+      setNewCharacterName("");
+      setNewCharacterPrompt("");
+      setNotice(`形象「${created.name}」已创建，后续提示词会使用这段形象设定。`);
+    } catch {
+      setError("自定义形象创建失败。");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const activeStep = !article ? 0 : prompts.length === 0 ? 2 : 4;
   const estimatedCost = imageEstimate?.pricing_available
     ? `预计每张 ¥${imageEstimate.estimated_yuan}`
@@ -315,7 +351,23 @@ export function WechatMpWriterPage() {
     {workflowStep === 0 && <Card title="1. 输入主题与素材" style={{ marginBottom: 16 }}>
       <Row gutter={[12, 12]}>
         <Col xs={24} md={12}><Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="文章标题" /></Col>
-        <Col xs={24} md={12}><Select value={skill} onChange={setSkill} style={{ width: "100%" }} options={[{ value: DEFAULT_SKILL, label: "小猫插画（xiaomao-illustrations）" }, { value: "none", label: "none（跳过正文配图）" }]} /></Col>
+        <Col xs={24} md={12}>
+          <Select
+            value={skill}
+            onChange={setSkill}
+            style={{ width: "100%" }}
+            options={(characters.length ? characters : [
+              { name: "小猫插画", skill_name: DEFAULT_SKILL, prompt: "", is_builtin: true },
+              { name: "none（跳过正文配图）", skill_name: "none", prompt: "", is_builtin: true },
+            ] as WechatMpIllustrationCharacter[]).map((character) => ({
+              value: character.skill_name,
+              label: `${character.name}${character.is_builtin ? "" : "（自定义）"}`,
+            }))}
+          />
+        </Col>
+        <Col xs={24} md={8}><Input value={newCharacterName} onChange={(event) => setNewCharacterName(event.target.value)} placeholder="新形象名称，如小护士" /></Col>
+        <Col xs={24} md={12}><Input value={newCharacterPrompt} onChange={(event) => setNewCharacterPrompt(event.target.value)} placeholder="自定义形象提示词：外观、性格、固定风格、禁止项" /></Col>
+        <Col xs={24} md={4}><Button block loading={busy} onClick={() => void createCharacter()}>新增形象</Button></Col>
         <Col span={24}><TextArea value={topic} onChange={(event) => setTopic(event.target.value)} placeholder="文章主题与核心观点" rows={2} /></Col>
         <Col xs={24} md={12}><Input value={reader} onChange={(event) => setReader(event.target.value)} placeholder="目标读者（可选）" /></Col>
         <Col xs={24} md={12}><Input value={tone} onChange={(event) => setTone(event.target.value)} placeholder="语气风格（可选）" /></Col>

@@ -90,6 +90,7 @@ import type {
   WechatMpDraftSync,
   WechatMpImageCostEstimate,
   WechatMpImagePrompt,
+  WechatMpIllustrationCharacter,
   WechatMpLayoutPreview,
   WechatMpLayoutStyle,
   WechatMpMaterial,
@@ -1053,6 +1054,16 @@ export async function createWechatMpArticle(payload: CreateWechatMpArticlePayloa
 
 export async function updateWechatMpArticle(articleId: number, payload: Partial<Pick<WechatMpArticle, "title" | "markdown_body" | "html_body" | "digest" | "illustration_skill">>): Promise<WechatMpArticle> {
   const response = await http.patch<WechatMpArticle>(`/platforms/wechat-mp/articles/${articleId}`, payload);
+  return response.data;
+}
+
+export async function fetchWechatMpIllustrationCharacters(): Promise<WechatMpIllustrationCharacter[]> {
+  const response = await http.get<WechatMpIllustrationCharacter[]>("/platforms/wechat-mp/illustration-characters");
+  return response.data;
+}
+
+export async function createWechatMpIllustrationCharacter(payload: { name: string; prompt: string }): Promise<WechatMpIllustrationCharacter> {
+  const response = await http.post<WechatMpIllustrationCharacter>("/platforms/wechat-mp/illustration-characters", payload);
   return response.data;
 }
 
