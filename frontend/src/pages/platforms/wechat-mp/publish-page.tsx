@@ -19,6 +19,19 @@ import { WechatMpLayout } from "./wechat-mp-layout";
 
 const { Paragraph, Text } = Typography;
 
+function errorMessage(error: unknown, fallback: string): string {
+  if (typeof error === "object" && error !== null && "response" in error) {
+    const detail = (error as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
+    if (typeof detail === "string") return detail;
+    if (typeof detail === "object" && detail !== null && "message" in detail) {
+      const message = String((detail as { message: unknown }).message);
+      const payload = (detail as { payload?: { errmsg?: unknown } }).payload;
+      return typeof payload?.errmsg === "string" ? `${message}: ${payload.errmsg}` : message;
+    }
+  }
+  return fallback;
+}
+
 export function WechatMpPublishPage() {
   const [params] = useSearchParams();
   const [articles, setArticles] = useState<WechatMpArticle[]>([]);
@@ -74,8 +87,8 @@ export function WechatMpPublishPage() {
     setError(null);
     try {
       setSync(await syncWechatMpDraft(articleId, accountId));
-    } catch {
-      setError("草稿同步失败，请先测试账号连接并确认公众号素材可用。");
+    } catch (err) {
+      setError(errorMessage(err, "草稿同步失败，请先测试账号连接并确认公众号素材可用。"));
     } finally {
       setBusy(false);
     }
@@ -90,8 +103,8 @@ export function WechatMpPublishPage() {
         confirm,
         scheduled_at: scheduledAt?.toISOString() ?? null,
       }));
-    } catch {
-      setError("发布提交失败。请先完成草稿同步并检查是否已有活动发布任务。");
+    } catch (err) {
+      setError(errorMessage(err, "发布提交失败。请先完成草稿同步并检查是否已有活动发布任务。"));
     } finally {
       setBusy(false);
     }
