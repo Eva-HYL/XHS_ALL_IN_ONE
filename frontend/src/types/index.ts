@@ -804,6 +804,7 @@ export type CreateWechatMpArticlePayload = {
   title: string;
   topic: string;
   source_material?: string;
+  material_ids?: number[];
   target_reader?: string;
   tone?: string;
   illustration_skill?: string;
@@ -889,6 +890,8 @@ export type WechatMpMaterial = {
   tags: string[];
   notes: string;
   status: string;
+  used_article_count: number;
+  usage_status: "used" | "unused" | string;
   created_at: string;
   updated_at: string;
 };

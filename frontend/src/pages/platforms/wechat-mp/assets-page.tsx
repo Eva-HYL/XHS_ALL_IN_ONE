@@ -280,7 +280,14 @@ export function WechatMpAssetsPage() {
                         ]}
                       >
                         <List.Item.Meta
-                          title={<Space wrap><Text strong>{material.title}</Text><Tag>{material.material_type}</Tag>{material.tags.map((tag) => <Tag key={tag}>{tag}</Tag>)}</Space>}
+                          title={<Space wrap>
+                            <Text strong>{material.title}</Text>
+                            <Tag>{material.material_type}</Tag>
+                            <Tag color={material.usage_status === "used" ? "green" : "default"}>
+                              {material.usage_status === "used" ? `已写过 ${material.used_article_count} 篇` : "未使用"}
+                            </Tag>
+                            {material.tags.map((tag) => <Tag key={tag}>{tag}</Tag>)}
+                          </Space>}
                           description={
                             <Space direction="vertical" size={4} style={{ width: "100%" }}>
                               {material.source_url && <Text type="secondary" ellipsis>来源：{material.source_url}</Text>}

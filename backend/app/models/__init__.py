@@ -14,6 +14,7 @@ from backend.app.models.user import User
 from backend.app.models.wechat_mp import (
     WechatMpAccount,
     WechatMpArticle,
+    WechatMpArticleMaterial,
     WechatMpArticleSection,
     WechatMpAsset,
     WechatMpDraftSync,
@@ -51,6 +52,7 @@ __all__ = [
     "User",
     "WechatMpAccount",
     "WechatMpArticle",
+    "WechatMpArticleMaterial",
     "WechatMpArticleSection",
     "WechatMpAsset",
     "WechatMpDraftSync",

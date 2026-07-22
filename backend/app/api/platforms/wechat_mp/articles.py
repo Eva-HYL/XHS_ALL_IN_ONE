@@ -65,6 +65,8 @@ def _get_owned_prompt(db: Session, article: WechatMpArticle, prompt_id: int) -> 
 def create_article(payload: WechatMpArticleCreateRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
         return generate_wechat_article(db=db, user_id=current_user.id, request=payload)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
