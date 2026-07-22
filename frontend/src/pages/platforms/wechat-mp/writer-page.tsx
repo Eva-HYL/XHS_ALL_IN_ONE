@@ -209,20 +209,6 @@ export function WechatMpWriterPage() {
     }
   }
 
-  async function savePrompt(prompt: WechatMpImagePrompt) {
-    try {
-      const updated = await updateWechatMpPrompt(prompt.article_id, prompt.id, prompt.editable_prompt);
-      setPrompts((items) => items.map((item) => item.id === updated.id ? updated : item));
-      setArticle(await fetchWechatMpArticle(prompt.article_id));
-      setNotice(prompt.skill_name === "none"
-        ? "提示词已保存；none 模式不会将提示词或图片嵌入正文。"
-        : "提示词已保存；旧配图已从正文预览移除，可重新生成。"
-      );
-    } catch {
-      setError("提示词保存失败。");
-    }
-  }
-
   async function regenerate(prompt: WechatMpImagePrompt) {
     setBusy(true);
     setError(null);
@@ -251,8 +237,10 @@ export function WechatMpWriterPage() {
           continue;
         }
         try {
+          const savedPrompt = await updateWechatMpPrompt(prompt.article_id, prompt.id, prompt.editable_prompt);
+          setPrompts((items) => items.map((item) => item.id === savedPrompt.id ? savedPrompt : item));
           const asset = await generateWechatMpImage(prompt.id, { image_model: imageModel, size: "16:9" });
-          setAssets((items) => [asset, ...items]);
+          setAssets((items) => [asset, ...items.filter((item) => item.prompt_id !== prompt.id)]);
           setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, status: "generated" } : item));
           setArticle(await fetchWechatMpArticle(prompt.article_id));
           setNotice(`段落 #${prompt.section_id} 正文配图已生成并计入实际费用。`);
@@ -381,26 +369,47 @@ export function WechatMpWriterPage() {
             {
               const isGenerating = activeImagePromptId === prompt.id;
               const isQueued = !isGenerating && imageQueue.includes(prompt.id);
+              const promptAsset = assets.find((asset) => asset.prompt_id === prompt.id && asset.role !== "cover");
+              const imageButtonText = isGenerating
+                ? "生成中"
+                : isQueued
+                  ? "排队中"
+                  : promptAsset || prompt.status === "generated"
+                    ? "重新生成正文图片"
+                    : "生成正文图片";
               return <Card key={prompt.id} size="small" title={`段落 #${prompt.section_id}`} extra={<Space><Tag>{isGenerating ? "generating" : isQueued ? "queued" : prompt.status}</Tag>{isQueued && <Text type="secondary">排队中</Text>}</Space>}>
-              <TextArea value={prompt.editable_prompt} onChange={(event) => setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, editable_prompt: event.target.value } : item))} rows={3} />
-              <Space style={{ marginTop: 8 }} wrap>
-                <Button icon={<SaveOutlined />} onClick={() => void savePrompt(prompt)}>保存提示词</Button>
-                <Button onClick={() => void regenerate(prompt)} loading={busy}>重新生成</Button>
-                <Button
-                  type="primary"
-                  icon={<PictureOutlined />}
-                  disabled={prompt.skill_name === "none" || isGenerating || isQueued}
-                  loading={isGenerating}
-                  onClick={() => enqueueImage(prompt)}
-                >
-                  {isGenerating ? "生成中" : isQueued ? "排队中" : "生成正文图片"}
-                </Button>
-              </Space>
+              <Row gutter={[16, 12]}>
+                <Col xs={24} lg={15}>
+                  <TextArea value={prompt.editable_prompt} onChange={(event) => setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, editable_prompt: event.target.value } : item))} rows={5} />
+                  <Space style={{ marginTop: 8 }} wrap>
+                    <Button onClick={() => void regenerate(prompt)} loading={busy}>重新生成提示词</Button>
+                    <Button
+                      type="primary"
+                      icon={<PictureOutlined />}
+                      disabled={prompt.skill_name === "none" || isGenerating || isQueued}
+                      loading={isGenerating}
+                      onClick={() => enqueueImage(prompt)}
+                    >
+                      {imageButtonText}
+                    </Button>
+                  </Space>
+                  <Text type="secondary" style={{ display: "block", marginTop: 8 }}>提示词会自动保存在当前文章下；点击生成图片前会先同步最新修改。</Text>
+                </Col>
+                <Col xs={24} lg={9}>
+                  <Card size="small" title="段落配图预览" styles={{ body: { padding: 8 } }}>
+                    {promptAsset ? (
+                      <img src={promptAsset.public_url} alt="公众号正文配图" style={{ width: "100%", aspectRatio: "16 / 9", objectFit: "cover", display: "block", borderRadius: 6 }} />
+                    ) : (
+                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={prompt.skill_name === "none" ? "none 模式不生成正文图" : "还未生成图片"} />
+                    )}
+                  </Card>
+                </Col>
+              </Row>
             </Card>;
             }
           )}
-          {assets.length > 0 && <Card title="已生成图片" size="small">
-            <Space wrap>{assets.map((asset) => <div key={asset.id}><Tag>{asset.role === "cover" ? "封面" : "正文"}</Tag><img src={asset.public_url} alt="公众号配图" style={{ width: 160, height: 90, objectFit: "cover", display: "block", marginTop: 6 }} /></div>)}</Space>
+          {coverAsset && <Card title="已生成封面" size="small">
+            <div><Tag>封面</Tag><img src={coverAsset.public_url} alt="公众号封面" style={{ width: 160, height: 90, objectFit: "cover", display: "block", marginTop: 6 }} /></div>
           </Card>}
           <Space>
             <Button icon={<ArrowLeftOutlined />} onClick={() => setWorkflowStep(3)}>返回生成提示词</Button>

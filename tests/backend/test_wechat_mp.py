@@ -994,6 +994,15 @@ def test_wechat_mp_material_parse_feishu_requires_credentials(api_client, auth_h
     assert "未配置飞书应用凭证" in parsed.json()["detail"]
 
 
+def test_wechat_mp_writer_shows_inline_generated_images_next_to_prompts():
+    source = Path("frontend/src/pages/platforms/wechat-mp/writer-page.tsx").read_text(encoding="utf-8")
+
+    assert "promptAsset" in source
+    assert "段落配图预览" in source
+    assert "重新生成正文图片" in source
+    assert ">保存提示词<" not in source
+
+
 def test_wechat_mp_account_list_is_scoped_to_owner(api_client, auth_headers):
     client, _ = api_client
     _create_wechat_account(client, auth_headers)
