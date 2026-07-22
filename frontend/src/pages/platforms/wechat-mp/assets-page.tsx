@@ -1,4 +1,4 @@
-import { CopyOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from "@ant-design/icons";
+import { CloudSyncOutlined, CopyOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -29,6 +29,7 @@ import {
   downloadExportFile,
   fetchWechatMpAssets,
   fetchWechatMpMaterials,
+  parseWechatMpMaterialFeishu,
   updateWechatMpMaterial,
   uploadWechatMpMaterialFile,
 } from "../../../lib/api";
@@ -84,11 +85,16 @@ function formatFileSize(size: number): string {
   return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
+function isFeishuLink(url?: string): boolean {
+  return /(?:feishu\.cn|larksuite\.com)/i.test(url ?? "");
+}
+
 export function WechatMpAssetsPage() {
   const [assets, setAssets] = useState<WechatMpAsset[]>([]);
   const [materials, setMaterials] = useState<WechatMpMaterial[]>([]);
   const [loadingAssets, setLoadingAssets] = useState(true);
   const [loadingMaterials, setLoadingMaterials] = useState(true);
+  const [parsingMaterialId, setParsingMaterialId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [materialModalOpen, setMaterialModalOpen] = useState(false);
   const [editingMaterial, setEditingMaterial] = useState<WechatMpMaterial | null>(null);
@@ -202,6 +208,20 @@ export function WechatMpAssetsPage() {
     await downloadExportFile(material.download_url, material.original_file_name || material.file_name || material.title);
   }
 
+  async function parseFeishuMaterial(material: WechatMpMaterial) {
+    setParsingMaterialId(material.id);
+    setError(null);
+    try {
+      const updated = await parseWechatMpMaterialFeishu(material.id);
+      setMaterials((items) => items.map((item) => item.id === updated.id ? updated : item));
+      message.success("飞书内容已解析并保存到资料正文。");
+    } catch {
+      setError("飞书内容解析失败。请确认服务端已配置飞书凭证，并且应用有文档读取权限。");
+    } finally {
+      setParsingMaterialId(null);
+    }
+  }
+
   return (
     <WechatMpLayout>
       <PageHeader
@@ -241,6 +261,17 @@ export function WechatMpAssetsPage() {
                       <List.Item
                         actions={[
                           <Button key="copy" size="small" icon={<CopyOutlined />} onClick={() => void copyMaterial(material)}>复制</Button>,
+                          isFeishuLink(material.source_url) && (
+                            <Button
+                              key="parse-feishu"
+                              size="small"
+                              icon={<CloudSyncOutlined />}
+                              loading={parsingMaterialId === material.id}
+                              onClick={() => void parseFeishuMaterial(material)}
+                            >
+                              解析飞书
+                            </Button>
+                          ),
                           material.download_url && <Button key="download" size="small" icon={<DownloadOutlined />} onClick={() => void downloadMaterial(material)}>下载</Button>,
                           <Button key="edit" size="small" icon={<EditOutlined />} onClick={() => openEditMaterial(material)}>编辑</Button>,
                           <Popconfirm key="delete" title="删除这条资料？" onConfirm={() => void removeMaterial(material.id)}>

@@ -21,10 +21,12 @@ def test_platforms_endpoint_exposes_product_registry():
     response = client.get("/api/platforms")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["total"] == 6
+    assert payload["total"] == 7
     assert payload["items"][0]["id"] == "xhs"
     assert payload["items"][0]["enabled"] is True
-    assert payload["items"][1]["status"] == "coming_soon"
+    assert payload["items"][1]["id"] == "wechat-mp"
+    assert payload["items"][1]["enabled"] is True
+    assert payload["items"][2]["status"] == "coming_soon"
 
 
 def test_xhs_analytics_overview_requires_authentication(tmp_path):
