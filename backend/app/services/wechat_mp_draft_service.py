@@ -17,6 +17,10 @@ class WechatMpDraftValidationError(ValueError):
     pass
 
 
+def _unresolved_image_placeholders(html_body: str) -> list[str]:
+    return sorted(set(re.findall(r"\{\{image:(prompt-\d+)\}\}", html_body)))
+
+
 def _get_access_token(account: WechatMpAccount, adapter: WechatMpApiAdapter) -> str:
     token = get_cached_access_token(account.token_cache)
     if token is not None:
@@ -65,8 +69,13 @@ def sync_article_to_wechat_draft(db: Session, user_id: int, article_id: int, acc
     cover = next((asset for asset in assets if asset.role == "cover"), None)
     if cover is None:
         raise WechatMpDraftValidationError("WeChat MP article requires a generated cover image")
-    if "{{image:" in article.html_body:
-        raise WechatMpDraftValidationError("WeChat MP article still contains unresolved image placeholders")
+    unresolved_placeholders = _unresolved_image_placeholders(article.html_body)
+    if unresolved_placeholders:
+        raise WechatMpDraftValidationError(
+            "公众号文章还有正文配图占位符未生成或未回填："
+            + ", ".join(unresolved_placeholders)
+            + "。请先到写作页生成对应正文图片，或删除这些占位符后再同步草稿。"
+        )
     known_urls = {asset.public_url for asset in assets}
     local_urls = set(re.findall(r'src=["\'](/api/files/media/[^"\']+)["\']', article.html_body))
     if local_urls - known_urls:

@@ -290,6 +290,45 @@ def test_sync_wechat_mp_article_creates_draft_sync(api_client, auth_headers, cre
         session.close()
 
 
+def test_sync_wechat_mp_draft_reports_unresolved_prompt_placeholders(
+    api_client, auth_headers, created_wechat_prompt, created_wechat_account, tmp_path
+):
+    client, session_factory = api_client
+    from backend.app.models import User, WechatMpArticle, WechatMpAsset
+
+    cover_path = tmp_path / "cover.png"
+    cover_path.write_bytes(b"cover")
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        article = session.get(WechatMpArticle, created_wechat_prompt.article_id)
+        article.html_body = f"<p>正文</p>{{{{image:prompt-{created_wechat_prompt.id}}}}}"
+        session.add(WechatMpAsset(
+            user_id=owner.id,
+            article_id=article.id,
+            role="cover",
+            file_path=str(cover_path),
+            public_url="/api/files/media/cover.png",
+            prompt="封面",
+            skill_name="xiaomao-illustrations",
+            model_name="test-model",
+            status="generated",
+        ))
+        session.commit()
+    finally:
+        session.close()
+
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_prompt.article_id}/sync-draft",
+        json={"account_id": created_wechat_account.id},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert f"prompt-{created_wechat_prompt.id}" in response.json()["detail"]
+    assert "写作页生成对应正文图片" in response.json()["detail"]
+
+
 def test_sync_wechat_mp_draft_refreshes_raw_token_cache(api_client, auth_headers, created_wechat_article_with_image, created_wechat_account, monkeypatch):
     from backend.app.models import WechatMpAccount
     from backend.app.services import wechat_mp_draft_service as draft_service
