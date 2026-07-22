@@ -1,6 +1,7 @@
-import { FileTextOutlined, PictureOutlined, TeamOutlined } from "@ant-design/icons";
-import { Alert, Card, Col, Empty, List, Row, Spin, Statistic, Tag, Typography } from "antd";
+import { EditOutlined, FileTextOutlined, PictureOutlined, TeamOutlined } from "@ant-design/icons";
+import { Alert, Button, Card, Col, Empty, List, Row, Spin, Statistic, Tag, Typography } from "antd";
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { PageHeader } from "../../../components/layout/app-shell";
 import { fetchWechatMpAccounts, fetchWechatMpArticles, fetchWechatMpAssets } from "../../../lib/api";
@@ -10,6 +11,7 @@ import { WechatMpLayout } from "./wechat-mp-layout";
 const { Text } = Typography;
 
 export function WechatMpDashboardPage() {
+  const navigate = useNavigate();
   const [articles, setArticles] = useState<WechatMpArticle[]>([]);
   const [counts, setCounts] = useState({ accounts: 0, assets: 0 });
   const [loading, setLoading] = useState(true);
@@ -39,7 +41,24 @@ export function WechatMpDashboardPage() {
         <Col xs={24} md={8}><Card><Statistic title="公众号素材" value={counts.assets} prefix={<PictureOutlined />} /></Card></Col>
       </Row>
       <Card title="最近文章" style={{ marginTop: 16 }}>
-        {articles.length === 0 ? <Empty description="还没有公众号文章" /> : <List dataSource={articles.slice(0, 6)} renderItem={(article) => <List.Item><List.Item.Meta title={article.title} description={<Text type="secondary">{article.digest || "暂无摘要"}</Text>} /><Tag>{article.status}</Tag></List.Item>} />}
+        {articles.length === 0 ? <Empty description="还没有公众号文章" /> : (
+          <List
+            dataSource={articles.slice(0, 6)}
+            renderItem={(article) => (
+              <List.Item
+                style={{ cursor: "pointer" }}
+                onClick={() => navigate(`/platforms/wechat-mp/writer?article=${article.id}`)}
+                actions={[<Button key="edit" type="link" icon={<EditOutlined />}>继续编辑</Button>]}
+              >
+                <List.Item.Meta
+                  title={<Text strong>{article.title}</Text>}
+                  description={<Text type="secondary">{article.digest || "暂无摘要"}</Text>}
+                />
+                <Tag>{article.status}</Tag>
+              </List.Item>
+            )}
+          />
+        )}
       </Card>
     </>}
   </WechatMpLayout>;
