@@ -94,6 +94,22 @@ class WechatMpAsset(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class WechatMpMaterial(Base):
+    __tablename__ = "wechat_mp_materials"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    material_type: Mapped[str] = mapped_column(String(32), default="text", index=True, nullable=False)
+    content: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    source_url: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    tags: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    notes: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
 class WechatMpDraftSync(Base):
     __tablename__ = "wechat_mp_draft_syncs"
 

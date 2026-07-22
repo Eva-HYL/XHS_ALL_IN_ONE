@@ -90,6 +90,8 @@ import type {
   WechatMpDraftSync,
   WechatMpImageCostEstimate,
   WechatMpImagePrompt,
+  WechatMpMaterial,
+  WechatMpMaterialPayload,
   WechatMpPublishJob
 } from "../types";
 
@@ -1099,6 +1101,26 @@ export async function fetchWechatMpAssets(page = 1, pageSize = 50): Promise<Pagi
 
 export async function deleteWechatMpAsset(assetId: number): Promise<{ id: number; status: string }> {
   const response = await http.delete<{ id: number; status: string }>(`/platforms/wechat-mp/assets/${assetId}`);
+  return response.data;
+}
+
+export async function fetchWechatMpMaterials(params?: { page?: number; page_size?: number; q?: string; material_type?: string }): Promise<Paginated<WechatMpMaterial>> {
+  const response = await http.get<Paginated<WechatMpMaterial>>("/platforms/wechat-mp/materials", { params });
+  return response.data;
+}
+
+export async function createWechatMpMaterial(payload: WechatMpMaterialPayload): Promise<WechatMpMaterial> {
+  const response = await http.post<WechatMpMaterial>("/platforms/wechat-mp/materials", payload);
+  return response.data;
+}
+
+export async function updateWechatMpMaterial(materialId: number, payload: Partial<WechatMpMaterialPayload>): Promise<WechatMpMaterial> {
+  const response = await http.patch<WechatMpMaterial>(`/platforms/wechat-mp/materials/${materialId}`, payload);
+  return response.data;
+}
+
+export async function deleteWechatMpMaterial(materialId: number): Promise<{ id: number; status: string }> {
+  const response = await http.delete<{ id: number; status: string }>(`/platforms/wechat-mp/materials/${materialId}`);
   return response.data;
 }
 

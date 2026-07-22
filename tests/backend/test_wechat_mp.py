@@ -831,6 +831,52 @@ def test_wechat_mp_account_create_never_returns_secret(api_client, auth_headers)
         session.close()
 
 
+def test_wechat_mp_material_library_crud_is_owner_scoped(api_client, auth_headers):
+    client, _ = api_client
+
+    created = client.post(
+        "/api/platforms/wechat-mp/materials",
+        json={
+            "title": "软考资料",
+            "material_type": "text",
+            "content": "信息系统工程核心考点",
+            "source_url": "https://example.com/source",
+            "tags": ["软考", "公众号"],
+            "notes": "适合整理成速查手册",
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+    material_id = created.json()["id"]
+
+    listed = client.get("/api/platforms/wechat-mp/materials?q=软考", headers=auth_headers)
+    assert listed.status_code == 200
+    assert listed.json()["total"] == 1
+    assert listed.json()["items"][0]["title"] == "软考资料"
+
+    updated = client.patch(
+        f"/api/platforms/wechat-mp/materials/{material_id}",
+        json={"notes": "更新后的备注", "tags": ["考试"]},
+        headers=auth_headers,
+    )
+    assert updated.status_code == 200
+    assert updated.json()["notes"] == "更新后的备注"
+    assert updated.json()["tags"] == ["考试"]
+
+    other = client.post("/api/auth/register", json={"username": "wechat-material-other", "password": "secret123"})
+    other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
+    assert client.get("/api/platforms/wechat-mp/materials", headers=other_headers).json()["total"] == 0
+    assert client.patch(
+        f"/api/platforms/wechat-mp/materials/{material_id}",
+        json={"title": "偷改"},
+        headers=other_headers,
+    ).status_code == 404
+
+    deleted = client.delete(f"/api/platforms/wechat-mp/materials/{material_id}", headers=auth_headers)
+    assert deleted.status_code == 200
+    assert client.get("/api/platforms/wechat-mp/materials", headers=auth_headers).json()["total"] == 0
+
+
 def test_wechat_mp_account_list_is_scoped_to_owner(api_client, auth_headers):
     client, _ = api_client
     _create_wechat_account(client, auth_headers)
