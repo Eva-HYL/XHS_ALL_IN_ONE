@@ -24,6 +24,39 @@ def test_wechat_mp_adapter_accepts_successful_errcode_zero():
     }
 
 
+def test_wechat_mp_add_draft_sends_utf8_json_without_escaping_chinese(monkeypatch):
+    from backend.app.adapters.wechat_mp import api_adapter
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"errcode": 0, "media_id": "draft-media"}
+
+    def fake_post(*args, **kwargs):
+        captured.update(kwargs)
+        return FakeResponse()
+
+    monkeypatch.setattr(api_adapter.requests, "post", fake_post)
+
+    api_adapter.WechatMpApiAdapter().add_draft(
+        access_token="token",
+        article={
+            "title": "软考高级必备 | 信息系统工程核心考点速查手册（附口诀）",
+            "digest": "摘要",
+            "content": "<p>正文</p>",
+            "thumb_media_id": "thumb",
+        },
+    )
+
+    assert "json" not in captured
+    assert captured["data"].decode("utf-8").find("软考高级必备") != -1
+    assert "\\u8f6f" not in captured["data"].decode("utf-8")
+    assert captured["headers"]["Content-Type"] == "application/json; charset=utf-8"
+
+
 @pytest.fixture
 def db_session():
     # Register all mapped tables before constructing the isolated test database.
