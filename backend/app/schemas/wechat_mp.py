@@ -11,7 +11,7 @@ WechatMpArticleStatus = Literal[
 WechatMpImageStatus = Literal["prompt_ready", "generating", "generated", "failed", "skipped"]
 WechatMpDraftSyncStatus = Literal["pending", "synced", "stale", "failed"]
 WechatMpPublishStatus = Literal["pending", "scheduled", "submitted", "publishing", "published", "failed", "cancelled"]
-WechatMpMaterialType = Literal["text", "link", "outline", "quote", "other"]
+WechatMpMaterialType = Literal["text", "link", "outline", "quote", "file", "other"]
 
 
 class WechatMpArticleCreateRequest(BaseModel):
@@ -101,6 +101,12 @@ class WechatMpMaterialCreateRequest(BaseModel):
     material_type: WechatMpMaterialType = "text"
     content: str = ""
     source_url: str = ""
+    file_name: str = ""
+    original_file_name: str = ""
+    file_path: str = ""
+    download_url: str = ""
+    file_size: int = 0
+    mime_type: str = ""
     tags: list[str] = Field(default_factory=list)
     notes: str = ""
 
@@ -110,6 +116,12 @@ class WechatMpMaterialUpdateRequest(BaseModel):
     material_type: WechatMpMaterialType | None = None
     content: str | None = None
     source_url: str | None = None
+    file_name: str | None = None
+    original_file_name: str | None = None
+    file_path: str | None = None
+    download_url: str | None = None
+    file_size: int | None = None
+    mime_type: str | None = None
     tags: list[str] | None = None
     notes: str | None = None
     status: str | None = Field(default=None, max_length=32)
@@ -122,6 +134,12 @@ class WechatMpMaterialResponse(BaseModel):
     material_type: str
     content: str
     source_url: str
+    file_name: str
+    original_file_name: str
+    file_path: str
+    download_url: str
+    file_size: int
+    mime_type: str
     tags: list[str]
     notes: str
     status: str

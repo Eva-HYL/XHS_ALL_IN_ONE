@@ -1,4 +1,4 @@
-import { CopyOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
+import { CopyOutlined, DeleteOutlined, DownloadOutlined, EditOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -16,6 +16,7 @@ import {
   Tabs,
   Tag,
   Typography,
+  Upload,
   message,
 } from "antd";
 import { useEffect, useState } from "react";
@@ -25,9 +26,11 @@ import {
   createWechatMpMaterial,
   deleteWechatMpAsset,
   deleteWechatMpMaterial,
+  downloadExportFile,
   fetchWechatMpAssets,
   fetchWechatMpMaterials,
   updateWechatMpMaterial,
+  uploadWechatMpMaterialFile,
 } from "../../../lib/api";
 import type { WechatMpAsset, WechatMpMaterial, WechatMpMaterialPayload } from "../../../types";
 import { WechatMpLayout } from "./wechat-mp-layout";
@@ -37,9 +40,10 @@ const { TextArea } = Input;
 
 const materialTypeOptions = [
   { value: "text", label: "正文资料" },
-  { value: "link", label: "链接" },
+  { value: "link", label: "链接 / 飞书" },
   { value: "outline", label: "大纲" },
   { value: "quote", label: "摘录" },
+  { value: "file", label: "文件" },
   { value: "other", label: "其它" },
 ];
 
@@ -72,6 +76,12 @@ function tagsFromText(value?: string): string[] {
 
 function tagsToText(tags?: string[]): string {
   return (tags ?? []).join(", ");
+}
+
+function formatFileSize(size: number): string {
+  if (!size) return "";
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+  return `${(size / 1024 / 1024).toFixed(1)} MB`;
 }
 
 export function WechatMpAssetsPage() {
@@ -165,6 +175,17 @@ export function WechatMpAssetsPage() {
     }
   }
 
+  async function uploadMaterial(file: File) {
+    try {
+      const created = await uploadWechatMpMaterialFile(file);
+      setMaterials((items) => [created, ...items]);
+      message.success("文件已保存到资料库。");
+    } catch {
+      setError("文件上传失败，请确认格式和大小。");
+    }
+    return false;
+  }
+
   async function copyMaterial(material: WechatMpMaterial) {
     const text = [
       material.title,
@@ -174,6 +195,11 @@ export function WechatMpAssetsPage() {
     ].filter(Boolean).join("\n\n");
     await navigator.clipboard.writeText(text);
     message.success("资料已复制，可粘贴到写作页参考素材。");
+  }
+
+  async function downloadMaterial(material: WechatMpMaterial) {
+    if (!material.download_url) return;
+    await downloadExportFile(material.download_url, material.original_file_name || material.file_name || material.title);
   }
 
   return (
@@ -192,9 +218,22 @@ export function WechatMpAssetsPage() {
             key: "materials",
             label: "资料库",
             children: (
-              <Card extra={<Button type="primary" icon={<PlusOutlined />} onClick={openCreateMaterial}>新增资料</Button>}>
+              <Card
+                extra={
+                  <Space>
+                    <Upload
+                      showUploadList={false}
+                      beforeUpload={(file) => void uploadMaterial(file)}
+                      accept=".txt,.md,.csv,.json,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.jpg,.jpeg,.png,.gif,.webp"
+                    >
+                      <Button icon={<UploadOutlined />}>上传文件</Button>
+                    </Upload>
+                    <Button type="primary" icon={<PlusOutlined />} onClick={openCreateMaterial}>新增资料/飞书链接</Button>
+                  </Space>
+                }
+              >
                 {loadingMaterials ? <Spin /> : materials.length === 0 ? (
-                  <Empty description="暂无公众号发文资料，先添加一条选题、链接、摘录或大纲。" />
+                  <Empty description="暂无公众号发文资料，先添加飞书链接、选题、摘录、大纲，或上传文件。" />
                 ) : (
                   <List
                     dataSource={materials}
@@ -202,6 +241,7 @@ export function WechatMpAssetsPage() {
                       <List.Item
                         actions={[
                           <Button key="copy" size="small" icon={<CopyOutlined />} onClick={() => void copyMaterial(material)}>复制</Button>,
+                          material.download_url && <Button key="download" size="small" icon={<DownloadOutlined />} onClick={() => void downloadMaterial(material)}>下载</Button>,
                           <Button key="edit" size="small" icon={<EditOutlined />} onClick={() => openEditMaterial(material)}>编辑</Button>,
                           <Popconfirm key="delete" title="删除这条资料？" onConfirm={() => void removeMaterial(material.id)}>
                             <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
@@ -213,6 +253,7 @@ export function WechatMpAssetsPage() {
                           description={
                             <Space direction="vertical" size={4} style={{ width: "100%" }}>
                               {material.source_url && <Text type="secondary" ellipsis>来源：{material.source_url}</Text>}
+                              {material.original_file_name && <Text type="secondary" ellipsis>文件：{material.original_file_name} {formatFileSize(material.file_size)}</Text>}
                               <Paragraph ellipsis={{ rows: 2 }} style={{ marginBottom: 0 }}>{material.content || material.notes || "暂无正文"}</Paragraph>
                             </Space>
                           }
@@ -280,7 +321,7 @@ export function WechatMpAssetsPage() {
             <Select options={materialTypeOptions} />
           </Form.Item>
           <Form.Item name="source_url" label="来源链接">
-            <Input placeholder="可选，原文链接或资料出处" />
+            <Input placeholder="可选，飞书文档链接、原文链接或资料出处" />
           </Form.Item>
           <Form.Item name="content" label="资料正文">
             <TextArea rows={6} placeholder="粘贴要用于公众号写作的资料、摘录、观点或大纲" />
