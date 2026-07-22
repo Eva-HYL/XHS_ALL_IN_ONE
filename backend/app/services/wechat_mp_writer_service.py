@@ -5,9 +5,10 @@ import os
 from typing import Any
 
 import requests
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.app.models import WechatMpArticle
+from backend.app.models import WechatMpArticle, WechatMpArticleMaterial, WechatMpMaterial
 from backend.app.schemas.wechat_mp import WechatMpArticleCreateRequest
 from backend.app.services.usage_recording_service import record_text_usage
 from backend.app.services.wechat_mp_layout_service import render_wechat_html
@@ -15,6 +16,49 @@ from backend.app.services.wechat_mp_layout_service import render_wechat_html
 
 _WRITER_PROMPT = """你是微信公众号文章编辑。根据输入写一篇中文文章，并只返回 JSON。
 JSON 必须包含 title、markdown_body、digest、cover_brief。正文使用 Markdown。"""
+
+
+def _selected_material_ids(material_ids: list[int]) -> list[int]:
+    seen = set()
+    selected = []
+    for material_id in material_ids:
+        if material_id in seen:
+            continue
+        seen.add(material_id)
+        selected.append(material_id)
+    return selected
+
+
+def _load_selected_materials(db: Session, user_id: int, material_ids: list[int]) -> list[WechatMpMaterial]:
+    selected_ids = _selected_material_ids(material_ids)
+    if not selected_ids:
+        return []
+    materials = db.scalars(select(WechatMpMaterial).where(
+        WechatMpMaterial.user_id == user_id,
+        WechatMpMaterial.status == "active",
+        WechatMpMaterial.id.in_(selected_ids),
+    )).all()
+    material_by_id = {material.id: material for material in materials}
+    missing_ids = [material_id for material_id in selected_ids if material_id not in material_by_id]
+    if missing_ids:
+        raise LookupError("WeChat MP selected materials are not available: " + ", ".join(str(item) for item in missing_ids))
+    return [material_by_id[material_id] for material_id in selected_ids]
+
+
+def _compose_source_material(manual_material: str, selected_materials: list[WechatMpMaterial]) -> str:
+    parts = []
+    if manual_material.strip():
+        parts.append("【手动输入素材】\n" + manual_material.strip())
+    for material in selected_materials:
+        lines = [f"【素材库：{material.title}】"]
+        if material.source_url:
+            lines.append(f"来源：{material.source_url}")
+        if material.content:
+            lines.append(material.content)
+        if material.notes:
+            lines.append(f"备注：{material.notes}")
+        parts.append("\n".join(lines))
+    return "\n\n---\n\n".join(parts)
 
 
 def _call_writer_model(
@@ -68,9 +112,10 @@ def generate_wechat_article(*, db: Session, user_id: int, request: WechatMpArtic
     from backend.app.services.wechat_mp_model_service import resolve_wechat_mp_model
 
     model = resolve_wechat_mp_model(db=db, user_id=user_id, model_type="text")
+    selected_materials = _load_selected_materials(db, user_id, request.material_ids)
     result = _call_writer_model(
         topic=request.topic,
-        source_material=request.source_material,
+        source_material=_compose_source_material(request.source_material, selected_materials),
         target_reader=request.target_reader,
         tone=request.tone,
         model_name=model.model_name,
@@ -90,6 +135,12 @@ def generate_wechat_article(*, db: Session, user_id: int, request: WechatMpArtic
         )
         db.add(article)
         db.flush()
+        for material in selected_materials:
+            db.add(WechatMpArticleMaterial(
+                user_id=user_id,
+                article_id=article.id,
+                material_id=material.id,
+            ))
         usage = record_text_usage(
             db=db,
             user_id=user_id,

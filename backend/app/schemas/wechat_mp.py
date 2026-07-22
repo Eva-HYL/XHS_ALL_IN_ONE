@@ -18,6 +18,7 @@ class WechatMpArticleCreateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     topic: str = Field(min_length=1)
     source_material: str = ""
+    material_ids: list[int] = Field(default_factory=list)
     target_reader: str = ""
     tone: str = ""
     illustration_skill: str = "xiaomao-illustrations"
@@ -143,6 +144,8 @@ class WechatMpMaterialResponse(BaseModel):
     tags: list[str]
     notes: str
     status: str
+    used_article_count: int = 0
+    usage_status: str = "unused"
     created_at: datetime
     updated_at: datetime
 

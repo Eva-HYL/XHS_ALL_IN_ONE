@@ -116,6 +116,16 @@ class WechatMpMaterial(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
+class WechatMpArticleMaterial(Base):
+    __tablename__ = "wechat_mp_article_materials"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    article_id: Mapped[int] = mapped_column(ForeignKey("wechat_mp_articles.id"), index=True, nullable=False)
+    material_id: Mapped[int] = mapped_column(ForeignKey("wechat_mp_materials.id"), index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class WechatMpDraftSync(Base):
     __tablename__ = "wechat_mp_draft_syncs"
 

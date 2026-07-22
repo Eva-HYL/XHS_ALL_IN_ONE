@@ -10,6 +10,7 @@ import {
   fetchWechatMpArticle,
   fetchWechatMpAssets,
   fetchWechatMpImageCostEstimate,
+  fetchWechatMpMaterials,
   fetchWechatMpPrompts,
   generateWechatMpCover,
   generateWechatMpImage,
@@ -24,6 +25,7 @@ import type {
   WechatMpAsset,
   WechatMpImageCostEstimate,
   WechatMpImagePrompt,
+  WechatMpMaterial,
 } from "../../../types";
 import { WechatMpLayout } from "./wechat-mp-layout";
 
@@ -58,6 +60,8 @@ export function WechatMpWriterPage() {
   const [article, setArticle] = useState<WechatMpArticle | null>(null);
   const [prompts, setPrompts] = useState<WechatMpImagePrompt[]>([]);
   const [assets, setAssets] = useState<WechatMpAsset[]>([]);
+  const [materials, setMaterials] = useState<WechatMpMaterial[]>([]);
+  const [selectedMaterialIds, setSelectedMaterialIds] = useState<number[]>([]);
   const [imageModels, setImageModels] = useState<ModelConfig[]>([]);
   const [imageModel, setImageModel] = useState<string | undefined>();
   const [imageEstimate, setImageEstimate] = useState<WechatMpImageCostEstimate | null>(null);
@@ -91,6 +95,12 @@ export function WechatMpWriterPage() {
         setImageModel(items.find((item) => item.is_default)?.model_name ?? items[0]?.model_name);
       })
       .catch(() => setError("图片模型配置加载失败。"));
+  }, []);
+
+  useEffect(() => {
+    void fetchWechatMpMaterials({ page_size: 100 })
+      .then((response) => setMaterials(response.items))
+      .catch(() => setError("公众号资料库加载失败。"));
   }, []);
 
   useEffect(() => {
@@ -137,6 +147,7 @@ export function WechatMpWriterPage() {
         title: title.trim(),
         topic: topic.trim(),
         source_material: material,
+        material_ids: selectedMaterialIds,
         target_reader: reader,
         tone,
         illustration_skill: skill,
@@ -147,6 +158,7 @@ export function WechatMpWriterPage() {
       setParams({ article: String(next.id) });
       setPrompts([]);
       setAssets([]);
+      setSelectedMaterialIds([]);
       setWorkflowStep(2);
       setNotice("文章和微信排版已生成。请检查正文，再进入提示词步骤。");
     } catch (err) {
@@ -304,6 +316,20 @@ export function WechatMpWriterPage() {
         <Col span={24}><TextArea value={topic} onChange={(event) => setTopic(event.target.value)} placeholder="文章主题与核心观点" rows={2} /></Col>
         <Col xs={24} md={12}><Input value={reader} onChange={(event) => setReader(event.target.value)} placeholder="目标读者（可选）" /></Col>
         <Col xs={24} md={12}><Input value={tone} onChange={(event) => setTone(event.target.value)} placeholder="语气风格（可选）" /></Col>
+        <Col span={24}>
+          <Select
+            mode="multiple"
+            allowClear
+            value={selectedMaterialIds}
+            onChange={setSelectedMaterialIds}
+            placeholder="从资料库选择素材（可多选，会自动带入生成文章）"
+            style={{ width: "100%" }}
+            options={materials.map((item) => ({
+              value: item.id,
+              label: `${item.title} · ${item.usage_status === "used" ? `已写过 ${item.used_article_count} 篇` : "未使用"}`,
+            }))}
+          />
+        </Col>
         <Col span={24}><TextArea value={material} onChange={(event) => setMaterial(event.target.value)} placeholder="参考素材、事实和要点（可选）" rows={4} /></Col>
       </Row>
       <Text type="secondary">正文生成与提示词费用将在模型调用前按已配置价格展示；微信排版本身不收模型费。</Text>

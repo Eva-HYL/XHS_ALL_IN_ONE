@@ -1036,6 +1036,19 @@ def test_wechat_mp_writer_shows_inline_generated_images_next_to_prompts():
     assert ">保存提示词<" not in source
 
 
+def test_wechat_mp_writer_can_select_materials_from_library():
+    writer_source = Path("frontend/src/pages/platforms/wechat-mp/writer-page.tsx").read_text(encoding="utf-8")
+    assets_source = Path("frontend/src/pages/platforms/wechat-mp/assets-page.tsx").read_text(encoding="utf-8")
+
+    assert "fetchWechatMpMaterials" in writer_source
+    assert "selectedMaterialIds" in writer_source
+    assert "material_ids: selectedMaterialIds" in writer_source
+    assert "从资料库选择素材" in writer_source
+    assert "usage_status" in assets_source
+    assert "已写过" in assets_source
+    assert "未使用" in assets_source
+
+
 def test_wechat_mp_account_list_is_scoped_to_owner(api_client, auth_headers):
     client, _ = api_client
     _create_wechat_account(client, auth_headers)
@@ -1173,6 +1186,71 @@ def test_create_wechat_mp_article_generates_markdown_html_and_usage(api_client, 
         assert session.query(UsageRecord).filter_by(platform="wechat_mp", step="write_article").count() == 1
     finally:
         session.close()
+
+
+def test_create_wechat_mp_article_can_use_material_library_items(api_client, auth_headers, monkeypatch):
+    from backend.app.models import WechatMpArticleMaterial
+    from backend.app.services import wechat_mp_writer_service as writer
+
+    captured = {}
+
+    def fake_call(*, topic, source_material, target_reader, tone, model_name, **kwargs):
+        captured["source_material"] = source_material
+        return {
+            "title": "用资料写出的文章",
+            "markdown_body": "## 开头\n资料里的观点已经被使用",
+            "digest": "资料文章",
+            "cover_brief": "小猫翻资料",
+            "input_tokens": 100,
+            "output_tokens": 200,
+            "model_name": model_name,
+        }
+
+    monkeypatch.setattr(writer, "_call_writer_model", fake_call)
+    client, session_factory = api_client
+    material = client.post(
+        "/api/platforms/wechat-mp/materials",
+        json={
+            "title": "飞书整理",
+            "material_type": "link",
+            "content": "飞书解析后的重点：先写结论，再补案例。",
+            "source_url": "https://example.feishu.cn/docx/AbCd1234",
+            "notes": "适合写公众号",
+        },
+        headers=auth_headers,
+    )
+    assert material.status_code == 201
+    material_id = material.json()["id"]
+
+    created = client.post(
+        "/api/platforms/wechat-mp/articles",
+        json={
+            "title": "资料选题",
+            "topic": "资料选题",
+            "source_material": "手动补充素材",
+            "material_ids": [material_id],
+        },
+        headers=auth_headers,
+    )
+
+    assert created.status_code == 201
+    assert "飞书整理" in captured["source_material"]
+    assert "飞书解析后的重点" in captured["source_material"]
+    assert "手动补充素材" in captured["source_material"]
+    session = session_factory()
+    try:
+        links = session.query(WechatMpArticleMaterial).all()
+        assert len(links) == 1
+        assert links[0].article_id == created.json()["id"]
+        assert links[0].material_id == material_id
+    finally:
+        session.close()
+
+    materials = client.get("/api/platforms/wechat-mp/materials", headers=auth_headers)
+    assert materials.status_code == 200
+    item = materials.json()["items"][0]
+    assert item["usage_status"] == "used"
+    assert item["used_article_count"] == 1
 
 
 def test_generate_prompts_defaults_to_xiaomao_skill(api_client, auth_headers, created_wechat_article, monkeypatch):

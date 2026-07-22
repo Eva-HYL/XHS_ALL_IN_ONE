@@ -8,13 +8,13 @@ from uuid import uuid4
 import requests
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import get_settings
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
-from backend.app.models import User, WechatMpMaterial
+from backend.app.models import User, WechatMpArticleMaterial, WechatMpMaterial
 from backend.app.schemas.common import paginated
 from backend.app.schemas.wechat_mp import (
     WechatMpMaterialCreateRequest,
@@ -64,6 +64,27 @@ def _delete_local_material_file(material: WechatMpMaterial) -> None:
     candidate = Path(material.file_path).resolve()
     if candidate.is_relative_to(materials_dir) and candidate.is_file():
         candidate.unlink()
+
+
+def _serialize_material(material: WechatMpMaterial, used_article_count: int = 0) -> dict:
+    data = WechatMpMaterialResponse.model_validate(material).model_dump(mode="json")
+    data["used_article_count"] = used_article_count
+    data["usage_status"] = "used" if used_article_count > 0 else "unused"
+    return data
+
+
+def _material_usage_counts(db: Session, user_id: int, material_ids: list[int]) -> dict[int, int]:
+    if not material_ids:
+        return {}
+    rows = db.execute(
+        select(WechatMpArticleMaterial.material_id, func.count(WechatMpArticleMaterial.article_id))
+        .where(
+            WechatMpArticleMaterial.user_id == user_id,
+            WechatMpArticleMaterial.material_id.in_(material_ids),
+        )
+        .group_by(WechatMpArticleMaterial.material_id)
+    ).all()
+    return {int(material_id): int(count) for material_id, count in rows}
 
 
 def _parse_feishu_document(url: str) -> tuple[str, str]:
@@ -229,11 +250,8 @@ def list_materials(
             or needle in item.notes.lower()
             or any(needle in str(tag).lower() for tag in item.tags)
         ]
-    return paginated(
-        [WechatMpMaterialResponse.model_validate(item).model_dump(mode="json") for item in materials],
-        page=page,
-        page_size=page_size,
-    )
+    usage_counts = _material_usage_counts(db, current_user.id, [item.id for item in materials])
+    return paginated([_serialize_material(item, usage_counts.get(item.id, 0)) for item in materials], page=page, page_size=page_size)
 
 
 @router.post("", response_model=WechatMpMaterialResponse, status_code=status.HTTP_201_CREATED)
