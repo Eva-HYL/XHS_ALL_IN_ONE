@@ -16,6 +16,10 @@ services:
       - ./backend/app/storage/exports:/app/backend/app/storage/exports
     environment:
       - CONFIG_FILE=/app/config/default.yaml
+      - FEISHU_APP_ID=${FEISHU_APP_ID:-}
+      - FEISHU_APP_SECRET=${FEISHU_APP_SECRET:-}
+      - LARK_APP_ID=${LARK_APP_ID:-}
+      - LARK_APP_SECRET=${LARK_APP_SECRET:-}
       # Override sensitive values via env vars in production:
       # - SECRET_KEY=your-production-secret-key
       # - FERNET_KEY=your-fernet-key

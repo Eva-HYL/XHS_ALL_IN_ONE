@@ -80,6 +80,14 @@ function tagsFromText(value?: string): string[] {
     .filter(Boolean);
 }
 
+function errorMessage(error: unknown, fallback: string): string {
+  if (typeof error === "object" && error !== null && "response" in error) {
+    const detail = (error as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
+    if (typeof detail === "string") return detail;
+  }
+  return fallback;
+}
+
 function tagsToText(tags?: string[]): string {
   return (tags ?? []).join(", ");
 }
@@ -220,8 +228,8 @@ export function WechatMpAssetsPage() {
       const updated = await parseWechatMpMaterialFeishu(material.id);
       setMaterials((items) => items.map((item) => item.id === updated.id ? updated : item));
       message.success("飞书内容已解析并保存到资料正文。");
-    } catch {
-      setError("飞书内容解析失败。请确认服务端已配置飞书凭证，并且应用有文档读取权限。");
+    } catch (err) {
+      setError(errorMessage(err, "飞书内容解析失败。请确认服务端已配置飞书凭证，并且应用有文档读取权限。"));
     } finally {
       setParsingMaterialId(null);
     }

@@ -954,6 +954,28 @@ def test_wechat_mp_assets_image_grid_prevents_card_overflow():
     assert 'styles={{ body: { overflow: "hidden" } }}' in source
 
 
+def test_wechat_mp_material_feishu_config_is_exposed_to_container():
+    from pathlib import Path
+
+    compose_source = Path("docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "FEISHU_APP_ID=${FEISHU_APP_ID:-}" in compose_source
+    assert "FEISHU_APP_SECRET=${FEISHU_APP_SECRET:-}" in compose_source
+    assert "LARK_APP_ID=${LARK_APP_ID:-}" in compose_source
+    assert "LARK_APP_SECRET=${LARK_APP_SECRET:-}" in compose_source
+
+
+def test_wechat_mp_material_parse_feishu_surfaces_backend_detail():
+    from pathlib import Path
+
+    source = Path("frontend/src/pages/platforms/wechat-mp/assets-page.tsx").read_text(encoding="utf-8")
+
+    assert "function errorMessage" in source
+    assert "response?.data?.detail" in source
+    assert "catch (err)" in source
+    assert "errorMessage(err" in source
+
+
 def test_wechat_mp_material_library_crud_is_owner_scoped(api_client, auth_headers):
     client, _ = api_client
 
