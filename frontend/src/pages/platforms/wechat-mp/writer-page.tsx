@@ -1,6 +1,6 @@
 import { ArrowLeftOutlined, ArrowRightOutlined, EditOutlined, PictureOutlined, SaveOutlined, SendOutlined } from "@ant-design/icons";
 import { Alert, Button, Card, Col, Empty, Input, Row, Select, Space, Steps, Tag, Typography } from "antd";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { PageHeader } from "../../../components/layout/app-shell";
@@ -73,7 +73,16 @@ export function WechatMpWriterPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [workflowStep, setWorkflowStep] = useState(0);
+  const [activeImagePromptId, setActiveImagePromptId] = useState<number | null>(null);
+  const [imageQueue, setImageQueue] = useState<number[]>([]);
+  const imageQueueRef = useRef<number[]>([]);
+  const imageWorkerRunningRef = useRef(false);
+  const promptSnapshotRef = useRef<WechatMpImagePrompt[]>([]);
   const articleId = Number(params.get("article"));
+
+  useEffect(() => {
+    promptSnapshotRef.current = prompts;
+  }, [prompts]);
 
   useEffect(() => {
     void fetchModelConfigs("image")
@@ -228,19 +237,47 @@ export function WechatMpWriterPage() {
     }
   }
 
-  async function generateImage(prompt: WechatMpImagePrompt) {
-    setBusy(true);
+  async function runImageQueue() {
+    if (imageWorkerRunningRef.current) return;
+    imageWorkerRunningRef.current = true;
     try {
-      const asset = await generateWechatMpImage(prompt.id, { image_model: imageModel, size: "16:9" });
-      setAssets((items) => [asset, ...items]);
-      setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, status: "generated" } : item));
-      setArticle(await fetchWechatMpArticle(prompt.article_id));
-      setNotice("公众号正文配图已生成并计入实际费用。");
-    } catch {
-      setError("图片生成失败，请确认图片模型配置。");
+      while (imageQueueRef.current.length > 0) {
+        const promptId = imageQueueRef.current[0];
+        setActiveImagePromptId(promptId);
+        setImageQueue([...imageQueueRef.current]);
+        const prompt = promptSnapshotRef.current.find((item) => item.id === promptId);
+        if (!prompt || prompt.skill_name === "none") {
+          imageQueueRef.current = imageQueueRef.current.slice(1);
+          continue;
+        }
+        try {
+          const asset = await generateWechatMpImage(prompt.id, { image_model: imageModel, size: "16:9" });
+          setAssets((items) => [asset, ...items]);
+          setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, status: "generated" } : item));
+          setArticle(await fetchWechatMpArticle(prompt.article_id));
+          setNotice(`段落 #${prompt.section_id} 正文配图已生成并计入实际费用。`);
+        } catch {
+          setError(`段落 #${prompt.section_id} 图片生成失败，请确认图片模型配置。`);
+          setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, status: "failed" } : item));
+        } finally {
+          imageQueueRef.current = imageQueueRef.current.slice(1);
+          setImageQueue([...imageQueueRef.current]);
+        }
+      }
     } finally {
-      setBusy(false);
+      imageWorkerRunningRef.current = false;
+      setActiveImagePromptId(null);
+      setImageQueue([]);
     }
+  }
+
+  function enqueueImage(prompt: WechatMpImagePrompt) {
+    if (prompt.skill_name === "none") return;
+    if (activeImagePromptId === prompt.id || imageQueueRef.current.includes(prompt.id)) return;
+    imageQueueRef.current = [...imageQueueRef.current, prompt.id];
+    setImageQueue([...imageQueueRef.current]);
+    setNotice(imageWorkerRunningRef.current ? "已加入图片生成队列。" : "开始按队列生成正文图片。");
+    void runImageQueue();
   }
 
   async function generateCover() {
@@ -341,14 +378,26 @@ export function WechatMpWriterPage() {
           <Text type="secondary">{estimatedCost}；执行后会写入上方累计实际费用。</Text>
           <Button type="primary" icon={<PictureOutlined />} loading={busy} onClick={() => void generateCover()}>生成 16:9 公众号封面</Button>
           {prompts.length === 0 ? <Empty description="提示词生成后在此编辑；非 none 技能可继续生图" /> : prompts.map((prompt) =>
-            <Card key={prompt.id} size="small" title={`段落 #${prompt.section_id}`} extra={<Tag>{prompt.status}</Tag>}>
+            {
+              const isGenerating = activeImagePromptId === prompt.id;
+              const isQueued = !isGenerating && imageQueue.includes(prompt.id);
+              return <Card key={prompt.id} size="small" title={`段落 #${prompt.section_id}`} extra={<Space><Tag>{isGenerating ? "generating" : isQueued ? "queued" : prompt.status}</Tag>{isQueued && <Text type="secondary">排队中</Text>}</Space>}>
               <TextArea value={prompt.editable_prompt} onChange={(event) => setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, editable_prompt: event.target.value } : item))} rows={3} />
               <Space style={{ marginTop: 8 }} wrap>
                 <Button icon={<SaveOutlined />} onClick={() => void savePrompt(prompt)}>保存提示词</Button>
                 <Button onClick={() => void regenerate(prompt)} loading={busy}>重新生成</Button>
-                <Button type="primary" icon={<PictureOutlined />} disabled={prompt.skill_name === "none"} loading={busy} onClick={() => void generateImage(prompt)}>生成正文图片</Button>
+                <Button
+                  type="primary"
+                  icon={<PictureOutlined />}
+                  disabled={prompt.skill_name === "none" || isGenerating || isQueued}
+                  loading={isGenerating}
+                  onClick={() => enqueueImage(prompt)}
+                >
+                  {isGenerating ? "生成中" : isQueued ? "排队中" : "生成正文图片"}
+                </Button>
               </Space>
-            </Card>
+            </Card>;
+            }
           )}
           {assets.length > 0 && <Card title="已生成图片" size="small">
             <Space wrap>{assets.map((asset) => <div key={asset.id}><Tag>{asset.role === "cover" ? "封面" : "正文"}</Tag><img src={asset.public_url} alt="公众号配图" style={{ width: 160, height: 90, objectFit: "cover", display: "block", marginTop: 6 }} /></div>)}</Space>
