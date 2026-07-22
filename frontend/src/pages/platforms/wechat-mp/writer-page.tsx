@@ -31,6 +31,17 @@ const { Text, Paragraph } = Typography;
 const { TextArea } = Input;
 const DEFAULT_SKILL = "xiaomao-illustrations";
 
+function errorMessage(error: unknown, fallback: string): string {
+  if (typeof error === "object" && error !== null && "response" in error) {
+    const response = (error as { response?: { data?: { detail?: unknown } } }).response;
+    if (typeof response?.data?.detail === "string") return response.data.detail;
+  }
+  if (typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "ECONNABORTED") {
+    return "请求超时：提示词生成仍可能在后台继续执行，请稍后刷新文章查看结果。";
+  }
+  return fallback;
+}
+
 function activeArticleAssets(
   articleId: number,
   prompts: WechatMpImagePrompt[],
@@ -109,6 +120,7 @@ export function WechatMpWriterPage() {
     }
     setBusy(true);
     setError(null);
+    setNotice("文章与配图提示词生成中；长文可能需要几分钟，请不要重复点击。");
     try {
       const next = await createWechatMpArticle({
         title: title.trim(),
@@ -125,8 +137,8 @@ export function WechatMpWriterPage() {
       setPrompts(await generateWechatMpPrompts(next.id, skill));
       setArticle(await fetchWechatMpArticle(next.id));
       setNotice("文章、排版和配图提示词已生成。");
-    } catch {
-      setError("文章工作流生成失败，请确认文本模型配置。");
+    } catch (err) {
+      setError(errorMessage(err, "文章工作流生成失败，请确认文本模型配置。"));
     } finally {
       setBusy(false);
     }
@@ -171,12 +183,14 @@ export function WechatMpWriterPage() {
   async function makePrompts() {
     if (!article) return;
     setBusy(true);
+    setError(null);
+    setNotice("配图提示词生成中；长文会按段落串行调用模型，可能需要几分钟。");
     try {
       setPrompts(await generateWechatMpPrompts(article.id, skill));
       setArticle(await fetchWechatMpArticle(article.id));
       setNotice("配图提示词已生成。none 模式保留可编辑提示词，但不会嵌入正文或生成正文图片。");
-    } catch {
-      setError("提示词生成失败。");
+    } catch (err) {
+      setError(errorMessage(err, "提示词生成失败。"));
     } finally {
       setBusy(false);
     }
@@ -198,12 +212,13 @@ export function WechatMpWriterPage() {
 
   async function regenerate(prompt: WechatMpImagePrompt) {
     setBusy(true);
+    setError(null);
     try {
       const updated = await regenerateWechatMpPrompt(prompt.article_id, prompt.id);
       setPrompts((items) => items.map((item) => item.id === updated.id ? updated : item));
       setArticle(await fetchWechatMpArticle(prompt.article_id));
-    } catch {
-      setError("提示词重新生成失败。");
+    } catch (err) {
+      setError(errorMessage(err, "提示词重新生成失败。"));
     } finally {
       setBusy(false);
     }
