@@ -1,3 +1,5 @@
+import json
+
 import requests
 
 
@@ -69,7 +71,8 @@ class WechatMpApiAdapter:
             response = requests.post(
                 f"{self.base_url}/cgi-bin/draft/add",
                 params={"access_token": access_token},
-                json={"articles": [article]},
+                data=json.dumps({"articles": [article]}, ensure_ascii=False).encode("utf-8"),
+                headers={"Content-Type": "application/json; charset=utf-8"},
                 timeout=30,
             )
         except requests.RequestException as exc:
