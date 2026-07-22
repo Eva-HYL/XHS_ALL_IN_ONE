@@ -1029,6 +1029,11 @@ export async function testWechatMpAccount(accountId: number): Promise<WechatMpAc
   return response.data;
 }
 
+export async function deleteWechatMpAccount(accountId: number): Promise<{ id: number; status: string }> {
+  const response = await http.delete<{ id: number; status: string }>(`/platforms/wechat-mp/accounts/${accountId}`);
+  return response.data;
+}
+
 export async function fetchWechatMpArticles(): Promise<WechatMpArticle[]> {
   const response = await http.get<WechatMpArticle[]>("/platforms/wechat-mp/articles");
   return response.data;
