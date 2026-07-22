@@ -9,6 +9,7 @@ from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
 from backend.app.models import User, WechatMpDraftSync
 from backend.app.schemas.wechat_mp import WechatMpDraftSyncStatus
+from backend.app.services.wechat_mp_layout_service import normalize_wechat_layout_style
 from backend.app.services.wechat_mp_draft_service import WechatMpDraftValidationError, sync_article_to_wechat_draft
 
 
@@ -17,6 +18,7 @@ router = APIRouter(prefix="/platforms/wechat-mp/articles", tags=["wechat-mp-draf
 
 class WechatMpDraftSyncRequest(BaseModel):
     account_id: int = Field(gt=0)
+    layout_style: str = Field(default="classic", min_length=1, max_length=64)
 
 
 class WechatMpDraftSyncResponse(BaseModel):
@@ -42,7 +44,17 @@ def sync_draft(
     db: Session = Depends(get_db),
 ):
     try:
-        return sync_article_to_wechat_draft(db=db, user_id=current_user.id, article_id=article_id, account_id=payload.account_id)
+        layout_style = normalize_wechat_layout_style(payload.layout_style)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    try:
+        return sync_article_to_wechat_draft(
+            db=db,
+            user_id=current_user.id,
+            article_id=article_id,
+            account_id=payload.account_id,
+            layout_style=layout_style,
+        )
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except WechatMpDraftValidationError as exc:

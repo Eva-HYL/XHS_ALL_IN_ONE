@@ -90,6 +90,8 @@ import type {
   WechatMpDraftSync,
   WechatMpImageCostEstimate,
   WechatMpImagePrompt,
+  WechatMpLayoutPreview,
+  WechatMpLayoutStyle,
   WechatMpMaterial,
   WechatMpMaterialPayload,
   WechatMpPublishJob
@@ -1054,6 +1056,18 @@ export async function updateWechatMpArticle(articleId: number, payload: Partial<
   return response.data;
 }
 
+export async function fetchWechatMpLayoutStyles(): Promise<WechatMpLayoutStyle[]> {
+  const response = await http.get<WechatMpLayoutStyle[]>("/platforms/wechat-mp/articles/layout-styles");
+  return response.data;
+}
+
+export async function fetchWechatMpLayoutPreview(articleId: number, layoutStyle: string): Promise<WechatMpLayoutPreview> {
+  const response = await http.get<WechatMpLayoutPreview>(`/platforms/wechat-mp/articles/${articleId}/layout-preview`, {
+    params: { layout_style: layoutStyle },
+  });
+  return response.data;
+}
+
 export async function generateWechatMpPrompts(articleId: number, skillName?: string): Promise<WechatMpImagePrompt[]> {
   const response = await http.post<WechatMpImagePrompt[]>(
     `/platforms/wechat-mp/articles/${articleId}/prompts`,
@@ -1146,8 +1160,11 @@ export async function deleteWechatMpMaterial(materialId: number): Promise<{ id: 
   return response.data;
 }
 
-export async function syncWechatMpDraft(articleId: number, accountId: number): Promise<WechatMpDraftSync> {
-  const response = await http.post<WechatMpDraftSync>(`/platforms/wechat-mp/articles/${articleId}/sync-draft`, { account_id: accountId });
+export async function syncWechatMpDraft(articleId: number, accountId: number, layoutStyle = "classic"): Promise<WechatMpDraftSync> {
+  const response = await http.post<WechatMpDraftSync>(`/platforms/wechat-mp/articles/${articleId}/sync-draft`, {
+    account_id: accountId,
+    layout_style: layoutStyle,
+  });
   return response.data;
 }
 

@@ -323,6 +323,55 @@ def test_sync_wechat_mp_article_creates_draft_sync(api_client, auth_headers, cre
         session.close()
 
 
+def test_sync_wechat_mp_article_applies_selected_layout_style(
+    api_client, auth_headers, created_wechat_article_with_image, created_wechat_account, monkeypatch
+):
+    from backend.app.services import wechat_mp_draft_service as draft_service
+    from backend.app.models import WechatMpArticle
+
+    client, session_factory = api_client
+    draft_payloads = []
+    upload_calls = []
+
+    session = session_factory()
+    try:
+        article = session.get(WechatMpArticle, created_wechat_article_with_image.id)
+        article.html_body = '<h2>01 信息系统管理</h2><p><img src="/api/files/media/wechat-inline.png" /></p>'
+        session.commit()
+    finally:
+        session.close()
+
+    class FakeAdapter:
+        def upload_permanent_image(self, **kwargs):
+            upload_calls.append(("cover_thumb", kwargs))
+            return {"media_id": "thumb_media_id"}
+
+        def upload_content_image(self, **kwargs):
+            upload_calls.append(("content", kwargs))
+            return {"url": f"https://mmbiz.qpic.cn/{len(upload_calls)}.png"}
+
+        def add_draft(self, **kwargs):
+            draft_payloads.append(kwargs["article"])
+            return {"media_id": "styled_draft_media_id"}
+
+    monkeypatch.setattr(draft_service, "WechatMpApiAdapter", lambda: FakeAdapter())
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/sync-draft",
+        json={"account_id": created_wechat_account.id, "layout_style": "study_green"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["wechat_media_id"] == "styled_draft_media_id"
+    content = draft_payloads[0]["content"]
+    assert "章节复习" in content
+    assert "max-width:677px" in content
+    assert "border-radius:18px" in content
+    assert "https://mmbiz.qpic.cn/2.png" in content
+    assert "https://mmbiz.qpic.cn/3.png" in content
+    assert [name for name, _ in upload_calls] == ["cover_thumb", "content", "content"]
+
+
 def test_sync_wechat_mp_draft_reports_unresolved_prompt_placeholders(
     api_client, auth_headers, created_wechat_prompt, created_wechat_account, tmp_path
 ):
@@ -1587,6 +1636,38 @@ def test_wechat_mp_layout_renderer_supports_article_blocks():
     assert "<ul " in html
     assert "<ol " in html
     assert 'src="https://example.com/cover.png"' in html
+
+
+def test_wechat_mp_layout_styles_create_polished_publish_html():
+    from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style, get_wechat_layout_styles, render_wechat_html
+
+    html = render_wechat_html(
+        "## 01 信息系统管理\n正文说明\n> 口诀：规划运优\n\n| 阶段 | 常见考法 |\n| --- | --- |\n| 规划 | 问先做什么 |\n\n{{image:inline}}",
+        [{"placeholder": "{{image:inline}}", "url": "/api/files/media/inline.png", "alt": "配图"}],
+    )
+    styled = apply_wechat_layout_style(html, "study_green", hero_image_url="/api/files/media/cover.png")
+
+    assert any(item["id"] == "study_green" for item in get_wechat_layout_styles())
+    assert "章节复习" in styled
+    assert "max-width:677px" in styled
+    assert "border-radius:18px" in styled
+    assert 'src="/api/files/media/cover.png"' in styled
+    assert "<table" in styled
+    assert "background:#e5f4ef" in styled
+
+
+def test_wechat_mp_publish_page_supports_layout_style_preview():
+    from pathlib import Path
+
+    page_source = Path("frontend/src/pages/platforms/wechat-mp/publish-page.tsx").read_text()
+    api_source = Path("frontend/src/lib/api.ts").read_text()
+
+    assert "fetchWechatMpLayoutStyles" in page_source
+    assert "fetchWechatMpLayoutPreview" in page_source
+    assert "排版风格" in page_source
+    assert "发布前预览" in page_source
+    assert "dangerouslySetInnerHTML" in page_source
+    assert "layout_style" in api_source
 
 
 def test_wechat_mp_articles_are_owner_scoped_and_patch_renders_markdown(api_client, auth_headers):

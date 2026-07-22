@@ -9,12 +9,14 @@ import {
   cancelWechatMpPublishJob,
   fetchWechatMpAccounts,
   fetchWechatMpArticles,
+  fetchWechatMpLayoutPreview,
+  fetchWechatMpLayoutStyles,
   fetchWechatMpPublishJobs,
   pollWechatMpPublishJob,
   publishWechatMpArticle,
   syncWechatMpDraft,
 } from "../../../lib/api";
-import type { WechatMpArticle, WechatMpDraftSync, WechatMpPublishJob } from "../../../types";
+import type { WechatMpArticle, WechatMpDraftSync, WechatMpLayoutStyle, WechatMpPublishJob } from "../../../types";
 import { WechatMpLayout } from "./wechat-mp-layout";
 
 const { Paragraph, Text } = Typography;
@@ -38,6 +40,10 @@ export function WechatMpPublishPage() {
   const [accounts, setAccounts] = useState<{ id: number; name: string }[]>([]);
   const [articleId, setArticleId] = useState<number | undefined>(Number(params.get("article")) || undefined);
   const [accountId, setAccountId] = useState<number>();
+  const [layoutStyles, setLayoutStyles] = useState<WechatMpLayoutStyle[]>([]);
+  const [layoutStyle, setLayoutStyle] = useState("study_green");
+  const [previewHtml, setPreviewHtml] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
   const [scheduledAt, setScheduledAt] = useState<Dayjs | null>(null);
   const [sync, setSync] = useState<WechatMpDraftSync | null>(null);
   const [jobs, setJobs] = useState<WechatMpPublishJob[]>([]);
@@ -48,14 +54,17 @@ export function WechatMpPublishPage() {
   useEffect(() => {
     void (async () => {
       try {
-        const [articleItems, accountItems] = await Promise.all([
+        const [articleItems, accountItems, styleItems] = await Promise.all([
           fetchWechatMpArticles(),
           fetchWechatMpAccounts(),
+          fetchWechatMpLayoutStyles(),
         ]);
         setArticles(articleItems);
         setAccounts(accountItems.map((item) => ({ id: item.id, name: item.name })));
+        setLayoutStyles(styleItems);
         if (!articleId && articleItems[0]) setArticleId(articleItems[0].id);
         if (accountItems[0]) setAccountId(accountItems[0].id);
+        if (!styleItems.some((item) => item.id === layoutStyle) && styleItems[0]) setLayoutStyle(styleItems[0].id);
       } catch {
         setError("发布数据加载失败。");
       } finally {
@@ -63,6 +72,18 @@ export function WechatMpPublishPage() {
       }
     })();
   }, []);
+
+  useEffect(() => {
+    if (!articleId || !layoutStyle) {
+      setPreviewHtml("");
+      return;
+    }
+    setPreviewLoading(true);
+    void fetchWechatMpLayoutPreview(articleId, layoutStyle)
+      .then((preview) => setPreviewHtml(preview.html_body))
+      .catch(() => setError("排版预览加载失败。"))
+      .finally(() => setPreviewLoading(false));
+  }, [articleId, layoutStyle]);
 
   useEffect(() => {
     if (!articleId) {
@@ -86,7 +107,7 @@ export function WechatMpPublishPage() {
     setBusy(true);
     setError(null);
     try {
-      setSync(await syncWechatMpDraft(articleId, accountId));
+      setSync(await syncWechatMpDraft(articleId, accountId, layoutStyle));
     } catch (err) {
       setError(errorMessage(err, "草稿同步失败，请先测试账号连接并确认公众号素材可用。"));
     } finally {
@@ -159,12 +180,40 @@ export function WechatMpPublishPage() {
           options={articles.map((article) => ({ value: article.id, label: `${article.title} (${article.status})` }))}
         />
         <Select placeholder="选择公众号账号" value={accountId} onChange={setAccountId} options={accounts.map((account) => ({ value: account.id, label: account.name }))} />
+        <Select
+          placeholder="排版风格"
+          value={layoutStyle}
+          onChange={(value) => { setLayoutStyle(value); setSync(null); }}
+          options={layoutStyles.map((style) => ({
+            value: style.id,
+            label: `${style.name} - ${style.description}`,
+          }))}
+        />
         <DatePicker showTime value={scheduledAt} onChange={setScheduledAt} placeholder="留空即立即发布" style={{ width: "100%" }} />
         <Text type="secondary">所选时间按本地时区显示，提交后统一以 UTC 保存。</Text>
         <Text type="secondary">同步草稿预计费用：¥0（仅调用微信 API）</Text>
         <Button icon={<CloudUploadOutlined />} type="primary" loading={busy} onClick={() => void syncDraft()}>同步到公众号草稿箱</Button>
       </Space>
     </Card>}
+
+    <Card title="发布前预览" style={{ marginTop: 16 }}>
+      {previewLoading ? <Spin /> : previewHtml ? (
+        <div style={{ background: "#f2f2f2", padding: 24, borderRadius: 12, maxHeight: 760, overflow: "auto" }}>
+          <div
+            style={{
+              background: "#fff",
+              color: "#111",
+              margin: "0 auto",
+              maxWidth: 760,
+              minHeight: 480,
+              padding: "32px 28px",
+              boxShadow: "0 16px 44px rgba(0,0,0,0.18)",
+            }}
+            dangerouslySetInnerHTML={{ __html: previewHtml }}
+          />
+        </div>
+      ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="请选择文章后预览公众号排版" />}
+    </Card>
 
     <Card title="草稿同步状态" style={{ marginTop: 16 }}>
       {sync ? <Space><CheckCircleOutlined style={{ color: "#52c41a" }} /><Text>草稿 #{sync.id}：{sync.status}</Text><Tag>{sync.wechat_media_id}</Tag></Space> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="本次会话尚未同步草稿；编辑文章后请重新同步" />}
