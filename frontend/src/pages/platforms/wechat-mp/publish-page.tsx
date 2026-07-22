@@ -21,6 +21,10 @@ import { WechatMpLayout } from "./wechat-mp-layout";
 
 const { Paragraph, Text } = Typography;
 
+function extractMissingPromptIds(message: string): number[] {
+  return Array.from(message.matchAll(/prompt-(\d+)/g), (match) => Number(match[1])).filter(Number.isFinite);
+}
+
 function errorMessage(error: unknown, fallback: string): string {
   if (typeof error === "object" && error !== null && "response" in error) {
     const detail = (error as { response?: { data?: { detail?: unknown } } }).response?.data?.detail;
@@ -51,6 +55,7 @@ export function WechatMpPublishPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [missingPromptIds, setMissingPromptIds] = useState<number[]>([]);
 
   useEffect(() => {
     void (async () => {
@@ -126,10 +131,13 @@ export function WechatMpPublishPage() {
     }
     setBusy(true);
     setError(null);
+    setMissingPromptIds([]);
     try {
       setSync(await syncWechatMpDraft(articleId, accountId, layoutStyle));
     } catch (err) {
-      setError(errorMessage(err, "草稿同步失败，请先测试账号连接并确认公众号素材可用。"));
+      const message = errorMessage(err, "草稿同步失败，请先测试账号连接并确认公众号素材可用。");
+      setError(message);
+      setMissingPromptIds(extractMissingPromptIds(message));
     } finally {
       setBusy(false);
     }
@@ -192,7 +200,22 @@ export function WechatMpPublishPage() {
 
   return <WechatMpLayout>
     <PageHeader eyebrow="WeChat MP / Publish" title="草稿同步与发布" description="先同步公众号草稿，再明确选择立即发布或定时发布。活动任务会在刷新后保留。" />
-    {error && <Alert type="error" message={error} showIcon closable onClose={() => setError(null)} style={{ marginBottom: 16 }} />}
+    {error && <Alert
+      type="error"
+      message={error}
+      showIcon
+      closable
+      onClose={() => { setError(null); setMissingPromptIds([]); }}
+      action={missingPromptIds.length > 0 && articleId ? (
+        <Button
+          size="small"
+          href={`/platforms/wechat-mp/writer?article=${articleId}&prompt=${missingPromptIds[0]}`}
+        >
+          回写作页补图
+        </Button>
+      ) : undefined}
+      style={{ marginBottom: 16 }}
+    />}
     {loading ? <Spin /> : <Card>
       <Space direction="vertical" size={16} style={{ width: "100%" }}>
         <Select

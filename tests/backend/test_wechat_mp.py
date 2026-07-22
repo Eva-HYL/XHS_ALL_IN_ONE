@@ -1216,6 +1216,9 @@ def test_wechat_mp_writer_shows_inline_generated_images_next_to_prompts():
     assert "promptAsset" in source
     assert "段落配图预览" in source
     assert "重新生成正文图片" in source
+    assert "focusPromptId" in source
+    assert "scrollIntoView" in source
+    assert "wechat-prompt-" in source
     assert ">保存提示词<" not in source
 
 
@@ -1910,6 +1913,9 @@ def test_wechat_mp_publish_page_supports_layout_style_preview():
     assert "发布前预览" in page_source
     assert "重新生成排版预览" in page_source
     assert "dangerouslySetInnerHTML" in page_source
+    assert "extractMissingPromptIds" in page_source
+    assert "回写作页补图" in page_source
+    assert "&prompt=${missingPromptIds[0]}" in page_source
     assert "layout_style" in api_source
 
 

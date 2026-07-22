@@ -88,6 +88,7 @@ export function WechatMpWriterPage() {
   const imageWorkerRunningRef = useRef(false);
   const promptSnapshotRef = useRef<WechatMpImagePrompt[]>([]);
   const articleId = Number(params.get("article"));
+  const focusPromptId = Number(params.get("prompt")) || null;
 
   useEffect(() => {
     promptSnapshotRef.current = prompts;
@@ -137,13 +138,23 @@ export function WechatMpWriterPage() {
         setSkill(loadedArticle.illustration_skill);
         setPrompts(loadedPrompts);
         setAssets(activeArticleAssets(articleId, loadedPrompts, loadedAssets.items));
-        setWorkflowStep(loadedPrompts.length > 0 ? 4 : 2);
+        setWorkflowStep(focusPromptId && loadedPrompts.some((prompt) => prompt.id === focusPromptId) ? 4 : loadedPrompts.length > 0 ? 4 : 2);
+        if (focusPromptId && loadedPrompts.some((prompt) => prompt.id === focusPromptId)) {
+          setNotice(`已定位到 prompt-${focusPromptId}，请生成或重新生成对应正文图片后再同步草稿。`);
+        }
       } catch {
         if (!cancelled) setError("文章或提示词加载失败。");
       }
     })();
     return () => { cancelled = true; };
-  }, [articleId]);
+  }, [articleId, focusPromptId]);
+
+  useEffect(() => {
+    if (!focusPromptId || workflowStep !== 4) return;
+    window.setTimeout(() => {
+      document.getElementById(`wechat-prompt-${focusPromptId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 120);
+  }, [focusPromptId, workflowStep, prompts.length]);
 
   async function createArticle() {
     if (!title.trim() || !topic.trim()) {
@@ -453,7 +464,14 @@ export function WechatMpWriterPage() {
                   : promptAsset || prompt.status === "generated"
                     ? "重新生成正文图片"
                     : "生成正文图片";
-              return <Card key={prompt.id} size="small" title={`段落 #${prompt.section_id}`} extra={<Space><Tag>{isGenerating ? "generating" : isQueued ? "queued" : prompt.status}</Tag>{isQueued && <Text type="secondary">排队中</Text>}</Space>}>
+              return <Card
+                id={`wechat-prompt-${prompt.id}`}
+                key={prompt.id}
+                size="small"
+                title={`段落 #${prompt.section_id}`}
+                extra={<Space><Tag>{isGenerating ? "generating" : isQueued ? "queued" : prompt.status}</Tag>{isQueued && <Text type="secondary">排队中</Text>}</Space>}
+                style={focusPromptId === prompt.id ? { borderColor: "#faad14", boxShadow: "0 0 0 1px rgba(250,173,20,0.45)" } : undefined}
+              >
               <Row gutter={[16, 12]}>
                 <Col xs={24} lg={15}>
                   <TextArea value={prompt.editable_prompt} onChange={(event) => setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, editable_prompt: event.target.value } : item))} rows={5} />
