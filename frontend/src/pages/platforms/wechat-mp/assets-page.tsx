@@ -43,6 +43,26 @@ const materialTypeOptions = [
   { value: "other", label: "其它" },
 ];
 
+const imageGridStyle = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+  gap: 16,
+} as const;
+
+const imageFrameStyle = {
+  width: "100%",
+  aspectRatio: "16 / 9",
+  overflow: "hidden",
+  background: "#111",
+} as const;
+
+const imageStyle = {
+  width: "100%",
+  height: "100%",
+  objectFit: "cover",
+  display: "block",
+} as const;
+
 function tagsFromText(value?: string): string[] {
   return (value ?? "")
     .split(/[,，\s]+/)
@@ -212,25 +232,32 @@ export function WechatMpAssetsPage() {
                 {loadingAssets ? <Spin /> : assets.length === 0 ? (
                   <Empty description="暂无公众号图片素材" />
                 ) : (
-                  <List
-                    grid={{ gutter: 16, xs: 1, sm: 2, md: 3, lg: 4 }}
-                    dataSource={assets}
-                    renderItem={(asset) => (
-                      <List.Item>
-                        <Card
-                          cover={<Image src={asset.public_url} width="100%" height={150} style={{ objectFit: "cover", display: "block" }} preview />}
-                          actions={[
-                            <Popconfirm key="delete" title="删除此公众号图片素材？" onConfirm={() => void removeAsset(asset.id)}>
-                              <DeleteOutlined />
-                            </Popconfirm>,
-                          ]}
-                        >
-                          <Text ellipsis style={{ display: "block" }}>{asset.prompt}</Text>
-                          <Tag style={{ marginTop: 8 }}>{asset.status}</Tag>
-                        </Card>
-                      </List.Item>
-                    )}
-                  />
+                  <div style={imageGridStyle}>
+                    {assets.map((asset) => (
+                      <Card
+                        key={asset.id}
+                        style={{ minWidth: 0, overflow: "hidden" }}
+                        cover={
+                          <div style={imageFrameStyle}>
+                            <Image
+                              src={asset.public_url}
+                              preview
+                              wrapperStyle={{ width: "100%", height: "100%", display: "block" }}
+                              style={imageStyle}
+                            />
+                          </div>
+                        }
+                        actions={[
+                          <Popconfirm key="delete" title="删除此公众号图片素材？" onConfirm={() => void removeAsset(asset.id)}>
+                            <DeleteOutlined />
+                          </Popconfirm>,
+                        ]}
+                      >
+                        <Paragraph ellipsis={{ rows: 2 }} style={{ marginBottom: 8, wordBreak: "break-word" }}>{asset.prompt}</Paragraph>
+                        <Tag>{asset.status}</Tag>
+                      </Card>
+                    ))}
+                  </div>
                 )}
               </Card>
             ),
