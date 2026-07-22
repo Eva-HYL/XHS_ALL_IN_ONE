@@ -827,6 +827,17 @@ export interface WechatMpArticle {
   updated_at?: string;
 }
 
+export type WechatMpLayoutStyle = {
+  id: string;
+  name: string;
+  description: string;
+};
+
+export type WechatMpLayoutPreview = {
+  layout_style: string;
+  html_body: string;
+};
+
 export interface WechatMpImagePrompt {
   id: number;
   article_id: number;

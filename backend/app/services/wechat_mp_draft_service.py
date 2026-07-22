@@ -11,6 +11,7 @@ from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiAdapter
 from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiError
 from backend.app.models import WechatMpAccount, WechatMpArticle, WechatMpAsset, WechatMpDraftSync, WechatMpPublishJob
 from backend.app.services.wechat_mp_crypto_service import decrypt_secret
+from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style, layout_style_uses_hero, normalize_wechat_layout_style
 from backend.app.services.wechat_mp_token_service import get_cached_access_token, normalize_token_cache
 
 class WechatMpDraftValidationError(ValueError):
@@ -53,7 +54,14 @@ def _record_draft_failure(
     db.commit()
 
 
-def sync_article_to_wechat_draft(db: Session, user_id: int, article_id: int, account_id: int) -> WechatMpDraftSync:
+def sync_article_to_wechat_draft(
+    db: Session,
+    user_id: int,
+    article_id: int,
+    account_id: int,
+    layout_style: str | None = "classic",
+) -> WechatMpDraftSync:
+    layout_style = normalize_wechat_layout_style(layout_style)
     article = db.scalar(select(WechatMpArticle).where(WechatMpArticle.id == article_id, WechatMpArticle.user_id == user_id))
     account = db.scalar(select(WechatMpAccount).where(WechatMpAccount.id == account_id, WechatMpAccount.user_id == user_id))
     if article is None:
@@ -124,6 +132,12 @@ def sync_article_to_wechat_draft(db: Session, user_id: int, article_id: int, acc
             raise ValueError("WeChat MP cover upload response is missing media_id")
 
         content = article.html_body
+        hero_image_url = None
+        if layout_style_uses_hero(layout_style):
+            uploaded_cover = adapter.upload_content_image(access_token=access_token, file_path=cover.file_path)
+            hero_image_url = uploaded_cover.get("url")
+            if not isinstance(hero_image_url, str) or not hero_image_url:
+                raise ValueError("WeChat MP content image upload response is missing url")
         for asset in assets:
             if asset.id == cover.id or asset.public_url not in content:
                 continue
@@ -132,6 +146,7 @@ def sync_article_to_wechat_draft(db: Session, user_id: int, article_id: int, acc
             if not isinstance(url, str) or not url:
                 raise ValueError("WeChat MP content image upload response is missing url")
             content = content.replace(asset.public_url, url)
+        content = apply_wechat_layout_style(content, layout_style, hero_image_url=hero_image_url)
     except Exception as exc:
         _record_draft_failure(db, draft_sync, exc, indeterminate=False)
         raise

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
-from backend.app.models import User, WechatMpArticle, WechatMpArticleSection, WechatMpImagePrompt
+from backend.app.models import User, WechatMpArticle, WechatMpArticleSection, WechatMpAsset, WechatMpImagePrompt
 from backend.app.schemas.wechat_mp import WechatMpArticleCreateRequest, WechatMpArticleResponse, WechatMpAssetResponse, WechatMpImagePromptResponse
 from backend.app.services.wechat_mp_image_service import (
     WechatMpImageValidationError,
@@ -18,7 +18,7 @@ from backend.app.services.wechat_mp_image_prompt_service import (
     regenerate_image_prompt,
     reset_inline_illustrations,
 )
-from backend.app.services.wechat_mp_layout_service import render_wechat_html
+from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style, get_wechat_layout_styles, normalize_wechat_layout_style, render_wechat_html
 from backend.app.services.wechat_mp_writer_service import generate_wechat_article
 
 
@@ -45,6 +45,11 @@ class WechatMpPromptUpdateRequest(BaseModel):
 class WechatMpImageGenerateRequest(BaseModel):
     image_model: str | None = Field(default=None, min_length=1, max_length=128)
     size: str = Field(default="16:9", min_length=1, max_length=32)
+
+
+class WechatMpLayoutPreviewResponse(BaseModel):
+    layout_style: str
+    html_body: str
 
 
 def _get_owned_article(db: Session, current_user: User, article_id: int) -> WechatMpArticle:
@@ -76,9 +81,36 @@ def list_articles(current_user: User = Depends(get_current_user), db: Session = 
     return db.scalars(select(WechatMpArticle).where(WechatMpArticle.user_id == current_user.id).order_by(WechatMpArticle.id.desc())).all()
 
 
+@router.get("/layout-styles")
+def list_layout_styles(current_user: User = Depends(get_current_user)):
+    return get_wechat_layout_styles()
+
+
 @router.get("/{article_id}", response_model=WechatMpArticleResponse)
 def get_article(article_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return _get_owned_article(db, current_user, article_id)
+
+
+@router.get("/{article_id}/layout-preview", response_model=WechatMpLayoutPreviewResponse)
+def preview_article_layout(
+    article_id: int,
+    layout_style: str = "classic",
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    article = _get_owned_article(db, current_user, article_id)
+    cover = db.scalar(select(WechatMpAsset).where(
+        WechatMpAsset.article_id == article.id,
+        WechatMpAsset.user_id == current_user.id,
+        WechatMpAsset.role == "cover",
+        WechatMpAsset.status == "generated",
+    ).order_by(WechatMpAsset.id.desc()))
+    try:
+        normalized_style = normalize_wechat_layout_style(layout_style)
+        html_body = apply_wechat_layout_style(article.html_body, normalized_style, hero_image_url=cover.public_url if cover else None)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return {"layout_style": normalized_style, "html_body": html_body}
 
 
 @router.patch("/{article_id}", response_model=WechatMpArticleResponse)
