@@ -896,6 +896,15 @@ def test_wechat_mp_accounts_page_exposes_delete_action():
     assert "Popconfirm" in source
 
 
+def test_wechat_mp_assets_image_grid_prevents_card_overflow():
+    source = Path("frontend/src/pages/platforms/wechat-mp/assets-page.tsx").read_text(encoding="utf-8")
+
+    assert "minmax(min(100%, 280px), 1fr)" in source
+    assert 'maxWidth: "100%"' in source
+    assert 'overflowWrap: "anywhere"' in source
+    assert 'styles={{ body: { overflow: "hidden" } }}' in source
+
+
 def test_wechat_mp_material_library_crud_is_owner_scoped(api_client, auth_headers):
     client, _ = api_client
 

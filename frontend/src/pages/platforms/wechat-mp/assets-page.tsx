@@ -50,12 +50,16 @@ const materialTypeOptions = [
 
 const imageGridStyle = {
   display: "grid",
-  gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+  gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 280px), 1fr))",
   gap: 16,
+  width: "100%",
+  maxWidth: "100%",
+  overflow: "hidden",
 } as const;
 
 const imageFrameStyle = {
   width: "100%",
+  maxWidth: "100%",
   aspectRatio: "16 / 9",
   overflow: "hidden",
   background: "#111",
@@ -63,6 +67,7 @@ const imageFrameStyle = {
 
 const imageStyle = {
   width: "100%",
+  maxWidth: "100%",
   height: "100%",
   objectFit: "cover",
   display: "block",
@@ -315,13 +320,14 @@ export function WechatMpAssetsPage() {
                     {assets.map((asset) => (
                       <Card
                         key={asset.id}
-                        style={{ minWidth: 0, overflow: "hidden" }}
+                        style={{ minWidth: 0, maxWidth: "100%", overflow: "hidden" }}
+                        styles={{ body: { overflow: "hidden" } }}
                         cover={
                           <div style={imageFrameStyle}>
                             <Image
                               src={asset.public_url}
                               preview
-                              wrapperStyle={{ width: "100%", height: "100%", display: "block" }}
+                              wrapperStyle={{ width: "100%", maxWidth: "100%", height: "100%", display: "block", overflow: "hidden" }}
                               style={imageStyle}
                             />
                           </div>
@@ -332,7 +338,7 @@ export function WechatMpAssetsPage() {
                           </Popconfirm>,
                         ]}
                       >
-                        <Paragraph ellipsis={{ rows: 2 }} style={{ marginBottom: 8, wordBreak: "break-word" }}>{asset.prompt}</Paragraph>
+                        <Paragraph ellipsis={{ rows: 2 }} style={{ marginBottom: 8, maxWidth: "100%", wordBreak: "break-word", overflowWrap: "anywhere" }}>{asset.prompt}</Paragraph>
                         <Tag>{asset.status}</Tag>
                       </Card>
                     ))}
