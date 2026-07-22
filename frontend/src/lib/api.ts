@@ -1048,7 +1048,11 @@ export async function updateWechatMpArticle(articleId: number, payload: Partial<
 }
 
 export async function generateWechatMpPrompts(articleId: number, skillName?: string): Promise<WechatMpImagePrompt[]> {
-  const response = await http.post<WechatMpImagePrompt[]>(`/platforms/wechat-mp/articles/${articleId}/prompts`, skillName ? { skill_name: skillName } : undefined);
+  const response = await http.post<WechatMpImagePrompt[]>(
+    `/platforms/wechat-mp/articles/${articleId}/prompts`,
+    skillName ? { skill_name: skillName } : undefined,
+    { timeout: 420000 },
+  );
   return response.data;
 }
 
@@ -1063,7 +1067,11 @@ export async function updateWechatMpPrompt(articleId: number, promptId: number, 
 }
 
 export async function regenerateWechatMpPrompt(articleId: number, promptId: number): Promise<WechatMpImagePrompt> {
-  const response = await http.post<WechatMpImagePrompt>(`/platforms/wechat-mp/articles/${articleId}/prompts/${promptId}/regenerate`);
+  const response = await http.post<WechatMpImagePrompt>(
+    `/platforms/wechat-mp/articles/${articleId}/prompts/${promptId}/regenerate`,
+    undefined,
+    { timeout: 180000 },
+  );
   return response.data;
 }
 
