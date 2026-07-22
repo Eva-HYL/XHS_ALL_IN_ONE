@@ -24,6 +24,7 @@ import {
   UserOutlined,
   VideoCameraOutlined,
   WechatOutlined,
+  SkinOutlined,
 } from "@ant-design/icons";
 import {
   Avatar,
@@ -75,6 +76,7 @@ const mainNavItems: MenuProps["items"] = [
       { key: "/platforms/wechat-mp/dashboard", icon: <DashboardOutlined />, label: "工作台" },
       { key: "/platforms/wechat-mp/accounts", icon: <SafetyCertificateOutlined />, label: "账号" },
       { key: "/platforms/wechat-mp/writer", icon: <FileTextOutlined />, label: "写作" },
+      { key: "/platforms/wechat-mp/characters", icon: <SkinOutlined />, label: "形象" },
       { key: "/platforms/wechat-mp/assets", icon: <StarOutlined />, label: "素材" },
       { key: "/platforms/wechat-mp/publish", icon: <SendOutlined />, label: "发布" },
     ],
@@ -85,6 +87,7 @@ const wechatMpNavItems: MenuProps["items"] = [
   { key: "/platforms/wechat-mp/dashboard", icon: <DashboardOutlined />, label: "工作台" },
   { key: "/platforms/wechat-mp/accounts", icon: <SafetyCertificateOutlined />, label: "账号" },
   { key: "/platforms/wechat-mp/writer", icon: <FileTextOutlined />, label: "写作" },
+  { key: "/platforms/wechat-mp/characters", icon: <SkinOutlined />, label: "形象" },
   { key: "/platforms/wechat-mp/assets", icon: <StarOutlined />, label: "素材" },
   { key: "/platforms/wechat-mp/publish", icon: <SendOutlined />, label: "发布" },
 ];
@@ -110,6 +113,9 @@ export function AppShell() {
   const [collapsed, setCollapsed] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [lastWorkspace, setLastWorkspace] = useState<"xhs" | "wechat-mp">(() => {
+    return localStorage.getItem("spider-last-workspace") === "wechat-mp" ? "wechat-mp" : "xhs";
+  });
 
   const loadNotifications = useCallback(async () => {
     try {
@@ -130,7 +136,19 @@ export function AppShell() {
   const handleMenuClick: MenuProps["onClick"] = ({ key }) => { navigate(key); };
   const selectedKeys = [location.pathname];
   const isWechatMpWorkspace = location.pathname.startsWith("/platforms/wechat-mp");
-  const workspaceNavItems = isWechatMpWorkspace ? wechatMpNavItems : mainNavItems;
+  const isXhsWorkspace = location.pathname.startsWith("/platforms/xhs");
+
+  useEffect(() => {
+    if (isWechatMpWorkspace) {
+      setLastWorkspace("wechat-mp");
+      localStorage.setItem("spider-last-workspace", "wechat-mp");
+    } else if (isXhsWorkspace) {
+      setLastWorkspace("xhs");
+      localStorage.setItem("spider-last-workspace", "xhs");
+    }
+  }, [isWechatMpWorkspace, isXhsWorkspace]);
+
+  const workspaceNavItems = isWechatMpWorkspace || (!isXhsWorkspace && lastWorkspace === "wechat-mp") ? wechatMpNavItems : mainNavItems;
 
   const notificationDropdownContent = (
     <div style={{ width: 360, background: "#1f1f1f", borderRadius: 8, border: "1px solid #303030", overflow: "hidden" }}>

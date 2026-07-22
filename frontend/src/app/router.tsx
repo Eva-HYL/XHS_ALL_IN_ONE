@@ -26,6 +26,7 @@ import { XhsVideoStudioPage } from "../pages/platforms/xhs/video-studio-page";
 import { XhsSectionPage } from "../pages/platforms/xhs/xhs-section-page";
 import { WechatMpAccountsPage } from "../pages/platforms/wechat-mp/accounts-page";
 import { WechatMpAssetsPage } from "../pages/platforms/wechat-mp/assets-page";
+import { WechatMpCharactersPage } from "../pages/platforms/wechat-mp/characters-page";
 import { WechatMpDashboardPage } from "../pages/platforms/wechat-mp/dashboard-page";
 import { WechatMpPublishPage } from "../pages/platforms/wechat-mp/publish-page";
 import { WechatMpWriterPage } from "../pages/platforms/wechat-mp/writer-page";
@@ -83,6 +84,7 @@ export function AppRouter() {
           <Route path="/platforms/wechat-mp/dashboard" element={<WechatMpDashboardPage />} />
           <Route path="/platforms/wechat-mp/accounts" element={<WechatMpAccountsPage />} />
           <Route path="/platforms/wechat-mp/writer" element={<WechatMpWriterPage />} />
+          <Route path="/platforms/wechat-mp/characters" element={<WechatMpCharactersPage />} />
           <Route path="/platforms/wechat-mp/assets" element={<WechatMpAssetsPage />} />
           <Route path="/platforms/wechat-mp/publish" element={<WechatMpPublishPage />} />
           <Route path="/tasks" element={<TaskCenterPage />} />

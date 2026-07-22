@@ -1295,14 +1295,51 @@ def test_wechat_mp_writer_can_select_materials_from_library():
 
     assert "fetchWechatMpMaterials" in writer_source
     assert "fetchWechatMpIllustrationCharacters" in writer_source
-    assert "createWechatMpIllustrationCharacter" in writer_source
-    assert "自定义形象提示词" in writer_source
+    assert "createWechatMpIllustrationCharacter" not in writer_source
+    assert "自定义形象提示词" not in writer_source
+    assert "/platforms/wechat-mp/characters" in writer_source
+    assert "形象管理" in writer_source
     assert "selectedMaterialIds" in writer_source
     assert "material_ids: selectedMaterialIds" in writer_source
     assert "从资料库选择素材" in writer_source
     assert "usage_status" in assets_source
     assert "已写过" in assets_source
     assert "未使用" in assets_source
+
+
+def test_wechat_mp_character_management_is_a_separate_module():
+    page_source = Path("frontend/src/pages/platforms/wechat-mp/characters-page.tsx").read_text(encoding="utf-8")
+    router_source = Path("frontend/src/app/router.tsx").read_text(encoding="utf-8")
+    shell_source = Path("frontend/src/components/layout/app-shell.tsx").read_text(encoding="utf-8")
+
+    assert "WechatMpCharactersPage" in page_source
+    assert "fetchWechatMpIllustrationCharacters" in page_source
+    assert "createWechatMpIllustrationCharacter" in page_source
+    assert "自定义形象提示词" in page_source
+    assert "新增形象" in page_source
+    assert "形象库" in page_source
+    assert "/platforms/wechat-mp/characters" in router_source
+    assert "/platforms/wechat-mp/characters" in shell_source
+    assert 'label: "形象"' in shell_source
+
+
+def test_wechat_mp_layout_removes_duplicate_tab_navigation():
+    layout_source = Path("frontend/src/pages/platforms/wechat-mp/wechat-mp-layout.tsx").read_text(encoding="utf-8")
+
+    assert "Segmented" not in layout_source
+    assert "sections" not in layout_source
+    assert "useNavigate" not in layout_source
+
+
+def test_global_nav_keeps_last_workspace_on_shared_pages():
+    shell_source = Path("frontend/src/components/layout/app-shell.tsx").read_text(encoding="utf-8")
+
+    assert 'localStorage.getItem("spider-last-workspace")' in shell_source
+    assert 'localStorage.setItem("spider-last-workspace", "wechat-mp")' in shell_source
+    assert 'localStorage.setItem("spider-last-workspace", "xhs")' in shell_source
+    assert 'lastWorkspace === "wechat-mp"' in shell_source
+    assert '{ key: "/tasks", icon: <ScheduleOutlined />, label: "任务中心" }' in shell_source
+    assert '{ key: "/models", icon: <RobotOutlined />, label: "模型配置" }' in shell_source
 
 
 def test_wechat_mp_account_list_is_scoped_to_owner(api_client, auth_headers):

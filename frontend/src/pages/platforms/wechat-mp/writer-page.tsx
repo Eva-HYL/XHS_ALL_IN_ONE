@@ -1,12 +1,11 @@
 import { ArrowLeftOutlined, ArrowRightOutlined, EditOutlined, PictureOutlined, SaveOutlined, SendOutlined } from "@ant-design/icons";
 import { Alert, Button, Card, Col, Empty, Input, Row, Select, Space, Steps, Tag, Typography } from "antd";
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 
 import { PageHeader } from "../../../components/layout/app-shell";
 import {
   createWechatMpArticle,
-  createWechatMpIllustrationCharacter,
   fetchModelConfigs,
   fetchWechatMpArticle,
   fetchWechatMpAssets,
@@ -74,8 +73,6 @@ export function WechatMpWriterPage() {
   const [material, setMaterial] = useState("");
   const [reader, setReader] = useState("");
   const [tone, setTone] = useState("");
-  const [newCharacterName, setNewCharacterName] = useState("");
-  const [newCharacterPrompt, setNewCharacterPrompt] = useState("");
   const [editTitle, setEditTitle] = useState("");
   const [editMarkdown, setEditMarkdown] = useState("");
   const [skill, setSkill] = useState(DEFAULT_SKILL);
@@ -310,30 +307,6 @@ export function WechatMpWriterPage() {
     }
   }
 
-  async function createCharacter() {
-    if (!newCharacterName.trim() || !newCharacterPrompt.trim()) {
-      setError("请填写形象名称和自定义形象提示词。");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const created = await createWechatMpIllustrationCharacter({
-        name: newCharacterName.trim(),
-        prompt: newCharacterPrompt.trim(),
-      });
-      setCharacters((items) => [...items, created]);
-      setSkill(created.skill_name);
-      setNewCharacterName("");
-      setNewCharacterPrompt("");
-      setNotice(`形象「${created.name}」已创建，后续提示词会使用这段形象设定。`);
-    } catch {
-      setError("自定义形象创建失败。");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const activeStep = !article ? 0 : prompts.length === 0 ? 2 : 4;
   const estimatedCost = imageEstimate?.pricing_available
     ? `预计每张 ¥${imageEstimate.estimated_yuan}`
@@ -364,10 +337,10 @@ export function WechatMpWriterPage() {
               label: `${character.name}${character.is_builtin ? "" : "（自定义）"}`,
             }))}
           />
+          <Text type="secondary" style={{ display: "block", marginTop: 6 }}>
+            需要新增或调整形象，请到 <Link to="/platforms/wechat-mp/characters">形象管理</Link>。
+          </Text>
         </Col>
-        <Col xs={24} md={8}><Input value={newCharacterName} onChange={(event) => setNewCharacterName(event.target.value)} placeholder="新形象名称，如小护士" /></Col>
-        <Col xs={24} md={12}><Input value={newCharacterPrompt} onChange={(event) => setNewCharacterPrompt(event.target.value)} placeholder="自定义形象提示词：外观、性格、固定风格、禁止项" /></Col>
-        <Col xs={24} md={4}><Button block loading={busy} onClick={() => void createCharacter()}>新增形象</Button></Col>
         <Col span={24}><TextArea value={topic} onChange={(event) => setTopic(event.target.value)} placeholder="文章主题与核心观点" rows={2} /></Col>
         <Col xs={24} md={12}><Input value={reader} onChange={(event) => setReader(event.target.value)} placeholder="目标读者（可选）" /></Col>
         <Col xs={24} md={12}><Input value={tone} onChange={(event) => setTone(event.target.value)} placeholder="语气风格（可选）" /></Col>
