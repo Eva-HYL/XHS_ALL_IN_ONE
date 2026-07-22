@@ -1124,6 +1124,13 @@ export async function uploadWechatMpMaterialFile(file: File): Promise<WechatMpMa
   return response.data;
 }
 
+export async function parseWechatMpMaterialFeishu(materialId: number): Promise<WechatMpMaterial> {
+  const response = await http.post<WechatMpMaterial>(`/platforms/wechat-mp/materials/${materialId}/parse-feishu`, undefined, {
+    timeout: 120000,
+  });
+  return response.data;
+}
+
 export async function updateWechatMpMaterial(materialId: number, payload: Partial<WechatMpMaterialPayload>): Promise<WechatMpMaterial> {
   const response = await http.patch<WechatMpMaterial>(`/platforms/wechat-mp/materials/${materialId}`, payload);
   return response.data;

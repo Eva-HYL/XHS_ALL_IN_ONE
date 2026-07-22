@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
+import re
 from pathlib import Path
 from uuid import uuid4
 
+import requests
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 from sqlalchemy import select
@@ -28,6 +31,15 @@ ALLOWED_MATERIAL_EXTENSIONS = {
     ".jpg", ".jpeg", ".png", ".gif", ".webp",
 }
 MAX_MATERIAL_FILE_SIZE = 50 * 1024 * 1024
+FEISHU_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+FEISHU_DOCX_RAW_CONTENT_URL = "https://open.feishu.cn/open-apis/docx/v1/documents/{token}/raw_content"
+FEISHU_DOC_RAW_CONTENT_URL = "https://open.feishu.cn/open-apis/doc/v2/{token}/raw_content"
+
+
+class FeishuMaterialParseError(ValueError):
+    def __init__(self, message: str, status_code: int = status.HTTP_400_BAD_REQUEST):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def _materials_dir() -> Path:
@@ -52,6 +64,77 @@ def _delete_local_material_file(material: WechatMpMaterial) -> None:
     candidate = Path(material.file_path).resolve()
     if candidate.is_relative_to(materials_dir) and candidate.is_file():
         candidate.unlink()
+
+
+def _parse_feishu_document(url: str) -> tuple[str, str]:
+    if not re.search(r"(feishu\.cn|larksuite\.com)", url, flags=re.IGNORECASE):
+        raise FeishuMaterialParseError("请填写飞书或 Lark 文档链接")
+    patterns = (
+        (r"/docx/([A-Za-z0-9]+)", "docx"),
+        (r"/docs/([A-Za-z0-9]+)", "doc"),
+        (r"/doc/([A-Za-z0-9]+)", "doc"),
+    )
+    for pattern, document_type in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return document_type, match.group(1)
+    raise FeishuMaterialParseError("暂只支持飞书 docx/doc 文档链接")
+
+
+def _feishu_credentials() -> tuple[str, str]:
+    app_id = (os.getenv("FEISHU_APP_ID") or os.getenv("LARK_APP_ID") or "").strip()
+    app_secret = (os.getenv("FEISHU_APP_SECRET") or os.getenv("LARK_APP_SECRET") or "").strip()
+    if not app_id or not app_secret:
+        raise FeishuMaterialParseError("未配置飞书应用凭证：请设置 FEISHU_APP_ID 和 FEISHU_APP_SECRET")
+    return app_id, app_secret
+
+
+def _get_feishu_tenant_access_token() -> str:
+    app_id, app_secret = _feishu_credentials()
+    try:
+        response = requests.post(
+            FEISHU_TOKEN_URL,
+            json={"app_id": app_id, "app_secret": app_secret},
+            timeout=20,
+        )
+        payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        raise FeishuMaterialParseError("飞书 access token 获取失败，请检查网络或凭证配置", status.HTTP_502_BAD_GATEWAY) from exc
+    if payload.get("code") != 0:
+        raise FeishuMaterialParseError(
+            f"飞书 access token 获取失败：{payload.get('msg') or payload.get('code')}",
+            status.HTTP_502_BAD_GATEWAY,
+        )
+    token = payload.get("tenant_access_token")
+    if not token:
+        raise FeishuMaterialParseError("飞书 access token 返回为空", status.HTTP_502_BAD_GATEWAY)
+    return token
+
+
+def _fetch_feishu_raw_content(source_url: str) -> str:
+    document_type, document_token = _parse_feishu_document(source_url)
+    tenant_access_token = _get_feishu_tenant_access_token()
+    raw_content_url = (
+        FEISHU_DOCX_RAW_CONTENT_URL if document_type == "docx" else FEISHU_DOC_RAW_CONTENT_URL
+    ).format(token=document_token)
+    try:
+        response = requests.get(
+            raw_content_url,
+            headers={"Authorization": f"Bearer {tenant_access_token}"},
+            timeout=30,
+        )
+        payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        raise FeishuMaterialParseError("飞书文档解析失败，请检查文档权限或网络", status.HTTP_502_BAD_GATEWAY) from exc
+    if payload.get("code") != 0:
+        raise FeishuMaterialParseError(
+            f"飞书文档解析失败：{payload.get('msg') or payload.get('code')}",
+            status.HTTP_502_BAD_GATEWAY,
+        )
+    content = payload.get("data", {}).get("content")
+    if not isinstance(content, str) or not content.strip():
+        raise FeishuMaterialParseError("飞书文档内容为空或无法读取")
+    return content.strip()
 
 
 @router.get("/files/{file_name}")
@@ -175,6 +258,29 @@ def create_material(
         notes=payload.notes,
     )
     db.add(material)
+    db.commit()
+    db.refresh(material)
+    return material
+
+
+@router.post("/{material_id}/parse-feishu", response_model=WechatMpMaterialResponse)
+def parse_feishu_material(
+    material_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    material = _get_owned_material(db, current_user.id, material_id)
+    if not material.source_url:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请先填写飞书文档链接")
+    try:
+        material.content = _fetch_feishu_raw_content(material.source_url)
+    except FeishuMaterialParseError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    material.material_type = "link"
+    tags = list(material.tags or [])
+    if "飞书" not in tags:
+        tags.append("飞书")
+    material.tags = tags
     db.commit()
     db.refresh(material)
     return material

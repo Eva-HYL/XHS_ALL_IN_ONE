@@ -905,6 +905,95 @@ def test_wechat_mp_material_upload_file_is_owner_scoped(api_client, auth_headers
     assert client.get(data["download_url"], headers=auth_headers).status_code == 404
 
 
+def test_wechat_mp_material_parse_feishu_updates_content(api_client, auth_headers, monkeypatch):
+    from backend.app.api.platforms.wechat_mp import materials as materials_api
+
+    client, _ = api_client
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_a_test")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret-value")
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def json(self):
+            return self.payload
+
+    def fake_post(url, json, timeout):
+        calls.append(("token", url, json, timeout))
+        return FakeResponse({"code": 0, "tenant_access_token": "tenant-token"})
+
+    def fake_get(url, headers, timeout):
+        calls.append(("raw", url, headers, timeout))
+        return FakeResponse({"code": 0, "data": {"content": "飞书正文内容\n\n适合写公众号。"}})
+
+    monkeypatch.setattr(materials_api.requests, "post", fake_post)
+    monkeypatch.setattr(materials_api.requests, "get", fake_get)
+
+    created = client.post(
+        "/api/platforms/wechat-mp/materials",
+        json={
+            "title": "飞书资料",
+            "material_type": "link",
+            "source_url": "https://example.feishu.cn/docx/AbCd1234?from=copylink",
+            "tags": ["资料"],
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+
+    parsed = client.post(
+        f"/api/platforms/wechat-mp/materials/{created.json()['id']}/parse-feishu",
+        headers=auth_headers,
+    )
+
+    assert parsed.status_code == 200
+    data = parsed.json()
+    assert data["content"] == "飞书正文内容\n\n适合写公众号。"
+    assert data["material_type"] == "link"
+    assert data["tags"] == ["资料", "飞书"]
+    assert calls[0] == (
+        "token",
+        materials_api.FEISHU_TOKEN_URL,
+        {"app_id": "cli_a_test", "app_secret": "secret-value"},
+        20,
+    )
+    assert calls[1] == (
+        "raw",
+        "https://open.feishu.cn/open-apis/docx/v1/documents/AbCd1234/raw_content",
+        {"Authorization": "Bearer tenant-token"},
+        30,
+    )
+
+
+def test_wechat_mp_material_parse_feishu_requires_credentials(api_client, auth_headers, monkeypatch):
+    client, _ = api_client
+    monkeypatch.delenv("FEISHU_APP_ID", raising=False)
+    monkeypatch.delenv("FEISHU_APP_SECRET", raising=False)
+    monkeypatch.delenv("LARK_APP_ID", raising=False)
+    monkeypatch.delenv("LARK_APP_SECRET", raising=False)
+
+    created = client.post(
+        "/api/platforms/wechat-mp/materials",
+        json={
+            "title": "飞书资料",
+            "material_type": "link",
+            "source_url": "https://example.feishu.cn/docx/AbCd1234",
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+
+    parsed = client.post(
+        f"/api/platforms/wechat-mp/materials/{created.json()['id']}/parse-feishu",
+        headers=auth_headers,
+    )
+
+    assert parsed.status_code == 400
+    assert "未配置飞书应用凭证" in parsed.json()["detail"]
+
+
 def test_wechat_mp_account_list_is_scoped_to_owner(api_client, auth_headers):
     client, _ = api_client
     _create_wechat_account(client, auth_headers)
