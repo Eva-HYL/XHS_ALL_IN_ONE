@@ -864,6 +864,38 @@ def test_wechat_mp_account_create_never_returns_secret(api_client, auth_headers)
         session.close()
 
 
+def test_wechat_mp_account_delete_is_owner_scoped(api_client, auth_headers):
+    client, session_factory = api_client
+    data = _create_wechat_account(client, auth_headers)
+    other = client.post("/api/auth/register", json={"username": "wechat-account-delete-other", "password": "secret123"})
+    other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
+
+    assert client.delete(f"/api/platforms/wechat-mp/accounts/{data['id']}", headers=other_headers).status_code == 404
+
+    deleted = client.delete(f"/api/platforms/wechat-mp/accounts/{data['id']}", headers=auth_headers)
+    assert deleted.status_code == 200
+    assert deleted.json() == {"id": data["id"], "status": "deleted"}
+    assert client.get("/api/platforms/wechat-mp/accounts", headers=auth_headers).json() == []
+
+    from backend.app.models import WechatMpAccount
+
+    session = session_factory()
+    try:
+        assert session.get(WechatMpAccount, data["id"]) is None
+    finally:
+        session.close()
+
+
+def test_wechat_mp_accounts_page_exposes_delete_action():
+    source = Path("frontend/src/pages/platforms/wechat-mp/accounts-page.tsx").read_text(encoding="utf-8")
+    api_source = Path("frontend/src/lib/api.ts").read_text(encoding="utf-8")
+
+    assert "deleteWechatMpAccount" in api_source
+    assert "deleteWechatMpAccount" in source
+    assert "删除账号" in source
+    assert "Popconfirm" in source
+
+
 def test_wechat_mp_material_library_crud_is_owner_scoped(api_client, auth_headers):
     client, _ = api_client
 

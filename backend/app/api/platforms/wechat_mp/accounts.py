@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiAdapter, WechatMpApiError
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
-from backend.app.models import User, WechatMpAccount
+from backend.app.models import User, WechatMpAccount, WechatMpArticle, WechatMpDraftSync, WechatMpPublishJob
 from backend.app.schemas.wechat_mp import WechatMpAccountCreateRequest, WechatMpAccountResponse
 from backend.app.services.wechat_mp_crypto_service import decrypt_secret, encrypt_secret
 from backend.app.services.wechat_mp_token_service import normalize_token_cache
@@ -85,3 +85,29 @@ def test_account(
             detail=_format_wechat_error_detail(exc),
         ) from exc
     return account
+
+
+@router.delete("/{account_id}")
+def delete_account(
+    account_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    account = _get_owned_account(db, current_user, account_id)
+    has_articles = db.scalar(select(WechatMpArticle.id).where(
+        WechatMpArticle.user_id == current_user.id,
+        WechatMpArticle.account_id == account.id,
+    ).limit(1))
+    has_drafts = db.scalar(select(WechatMpDraftSync.id).where(
+        WechatMpDraftSync.user_id == current_user.id,
+        WechatMpDraftSync.account_id == account.id,
+    ).limit(1))
+    has_publish_jobs = db.scalar(select(WechatMpPublishJob.id).where(
+        WechatMpPublishJob.user_id == current_user.id,
+        WechatMpPublishJob.account_id == account.id,
+    ).limit(1))
+    if has_articles or has_drafts or has_publish_jobs:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="公众号账号已被文章、草稿或发布任务使用，暂不能删除")
+    db.delete(account)
+    db.commit()
+    return {"id": account_id, "status": "deleted"}
