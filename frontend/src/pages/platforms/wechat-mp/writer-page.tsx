@@ -74,6 +74,8 @@ export function WechatMpWriterPage() {
   const [editMarkdown, setEditMarkdown] = useState("");
   const [skill, setSkill] = useState(DEFAULT_SKILL);
   const [busy, setBusy] = useState(false);
+  const [promptBusy, setPromptBusy] = useState(false);
+  const [coverBusy, setCoverBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [workflowStep, setWorkflowStep] = useState(0);
@@ -206,7 +208,7 @@ export function WechatMpWriterPage() {
 
   async function makePrompts() {
     if (!article) return;
-    setBusy(true);
+    setPromptBusy(true);
     setError(null);
     setNotice("配图提示词生成中；长文会按段落串行调用模型，可能需要几分钟。");
     try {
@@ -217,12 +219,12 @@ export function WechatMpWriterPage() {
     } catch (err) {
       setError(errorMessage(err, "提示词生成失败。"));
     } finally {
-      setBusy(false);
+      setPromptBusy(false);
     }
   }
 
   async function regenerate(prompt: WechatMpImagePrompt) {
-    setBusy(true);
+    setPromptBusy(true);
     setError(null);
     try {
       const updated = await regenerateWechatMpPrompt(prompt.article_id, prompt.id);
@@ -231,7 +233,7 @@ export function WechatMpWriterPage() {
     } catch (err) {
       setError(errorMessage(err, "提示词重新生成失败。"));
     } finally {
-      setBusy(false);
+      setPromptBusy(false);
     }
   }
 
@@ -282,7 +284,8 @@ export function WechatMpWriterPage() {
 
   async function generateCover() {
     if (!article) return;
-    setBusy(true);
+    setCoverBusy(true);
+    setError(null);
     try {
       const asset = await generateWechatMpCover(article.id, { image_model: imageModel, size: "16:9" });
       setAssets((items) => [asset, ...items.filter((item) => item.role !== "cover")]);
@@ -291,7 +294,7 @@ export function WechatMpWriterPage() {
     } catch {
       setError("封面生成失败，请确认图片模型配置。");
     } finally {
-      setBusy(false);
+      setCoverBusy(false);
     }
   }
 
@@ -382,7 +385,7 @@ export function WechatMpWriterPage() {
         <Paragraph type="secondary">提示词预估：所有技能均按文本模型 token 计费；<Text code>none</Text> 仅免去正文图片生成费用。</Paragraph>
         <Space>
           <Button icon={<ArrowLeftOutlined />} onClick={() => setWorkflowStep(2)}>返回编辑文章</Button>
-          <Button type="primary" icon={<PictureOutlined />} loading={busy} onClick={() => void makePrompts()}>{prompts.length > 0 ? "重新生成提示词" : "生成提示词"}</Button>
+          <Button type="primary" icon={<PictureOutlined />} loading={promptBusy} onClick={() => void makePrompts()}>{prompts.length > 0 ? "重新生成提示词" : "生成提示词"}</Button>
         </Space>
       </Card>}
 
@@ -390,7 +393,29 @@ export function WechatMpWriterPage() {
         <Space direction="vertical" size={12} style={{ width: "100%" }}>
           <Select placeholder="使用后端默认图片模型" allowClear value={imageModel} onChange={setImageModel} options={imageModels.map((model) => ({ value: model.model_name, label: `${model.name}${model.is_default ? "（默认）" : ""}` }))} />
           <Text type="secondary">{estimatedCost}；执行后会写入上方累计实际费用。</Text>
-          <Button type="primary" icon={<PictureOutlined />} loading={busy} onClick={() => void generateCover()}>生成 16:9 公众号封面</Button>
+          <Card size="small" title="公众号封面" extra={<Tag>{coverAsset ? "已生成" : "未生成"}</Tag>}>
+            <Row gutter={[16, 12]} align="stretch">
+              <Col xs={24} lg={15}>
+                <Text strong>封面提示词</Text>
+                <TextArea value={article.cover_brief || "暂无封面提示词"} readOnly rows={5} style={{ marginTop: 8 }} />
+                <Space style={{ marginTop: 8 }} wrap>
+                  <Button type="primary" icon={<PictureOutlined />} loading={coverBusy} onClick={() => void generateCover()}>
+                    {coverAsset ? "重新生成 16:9 公众号封面" : "生成 16:9 公众号封面"}
+                  </Button>
+                  <Text type="secondary">封面生成只使用上方封面提示词，不会重新生成正文配图提示词。</Text>
+                </Space>
+              </Col>
+              <Col xs={24} lg={9}>
+                <Card size="small" title="封面预览" styles={{ body: { padding: 8 } }}>
+                  {coverAsset ? (
+                    <img src={coverAsset.public_url} alt="公众号封面" style={{ width: "100%", aspectRatio: "16 / 9", objectFit: "cover", display: "block", borderRadius: 6 }} />
+                  ) : (
+                    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="还未生成封面" />
+                  )}
+                </Card>
+              </Col>
+            </Row>
+          </Card>
           {prompts.length === 0 ? <Empty description="提示词生成后在此编辑；非 none 技能可继续生图" /> : prompts.map((prompt) =>
             {
               const isGenerating = activeImagePromptId === prompt.id;
@@ -408,7 +433,7 @@ export function WechatMpWriterPage() {
                 <Col xs={24} lg={15}>
                   <TextArea value={prompt.editable_prompt} onChange={(event) => setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, editable_prompt: event.target.value } : item))} rows={5} />
                   <Space style={{ marginTop: 8 }} wrap>
-                    <Button onClick={() => void regenerate(prompt)} loading={busy}>重新生成提示词</Button>
+                    <Button onClick={() => void regenerate(prompt)} loading={promptBusy}>重新生成提示词</Button>
                     <Button
                       type="primary"
                       icon={<PictureOutlined />}
@@ -434,9 +459,6 @@ export function WechatMpWriterPage() {
             </Card>;
             }
           )}
-          {coverAsset && <Card title="已生成封面" size="small">
-            <div><Tag>封面</Tag><img src={coverAsset.public_url} alt="公众号封面" style={{ width: 160, height: 90, objectFit: "cover", display: "block", marginTop: 6 }} /></div>
-          </Card>}
           <Space>
             <Button icon={<ArrowLeftOutlined />} onClick={() => setWorkflowStep(3)}>返回生成提示词</Button>
             <Button type="primary" icon={<ArrowRightOutlined />} onClick={() => setWorkflowStep(5)}>下一步：同步草稿/发布</Button>

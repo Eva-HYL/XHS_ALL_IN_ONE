@@ -1219,6 +1219,19 @@ def test_wechat_mp_writer_shows_inline_generated_images_next_to_prompts():
     assert ">保存提示词<" not in source
 
 
+def test_wechat_mp_writer_cover_generation_is_independent_and_inline_previewed():
+    source = Path("frontend/src/pages/platforms/wechat-mp/writer-page.tsx").read_text(encoding="utf-8")
+
+    assert "coverBusy" in source
+    assert "setCoverBusy(true)" in source
+    assert "loading={coverBusy}" in source
+    assert "封面提示词" in source
+    assert "封面预览" in source
+    assert "article.cover_brief" in source
+    assert "coverAsset.public_url" in source
+    assert "loading={promptBusy}" in source
+
+
 def test_wechat_mp_writer_can_select_materials_from_library():
     writer_source = Path("frontend/src/pages/platforms/wechat-mp/writer-page.tsx").read_text(encoding="utf-8")
     assets_source = Path("frontend/src/pages/platforms/wechat-mp/assets-page.tsx").read_text(encoding="utf-8")
