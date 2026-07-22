@@ -1112,6 +1112,77 @@ def test_wechat_mp_material_parse_feishu_updates_content(api_client, auth_header
     )
 
 
+def test_wechat_mp_material_parse_feishu_wiki_resolves_node_before_content(api_client, auth_headers, monkeypatch):
+    from backend.app.api.platforms.wechat_mp import materials as materials_api
+
+    client, _ = api_client
+    monkeypatch.setenv("FEISHU_APP_ID", "cli_a_test")
+    monkeypatch.setenv("FEISHU_APP_SECRET", "secret-value")
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def json(self):
+            return self.payload
+
+    def fake_post(url, json, timeout):
+        calls.append(("token", url, json, timeout))
+        return FakeResponse({"code": 0, "tenant_access_token": "tenant-token"})
+
+    def fake_get(url, headers, timeout):
+        calls.append(("get", url, headers, timeout))
+        if "wiki/v2/spaces/get_node" in url:
+            return FakeResponse({"code": 0, "data": {"node": {"obj_type": "docx", "obj_token": "DocxRealToken"}}})
+        return FakeResponse({"code": 0, "data": {"content": "知识库正文内容"}})
+
+    monkeypatch.setattr(materials_api.requests, "post", fake_post)
+    monkeypatch.setattr(materials_api.requests, "get", fake_get)
+
+    created = client.post(
+        "/api/platforms/wechat-mp/materials",
+        json={
+            "title": "飞书知识库资料",
+            "material_type": "link",
+            "source_url": "https://example.feishu.cn/wiki/WikiNodeToken?from=from_copylink",
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+
+    parsed = client.post(
+        f"/api/platforms/wechat-mp/materials/{created.json()['id']}/parse-feishu",
+        headers=auth_headers,
+    )
+
+    assert parsed.status_code == 200
+    assert parsed.json()["content"] == "知识库正文内容"
+    assert calls[1] == (
+        "get",
+        "https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node?token=WikiNodeToken",
+        {"Authorization": "Bearer tenant-token"},
+        30,
+    )
+    assert calls[2] == (
+        "get",
+        "https://open.feishu.cn/open-apis/docx/v1/documents/DocxRealToken/raw_content",
+        {"Authorization": "Bearer tenant-token"},
+        30,
+    )
+
+
+def test_wechat_mp_material_parse_feishu_rejects_unsupported_link_types():
+    from backend.app.api.platforms.wechat_mp.materials import FeishuMaterialParseError, _parse_feishu_document
+
+    try:
+        _parse_feishu_document("https://example.feishu.cn/base/AbCd1234")
+    except FeishuMaterialParseError as exc:
+        assert "暂只支持飞书 docx/doc/wiki 文档链接" in str(exc)
+    else:
+        raise AssertionError("base links should not be accepted as documents")
+
+
 def test_wechat_mp_material_parse_feishu_requires_credentials(api_client, auth_headers, monkeypatch):
     client, _ = api_client
     monkeypatch.delenv("FEISHU_APP_ID", raising=False)

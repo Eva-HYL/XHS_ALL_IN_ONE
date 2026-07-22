@@ -34,6 +34,7 @@ MAX_MATERIAL_FILE_SIZE = 50 * 1024 * 1024
 FEISHU_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
 FEISHU_DOCX_RAW_CONTENT_URL = "https://open.feishu.cn/open-apis/docx/v1/documents/{token}/raw_content"
 FEISHU_DOC_RAW_CONTENT_URL = "https://open.feishu.cn/open-apis/doc/v2/{token}/raw_content"
+FEISHU_WIKI_NODE_URL = "https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node"
 
 
 class FeishuMaterialParseError(ValueError):
@@ -92,6 +93,7 @@ def _parse_feishu_document(url: str) -> tuple[str, str]:
         raise FeishuMaterialParseError("请填写飞书或 Lark 文档链接")
     patterns = (
         (r"/docx/([A-Za-z0-9]+)", "docx"),
+        (r"/wiki/([A-Za-z0-9]+)", "wiki"),
         (r"/docs/([A-Za-z0-9]+)", "doc"),
         (r"/doc/([A-Za-z0-9]+)", "doc"),
     )
@@ -99,7 +101,7 @@ def _parse_feishu_document(url: str) -> tuple[str, str]:
         match = re.search(pattern, url)
         if match:
             return document_type, match.group(1)
-    raise FeishuMaterialParseError("暂只支持飞书 docx/doc 文档链接")
+    raise FeishuMaterialParseError("暂只支持飞书 docx/doc/wiki 文档链接；多维表、表格、文件链接请先导出或复制正文后保存")
 
 
 def _feishu_credentials() -> tuple[str, str]:
@@ -132,9 +134,36 @@ def _get_feishu_tenant_access_token() -> str:
     return token
 
 
+def _resolve_feishu_wiki_document(document_token: str, tenant_access_token: str) -> tuple[str, str]:
+    try:
+        response = requests.get(
+            f"{FEISHU_WIKI_NODE_URL}?token={document_token}",
+            headers={"Authorization": f"Bearer {tenant_access_token}"},
+            timeout=30,
+        )
+        payload = response.json()
+    except (requests.RequestException, ValueError) as exc:
+        raise FeishuMaterialParseError("飞书知识库节点解析失败，请检查知识库权限或网络", status.HTTP_502_BAD_GATEWAY) from exc
+    if payload.get("code") != 0:
+        raise FeishuMaterialParseError(
+            f"飞书知识库节点解析失败：{payload.get('msg') or payload.get('code')}",
+            status.HTTP_502_BAD_GATEWAY,
+        )
+    node = payload.get("data", {}).get("node", {})
+    obj_type = str(node.get("obj_type") or "").strip().lower()
+    obj_token = str(node.get("obj_token") or "").strip()
+    if obj_type not in {"doc", "docx"} or not obj_token:
+        raise FeishuMaterialParseError(
+            f"暂不支持解析该飞书知识库节点类型：{obj_type or 'unknown'}。请提供 docx/doc/wiki 文档，或复制正文保存。"
+        )
+    return obj_type, obj_token
+
+
 def _fetch_feishu_raw_content(source_url: str) -> str:
     document_type, document_token = _parse_feishu_document(source_url)
     tenant_access_token = _get_feishu_tenant_access_token()
+    if document_type == "wiki":
+        document_type, document_token = _resolve_feishu_wiki_document(document_token, tenant_access_token)
     raw_content_url = (
         FEISHU_DOCX_RAW_CONTENT_URL if document_type == "docx" else FEISHU_DOC_RAW_CONTENT_URL
     ).format(token=document_token)
