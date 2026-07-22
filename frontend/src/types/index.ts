@@ -838,6 +838,18 @@ export type WechatMpLayoutPreview = {
   html_body: string;
 };
 
+export type WechatMpIllustrationCharacter = {
+  id: number | null;
+  user_id?: number | null;
+  name: string;
+  skill_name: string;
+  prompt: string;
+  status: string;
+  is_builtin: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
 export interface WechatMpImagePrompt {
   id: number;
   article_id: number;

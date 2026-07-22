@@ -11,24 +11,23 @@ from sqlalchemy.orm import Session
 
 from backend.app.models import WechatMpArticle, WechatMpArticleSection, WechatMpAsset, WechatMpImagePrompt
 from backend.app.services.usage_recording_service import record_text_usage
+from backend.app.services.wechat_mp_character_service import XIAOMAO_SKILL_NAME, resolve_character_prompt
 from backend.app.services.wechat_mp_cost_service import add_article_cost
 from backend.app.services.wechat_mp_layout_service import render_wechat_html
 from backend.app.services.wechat_mp_shotlist_service import generate_article_shotlist
 
 
 _PROMPT_SYSTEM = "You write concise image prompts for Chinese WeChat article illustrations. Return only the image prompt."
-_XIAOMAO_STYLE_DNA = (
-    "白色背景，16:9 横版构图，轻微抖动的手绘线稿，少量浅橙、红、蓝批注；"
-    "主角必须是一只胖胖慵懒、半推半就但会把活干完的玳瑁猫，"
-    "身体以黑白色块为主，背、头、尾只有约 15-25% 小块橙斑，半闭眼、冷淡表情；"
-    "小猫必须承担画面的核心概念动作，不能只做装饰，不穿衣、不直立、不画成可爱吉祥物；"
-    "画面留白充足，一图一个核心结构，不使用写实摄影、3D 渲染、复杂背景或大段文字。"
-)
-
-
-def build_skill_prompt(skill_name: str, article_title: str, section_summary: str) -> str:
-    if skill_name == "xiaomao-illustrations":
-        return f"{_XIAOMAO_STYLE_DNA}\n文章：{article_title}\n场景：{section_summary}"
+def build_skill_prompt(
+    skill_name: str,
+    article_title: str,
+    section_summary: str,
+    db: Session | None = None,
+    user_id: int | None = None,
+) -> str:
+    character_prompt = resolve_character_prompt(db, user_id, skill_name)
+    if character_prompt:
+        return f"{character_prompt}\n文章：{article_title}\n场景：{section_summary}"
     return f"16:9 微信公众号正文插画。\n文章：{article_title}\n场景：{section_summary}"
 
 
@@ -117,13 +116,14 @@ def _parse_token_count(value: Any) -> int:
 
 def _call_prompt_model(
     *, article_title: str, section_summary: str, skill_name: str, model_name: str,
-    base_url: str = "", api_key: str = "",
+    base_url: str = "", api_key: str = "", db: Session | None = None, user_id: int | None = None,
 ) -> dict[str, Any]:
     """Call the configured prompt model; kept narrow for monkeypatch-based tests."""
     base_url = (base_url or os.getenv("WECHAT_MP_PROMPT_BASE_URL", "")).rstrip("/")
     api_key = api_key or os.getenv("WECHAT_MP_PROMPT_API_KEY", "")
     if not base_url or not api_key:
         raise ValueError("WeChat MP prompt model is not configured")
+    prompt_contract = build_skill_prompt(skill_name, article_title, section_summary, db=db, user_id=user_id)
     try:
         response = requests.post(
             f"{base_url}/chat/completions",
@@ -131,8 +131,8 @@ def _call_prompt_model(
             json={
                 "model": model_name,
                 "messages": [
-                    {"role": "system", "content": f"{_PROMPT_SYSTEM}\n{build_skill_prompt(skill_name, article_title, section_summary)}"},
-                    {"role": "user", "content": build_skill_prompt(skill_name, article_title, section_summary)},
+                    {"role": "system", "content": f"{_PROMPT_SYSTEM}\n{prompt_contract}"},
+                    {"role": "user", "content": prompt_contract},
                 ],
             },
             timeout=180,
@@ -153,7 +153,7 @@ def _call_prompt_model(
     if not prompt:
         raise ValueError("WeChat MP prompt model returned an empty prompt")
     return {
-        "prompt": f"{build_skill_prompt(skill_name, article_title, section_summary)}\n具体画面：{prompt}",
+        "prompt": f"{prompt_contract}\n具体画面：{prompt}",
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "model_name": model_name,
@@ -166,7 +166,7 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
     article = db.scalar(select(WechatMpArticle).where(WechatMpArticle.id == article_id, WechatMpArticle.user_id == user_id))
     if article is None:
         raise LookupError("WeChat MP article not found")
-    selected_skill = skill_name or article.illustration_skill or "xiaomao-illustrations"
+    selected_skill = skill_name or article.illustration_skill or XIAOMAO_SKILL_NAME
     if selected_skill == "none" and article.illustration_skill != "none":
         has_inline_state = bool(db.scalar(
             select(WechatMpImagePrompt.id).where(WechatMpImagePrompt.article_id == article.id).limit(1)
@@ -192,6 +192,8 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
                 model_name=model.model_name,
                 base_url=model.base_url,
                 api_key=model.api_key,
+                db=db,
+                user_id=user_id,
             )
             prompt_status = "skipped" if selected_skill == "none" else "prompt_ready"
             if prompt is None:

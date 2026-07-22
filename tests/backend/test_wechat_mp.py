@@ -1232,11 +1232,71 @@ def test_wechat_mp_writer_cover_generation_is_independent_and_inline_previewed()
     assert "loading={promptBusy}" in source
 
 
+def test_wechat_mp_illustration_characters_are_user_managed(api_client, auth_headers):
+    client, _ = api_client
+
+    listed = client.get("/api/platforms/wechat-mp/illustration-characters", headers=auth_headers)
+    assert listed.status_code == 200
+    assert [item["skill_name"] for item in listed.json()][:2] == ["xiaomao-illustrations", "none"]
+
+    created = client.post(
+        "/api/platforms/wechat-mp/illustration-characters",
+        json={
+            "name": "白熊讲师",
+            "prompt": "白色北极熊讲师，戴圆框眼镜，温和但专业，白底手绘线稿。",
+        },
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+    data = created.json()
+    assert data["name"] == "白熊讲师"
+    assert data["skill_name"].startswith("custom-")
+    assert data["is_builtin"] is False
+
+    listed_again = client.get("/api/platforms/wechat-mp/illustration-characters", headers=auth_headers)
+    assert any(item["skill_name"] == data["skill_name"] and "白色北极熊讲师" in item["prompt"] for item in listed_again.json())
+
+    other = client.post("/api/auth/register", json={"username": "wechat-character-other", "password": "secret123"})
+    other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
+    assert all(item["skill_name"] != data["skill_name"] for item in client.get("/api/platforms/wechat-mp/illustration-characters", headers=other_headers).json())
+
+
+def test_custom_wechat_mp_character_prompt_is_used_for_image_prompt(api_client, auth_headers, created_wechat_article, monkeypatch):
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    client, _ = api_client
+    created = client.post(
+        "/api/platforms/wechat-mp/illustration-characters",
+        json={"name": "小护士", "prompt": "主角是一名小护士，蓝白制服，手绘科普风。"},
+        headers=auth_headers,
+    )
+    skill_name = created.json()["skill_name"]
+    captured = {}
+
+    def fake_prompt_call(*, article_title, section_summary, skill_name, model_name, **kwargs):
+        captured["prompt_contract"] = prompt_service.build_skill_prompt(skill_name, article_title, section_summary, db=kwargs["db"], user_id=kwargs["user_id"])
+        return {"prompt": "画面：小护士指向流程图", "input_tokens": 12, "output_tokens": 24, "model_name": model_name}
+
+    monkeypatch.setattr(prompt_service, "_call_prompt_model", fake_prompt_call)
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts",
+        json={"skill_name": skill_name},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    assert response.json()[0]["skill_name"] == skill_name
+    assert "主角是一名小护士" in captured["prompt_contract"]
+
+
 def test_wechat_mp_writer_can_select_materials_from_library():
     writer_source = Path("frontend/src/pages/platforms/wechat-mp/writer-page.tsx").read_text(encoding="utf-8")
     assets_source = Path("frontend/src/pages/platforms/wechat-mp/assets-page.tsx").read_text(encoding="utf-8")
 
     assert "fetchWechatMpMaterials" in writer_source
+    assert "fetchWechatMpIllustrationCharacters" in writer_source
+    assert "createWechatMpIllustrationCharacter" in writer_source
+    assert "自定义形象提示词" in writer_source
     assert "selectedMaterialIds" in writer_source
     assert "material_ids: selectedMaterialIds" in writer_source
     assert "从资料库选择素材" in writer_source
