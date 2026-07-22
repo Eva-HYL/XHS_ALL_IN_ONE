@@ -873,6 +873,29 @@ export type WechatMpAsset = {
   created_at: string;
 };
 
+export type WechatMpMaterial = {
+  id: number;
+  user_id: number;
+  title: string;
+  material_type: string;
+  content: string;
+  source_url: string;
+  tags: string[];
+  notes: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WechatMpMaterialPayload = {
+  title: string;
+  material_type?: string;
+  content?: string;
+  source_url?: string;
+  tags?: string[];
+  notes?: string;
+};
+
 export type WechatMpDraftSync = {
   id: number;
   user_id: number;

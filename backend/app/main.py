@@ -15,6 +15,7 @@ from backend.app.api.platforms.wechat_mp import accounts as wechat_mp_accounts
 from backend.app.api.platforms.wechat_mp import articles as wechat_mp_articles
 from backend.app.api.platforms.wechat_mp import assets as wechat_mp_assets
 from backend.app.api.platforms.wechat_mp import drafts as wechat_mp_drafts
+from backend.app.api.platforms.wechat_mp import materials as wechat_mp_materials
 from backend.app.api.platforms.wechat_mp import publish as wechat_mp_publish
 from backend.app.api.platforms.xhs import analytics, crawl, creator, monitoring, pc
 from backend.app.core.config import get_settings
@@ -66,6 +67,7 @@ def create_app() -> FastAPI:
     app.include_router(wechat_mp_articles.router, prefix="/api")
     app.include_router(wechat_mp_articles.image_router, prefix="/api")
     app.include_router(wechat_mp_assets.router, prefix="/api")
+    app.include_router(wechat_mp_materials.router, prefix="/api")
     app.include_router(wechat_mp_drafts.router, prefix="/api")
     app.include_router(wechat_mp_publish.router, prefix="/api")
     app.include_router(auth.router, prefix="/api")

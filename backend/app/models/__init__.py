@@ -18,6 +18,7 @@ from backend.app.models.wechat_mp import (
     WechatMpAsset,
     WechatMpDraftSync,
     WechatMpImagePrompt,
+    WechatMpMaterial,
     WechatMpPublishJob,
 )
 
@@ -54,6 +55,7 @@ __all__ = [
     "WechatMpAsset",
     "WechatMpDraftSync",
     "WechatMpImagePrompt",
+    "WechatMpMaterial",
     "WechatMpPublishJob",
     "note_tags",
 ]

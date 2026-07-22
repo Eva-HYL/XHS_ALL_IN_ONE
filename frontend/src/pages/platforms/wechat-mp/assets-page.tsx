@@ -1,12 +1,275 @@
-import { DeleteOutlined, ReloadOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, Empty, Image, List, Popconfirm, Spin, Tag, Typography } from "antd";
+import { CopyOutlined, DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
+import {
+  Alert,
+  Button,
+  Card,
+  Empty,
+  Form,
+  Image,
+  Input,
+  List,
+  Modal,
+  Popconfirm,
+  Select,
+  Space,
+  Spin,
+  Tabs,
+  Tag,
+  Typography,
+  message,
+} from "antd";
 import { useEffect, useState } from "react";
 
 import { PageHeader } from "../../../components/layout/app-shell";
-import { deleteWechatMpAsset, fetchWechatMpAssets } from "../../../lib/api";
-import type { WechatMpAsset } from "../../../types";
+import {
+  createWechatMpMaterial,
+  deleteWechatMpAsset,
+  deleteWechatMpMaterial,
+  fetchWechatMpAssets,
+  fetchWechatMpMaterials,
+  updateWechatMpMaterial,
+} from "../../../lib/api";
+import type { WechatMpAsset, WechatMpMaterial, WechatMpMaterialPayload } from "../../../types";
 import { WechatMpLayout } from "./wechat-mp-layout";
 
-const { Text } = Typography;
-export function WechatMpAssetsPage() { const [assets, setAssets] = useState<WechatMpAsset[]>([]); const [loading, setLoading] = useState(true); const [error, setError] = useState<string | null>(null); async function load() { setLoading(true); try { setAssets((await fetchWechatMpAssets()).items); } catch { setError("公众号素材加载失败。"); } finally { setLoading(false); } } useEffect(() => { void load(); }, []); async function remove(id: number) { try { await deleteWechatMpAsset(id); setAssets((items) => items.filter((item) => item.id !== id)); } catch { setError("素材删除失败。"); } }
-  return <WechatMpLayout><PageHeader eyebrow="WeChat MP / Assets" title="公众号素材" description="仅显示 wechat_mp_assets 中属于当前用户的配图，不混入小红书图片资产。" action={<Button icon={<ReloadOutlined />} onClick={() => void load()}>刷新</Button>} />{error && <Alert type="error" message={error} showIcon style={{ marginBottom: 16 }} />}<Card>{loading ? <Spin /> : assets.length === 0 ? <Empty description="暂无公众号素材" /> : <List grid={{ gutter: 16, xs: 1, sm: 2, md: 3, lg: 4 }} dataSource={assets} renderItem={(asset) => <List.Item><Card cover={<Image src={asset.public_url} width="100%" height={150} style={{ objectFit: "cover", display: "block" }} preview />} actions={[<Popconfirm key="delete" title="删除此公众号素材？" onConfirm={() => void remove(asset.id)}><DeleteOutlined /></Popconfirm>]}><Text ellipsis style={{ display: "block" }}>{asset.prompt}</Text><Tag style={{ marginTop: 8 }}>{asset.status}</Tag></Card></List.Item>} />}</Card></WechatMpLayout>; }
+const { Paragraph, Text } = Typography;
+const { TextArea } = Input;
+
+const materialTypeOptions = [
+  { value: "text", label: "正文资料" },
+  { value: "link", label: "链接" },
+  { value: "outline", label: "大纲" },
+  { value: "quote", label: "摘录" },
+  { value: "other", label: "其它" },
+];
+
+function tagsFromText(value?: string): string[] {
+  return (value ?? "")
+    .split(/[,，\s]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function tagsToText(tags?: string[]): string {
+  return (tags ?? []).join(", ");
+}
+
+export function WechatMpAssetsPage() {
+  const [assets, setAssets] = useState<WechatMpAsset[]>([]);
+  const [materials, setMaterials] = useState<WechatMpMaterial[]>([]);
+  const [loadingAssets, setLoadingAssets] = useState(true);
+  const [loadingMaterials, setLoadingMaterials] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [materialModalOpen, setMaterialModalOpen] = useState(false);
+  const [editingMaterial, setEditingMaterial] = useState<WechatMpMaterial | null>(null);
+  const [form] = Form.useForm<WechatMpMaterialPayload & { tags_text?: string }>();
+
+  async function loadAssets() {
+    setLoadingAssets(true);
+    try {
+      setAssets((await fetchWechatMpAssets()).items);
+    } catch {
+      setError("公众号图片素材加载失败。");
+    } finally {
+      setLoadingAssets(false);
+    }
+  }
+
+  async function loadMaterials() {
+    setLoadingMaterials(true);
+    try {
+      setMaterials((await fetchWechatMpMaterials()).items);
+    } catch {
+      setError("公众号资料库加载失败。");
+    } finally {
+      setLoadingMaterials(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadAssets();
+    void loadMaterials();
+  }, []);
+
+  function openCreateMaterial() {
+    setEditingMaterial(null);
+    form.setFieldsValue({ material_type: "text", title: "", source_url: "", content: "", notes: "", tags_text: "" });
+    setMaterialModalOpen(true);
+  }
+
+  function openEditMaterial(material: WechatMpMaterial) {
+    setEditingMaterial(material);
+    form.setFieldsValue({
+      title: material.title,
+      material_type: material.material_type,
+      source_url: material.source_url,
+      content: material.content,
+      notes: material.notes,
+      tags_text: tagsToText(material.tags),
+    });
+    setMaterialModalOpen(true);
+  }
+
+  async function submitMaterial(values: WechatMpMaterialPayload & { tags_text?: string }) {
+    const payload = { ...values, tags: tagsFromText(values.tags_text) };
+    delete payload.tags_text;
+    try {
+      if (editingMaterial) {
+        const updated = await updateWechatMpMaterial(editingMaterial.id, payload);
+        setMaterials((items) => items.map((item) => item.id === updated.id ? updated : item));
+      } else {
+        const created = await createWechatMpMaterial(payload);
+        setMaterials((items) => [created, ...items]);
+      }
+      setMaterialModalOpen(false);
+    } catch {
+      setError("资料保存失败。");
+    }
+  }
+
+  async function removeMaterial(id: number) {
+    try {
+      await deleteWechatMpMaterial(id);
+      setMaterials((items) => items.filter((item) => item.id !== id));
+    } catch {
+      setError("资料删除失败。");
+    }
+  }
+
+  async function removeAsset(id: number) {
+    try {
+      await deleteWechatMpAsset(id);
+      setAssets((items) => items.filter((item) => item.id !== id));
+    } catch {
+      setError("图片素材删除失败。");
+    }
+  }
+
+  async function copyMaterial(material: WechatMpMaterial) {
+    const text = [
+      material.title,
+      material.source_url && `来源：${material.source_url}`,
+      material.content,
+      material.notes && `备注：${material.notes}`,
+    ].filter(Boolean).join("\n\n");
+    await navigator.clipboard.writeText(text);
+    message.success("资料已复制，可粘贴到写作页参考素材。");
+  }
+
+  return (
+    <WechatMpLayout>
+      <PageHeader
+        eyebrow="WeChat MP / Assets"
+        title="公众号素材"
+        description="资料库存放待写公众号的参考资料；图片素材存放 AI 生成的公众号配图。"
+        action={<Button icon={<ReloadOutlined />} onClick={() => { void loadAssets(); void loadMaterials(); }}>刷新</Button>}
+      />
+      {error && <Alert type="error" message={error} showIcon closable onClose={() => setError(null)} style={{ marginBottom: 16 }} />}
+
+      <Tabs
+        items={[
+          {
+            key: "materials",
+            label: "资料库",
+            children: (
+              <Card extra={<Button type="primary" icon={<PlusOutlined />} onClick={openCreateMaterial}>新增资料</Button>}>
+                {loadingMaterials ? <Spin /> : materials.length === 0 ? (
+                  <Empty description="暂无公众号发文资料，先添加一条选题、链接、摘录或大纲。" />
+                ) : (
+                  <List
+                    dataSource={materials}
+                    renderItem={(material) => (
+                      <List.Item
+                        actions={[
+                          <Button key="copy" size="small" icon={<CopyOutlined />} onClick={() => void copyMaterial(material)}>复制</Button>,
+                          <Button key="edit" size="small" icon={<EditOutlined />} onClick={() => openEditMaterial(material)}>编辑</Button>,
+                          <Popconfirm key="delete" title="删除这条资料？" onConfirm={() => void removeMaterial(material.id)}>
+                            <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+                          </Popconfirm>,
+                        ]}
+                      >
+                        <List.Item.Meta
+                          title={<Space wrap><Text strong>{material.title}</Text><Tag>{material.material_type}</Tag>{material.tags.map((tag) => <Tag key={tag}>{tag}</Tag>)}</Space>}
+                          description={
+                            <Space direction="vertical" size={4} style={{ width: "100%" }}>
+                              {material.source_url && <Text type="secondary" ellipsis>来源：{material.source_url}</Text>}
+                              <Paragraph ellipsis={{ rows: 2 }} style={{ marginBottom: 0 }}>{material.content || material.notes || "暂无正文"}</Paragraph>
+                            </Space>
+                          }
+                        />
+                      </List.Item>
+                    )}
+                  />
+                )}
+              </Card>
+            ),
+          },
+          {
+            key: "images",
+            label: "图片素材",
+            children: (
+              <Card>
+                {loadingAssets ? <Spin /> : assets.length === 0 ? (
+                  <Empty description="暂无公众号图片素材" />
+                ) : (
+                  <List
+                    grid={{ gutter: 16, xs: 1, sm: 2, md: 3, lg: 4 }}
+                    dataSource={assets}
+                    renderItem={(asset) => (
+                      <List.Item>
+                        <Card
+                          cover={<Image src={asset.public_url} width="100%" height={150} style={{ objectFit: "cover", display: "block" }} preview />}
+                          actions={[
+                            <Popconfirm key="delete" title="删除此公众号图片素材？" onConfirm={() => void removeAsset(asset.id)}>
+                              <DeleteOutlined />
+                            </Popconfirm>,
+                          ]}
+                        >
+                          <Text ellipsis style={{ display: "block" }}>{asset.prompt}</Text>
+                          <Tag style={{ marginTop: 8 }}>{asset.status}</Tag>
+                        </Card>
+                      </List.Item>
+                    )}
+                  />
+                )}
+              </Card>
+            ),
+          },
+        ]}
+      />
+
+      <Modal
+        title={editingMaterial ? "编辑资料" : "新增资料"}
+        open={materialModalOpen}
+        onCancel={() => setMaterialModalOpen(false)}
+        footer={null}
+        destroyOnHidden
+      >
+        <Form form={form} layout="vertical" onFinish={(values) => void submitMaterial(values)}>
+          <Form.Item name="title" label="标题" rules={[{ required: true, message: "请输入资料标题" }]}>
+            <Input placeholder="例如：软考信息系统工程考点" />
+          </Form.Item>
+          <Form.Item name="material_type" label="类型">
+            <Select options={materialTypeOptions} />
+          </Form.Item>
+          <Form.Item name="source_url" label="来源链接">
+            <Input placeholder="可选，原文链接或资料出处" />
+          </Form.Item>
+          <Form.Item name="content" label="资料正文">
+            <TextArea rows={6} placeholder="粘贴要用于公众号写作的资料、摘录、观点或大纲" />
+          </Form.Item>
+          <Form.Item name="tags_text" label="标签">
+            <Input placeholder="用逗号或空格分隔，例如：软考, 备考, 信息系统" />
+          </Form.Item>
+          <Form.Item name="notes" label="备注">
+            <TextArea rows={3} placeholder="可选：这条资料适合怎么用、要注意什么" />
+          </Form.Item>
+          <Space>
+            <Button type="primary" htmlType="submit">保存资料</Button>
+            <Button onClick={() => setMaterialModalOpen(false)}>取消</Button>
+          </Space>
+        </Form>
+      </Modal>
+    </WechatMpLayout>
+  );
+}

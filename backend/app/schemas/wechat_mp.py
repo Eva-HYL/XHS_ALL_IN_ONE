@@ -11,6 +11,7 @@ WechatMpArticleStatus = Literal[
 WechatMpImageStatus = Literal["prompt_ready", "generating", "generated", "failed", "skipped"]
 WechatMpDraftSyncStatus = Literal["pending", "synced", "stale", "failed"]
 WechatMpPublishStatus = Literal["pending", "scheduled", "submitted", "publishing", "published", "failed", "cancelled"]
+WechatMpMaterialType = Literal["text", "link", "outline", "quote", "other"]
 
 
 class WechatMpArticleCreateRequest(BaseModel):
@@ -91,5 +92,40 @@ class WechatMpAssetResponse(BaseModel):
     status: WechatMpImageStatus
     provider_response: dict
     created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class WechatMpMaterialCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    material_type: WechatMpMaterialType = "text"
+    content: str = ""
+    source_url: str = ""
+    tags: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+
+class WechatMpMaterialUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    material_type: WechatMpMaterialType | None = None
+    content: str | None = None
+    source_url: str | None = None
+    tags: list[str] | None = None
+    notes: str | None = None
+    status: str | None = Field(default=None, max_length=32)
+
+
+class WechatMpMaterialResponse(BaseModel):
+    id: int
+    user_id: int
+    title: str
+    material_type: str
+    content: str
+    source_url: str
+    tags: list[str]
+    notes: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
 
     model_config = {"from_attributes": True}
