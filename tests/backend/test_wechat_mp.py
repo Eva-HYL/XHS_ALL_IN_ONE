@@ -877,6 +877,34 @@ def test_wechat_mp_material_library_crud_is_owner_scoped(api_client, auth_header
     assert client.get("/api/platforms/wechat-mp/materials", headers=auth_headers).json()["total"] == 0
 
 
+def test_wechat_mp_material_upload_file_is_owner_scoped(api_client, auth_headers):
+    client, _ = api_client
+
+    uploaded = client.post(
+        "/api/platforms/wechat-mp/materials/upload",
+        files={"file": ("brief.md", b"# brief\nhello", "text/markdown")},
+        headers=auth_headers,
+    )
+    assert uploaded.status_code == 201
+    data = uploaded.json()
+    assert data["material_type"] == "file"
+    assert data["original_file_name"] == "brief.md"
+    assert data["file_size"] == len(b"# brief\nhello")
+    assert data["download_url"].startswith("/api/platforms/wechat-mp/materials/files/")
+
+    downloaded = client.get(data["download_url"], headers=auth_headers)
+    assert downloaded.status_code == 200
+    assert downloaded.content == b"# brief\nhello"
+
+    other = client.post("/api/auth/register", json={"username": "wechat-material-file-other", "password": "secret123"})
+    other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
+    assert client.get(data["download_url"], headers=other_headers).status_code == 404
+
+    deleted = client.delete(f"/api/platforms/wechat-mp/materials/{data['id']}", headers=auth_headers)
+    assert deleted.status_code == 200
+    assert client.get(data["download_url"], headers=auth_headers).status_code == 404
+
+
 def test_wechat_mp_account_list_is_scoped_to_owner(api_client, auth_headers):
     client, _ = api_client
     _create_wechat_account(client, auth_headers)

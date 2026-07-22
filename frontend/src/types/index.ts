@@ -880,6 +880,12 @@ export type WechatMpMaterial = {
   material_type: string;
   content: string;
   source_url: string;
+  file_name: string;
+  original_file_name: string;
+  file_path: string;
+  download_url: string;
+  file_size: number;
+  mime_type: string;
   tags: string[];
   notes: string;
   status: string;
@@ -892,6 +898,12 @@ export type WechatMpMaterialPayload = {
   material_type?: string;
   content?: string;
   source_url?: string;
+  file_name?: string;
+  original_file_name?: string;
+  file_path?: string;
+  download_url?: string;
+  file_size?: number;
+  mime_type?: string;
   tags?: string[];
   notes?: string;
 };

@@ -1114,6 +1114,16 @@ export async function createWechatMpMaterial(payload: WechatMpMaterialPayload): 
   return response.data;
 }
 
+export async function uploadWechatMpMaterialFile(file: File): Promise<WechatMpMaterial> {
+  const formData = new FormData();
+  formData.append("file", file);
+  const response = await http.post<WechatMpMaterial>("/platforms/wechat-mp/materials/upload", formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    timeout: 120000,
+  });
+  return response.data;
+}
+
 export async function updateWechatMpMaterial(materialId: number, payload: Partial<WechatMpMaterialPayload>): Promise<WechatMpMaterial> {
   const response = await http.patch<WechatMpMaterial>(`/platforms/wechat-mp/materials/${materialId}`, payload);
   return response.data;
