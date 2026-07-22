@@ -1744,6 +1744,41 @@ def test_wechat_mp_layout_renderer_supports_article_blocks():
     assert 'src="https://example.com/cover.png"' in html
 
 
+def test_wechat_mp_layout_renderer_turns_details_into_answer_card():
+    from backend.app.services.wechat_mp_layout_service import render_wechat_html
+
+    html = render_wechat_html(
+        "### 题目 1\nA. 支持型\n\n<details>\n<summary>💡 点击查看答案与解析</summary>\n\n**答案：A**\n\n**解析：** PMO 类型说明\n\n</details>\n---",
+        [],
+    )
+
+    assert "&lt;details&gt;" not in html
+    assert "&lt;summary&gt;" not in html
+    assert "</details>" not in html
+    assert "点击查看答案与解析" in html
+    assert "答案：A" in html
+    assert "<strong>答案：A</strong>" in html
+    assert "border-left:4px solid #008575" in html
+    assert "<hr" in html
+
+
+def test_wechat_mp_layout_style_upgrades_previously_escaped_details():
+    from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style
+
+    html = (
+        '<p style="margin:16px 0;">&lt;details&gt;</p>'
+        '<p style="margin:16px 0;">&lt;summary&gt;💡 点击查看答案与解析&lt;/summary&gt;</p>'
+        '<p style="margin:16px 0;">**答案：A**</p>'
+        '<p style="margin:16px 0;">&lt;/details&gt;</p>'
+    )
+    styled = apply_wechat_layout_style(html, "classic")
+
+    assert "&lt;details&gt;" not in styled
+    assert "点击查看答案与解析" in styled
+    assert "<strong>答案：A</strong>" in styled
+    assert "border-left:4px solid #008575" in styled
+
+
 def test_wechat_mp_layout_styles_create_polished_publish_html():
     from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style, get_wechat_layout_styles, render_wechat_html
 

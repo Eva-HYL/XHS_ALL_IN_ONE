@@ -76,6 +76,59 @@ def _table_html(headers: list[str], rows: list[list[str]]) -> str:
     )
 
 
+def _inline_markdown(text: str) -> str:
+    escaped = escape(text)
+    return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+
+
+def _paragraph_html(text: str) -> str:
+    return f'<p style="margin:16px 0;line-height:1.75;color:#222;">{_inline_markdown(text)}</p>'
+
+
+def _answer_card_html(summary: str, body_lines: list[str]) -> str:
+    body = "\n".join(line.strip() for line in body_lines).strip()
+    paragraphs = []
+    for paragraph in re.split(r"\n\s*\n", body):
+        paragraph = paragraph.strip()
+        if not paragraph:
+            continue
+        if paragraph.startswith(("- ", "* ", "+ ")):
+            items = [
+                f'<li style="margin:6px 0;">{_inline_markdown(item.strip()[2:].strip())}</li>'
+                for item in paragraph.splitlines()
+                if item.strip()
+            ]
+            paragraphs.append(f'<ul style="padding-left:1.3em;margin:10px 0;line-height:1.8;">{"".join(items)}</ul>')
+        else:
+            paragraphs.append(f'<p style="margin:10px 0;line-height:1.8;color:#25322f;">{_inline_markdown(paragraph)}</p>')
+    title = _inline_markdown(summary or "点击查看答案与解析")
+    return (
+        '<section style="margin:18px 0;padding:14px 16px;border-left:4px solid #008575;'
+        'background:#f2faf7;border-radius:8px;">'
+        f'<p style="margin:0 0 10px;color:#008575;font-weight:700;">{title}</p>'
+        f'{"".join(paragraphs)}</section>'
+    )
+
+
+def _parse_details_block(lines: list[str], start_index: int) -> tuple[str, int]:
+    summary = "点击查看答案与解析"
+    body_lines: list[str] = []
+    index = start_index + 1
+    while index < len(lines):
+        line = lines[index].strip()
+        if re.fullmatch(r"</details>", line, flags=re.IGNORECASE):
+            return _answer_card_html(summary, body_lines), index + 1
+        summary_match = re.fullmatch(r"<summary>(.*?)</summary>", line, flags=re.IGNORECASE)
+        if summary_match:
+            summary = summary_match.group(1).strip()
+        elif line:
+            body_lines.append(line)
+        else:
+            body_lines.append("")
+        index += 1
+    return _answer_card_html(summary, body_lines), index
+
+
 def render_wechat_html(markdown_body: str, image_placeholders: list[dict]) -> str:
     """Render the limited article markdown subset accepted by WeChat drafts locally."""
     image_by_marker = {
@@ -108,6 +161,16 @@ def render_wechat_html(markdown_body: str, image_placeholders: list[dict]) -> st
             blocks.append(image_by_marker[line])
             index += 1
             continue
+        if re.fullmatch(r"<details>", line, flags=re.IGNORECASE):
+            flush_list()
+            card_html, index = _parse_details_block(lines, index)
+            blocks.append(card_html)
+            continue
+        if re.fullmatch(r"-{3,}", line):
+            flush_list()
+            blocks.append('<hr style="border:none;border-top:1px solid #e8e8e8;margin:24px 0;" />')
+            index += 1
+            continue
         if "|" in line and index + 1 < len(lines) and _is_table_separator(lines[index + 1].strip()):
             flush_list()
             headers = _split_table_row(line)
@@ -136,9 +199,9 @@ def render_wechat_html(markdown_body: str, image_placeholders: list[dict]) -> st
         elif line.startswith("# "):
             blocks.append(f"<h1>{escape(line[2:])}</h1>")
         elif line.startswith("> "):
-            blocks.append(f'<blockquote style="margin:16px 0;padding:12px 16px;border-left:4px solid #07c160;color:#576b95;">{escape(line[2:])}</blockquote>')
+            blocks.append(f'<blockquote style="margin:16px 0;padding:12px 16px;border-left:4px solid #07c160;color:#576b95;">{_inline_markdown(line[2:])}</blockquote>')
         else:
-            blocks.append(f'<p style="margin:16px 0;line-height:1.75;color:#222;">{escape(line)}</p>')
+            blocks.append(_paragraph_html(line))
         index += 1
     flush_list()
     return "\n".join(block for block in blocks if block)
@@ -217,8 +280,27 @@ def _style_blocks(html_body: str, style: str) -> str:
     return _style_tables(_style_images(html_body))
 
 
+def _upgrade_escaped_details(html_body: str) -> str:
+    pattern = re.compile(
+        r'<p\b[^>]*>&lt;details&gt;</p>\s*'
+        r'<p\b[^>]*>&lt;summary&gt;(.*?)&lt;/summary&gt;</p>\s*'
+        r'(.*?)'
+        r'<p\b[^>]*>&lt;/details&gt;</p>',
+        flags=re.S | re.I,
+    )
+
+    def replace(match: re.Match[str]) -> str:
+        body_text = re.sub(r"<br\s*/?>", "\n", match.group(2), flags=re.I)
+        body_text = re.sub(r"</p>\s*<p\b[^>]*>", "\n\n", body_text, flags=re.I)
+        body_text = re.sub(r"<[^>]+>", "", body_text)
+        return _answer_card_html(match.group(1).strip(), body_text.splitlines())
+
+    return pattern.sub(replace, html_body)
+
+
 def apply_wechat_layout_style(html_body: str, layout_style: str | None = "classic", hero_image_url: str | None = None) -> str:
     style = normalize_wechat_layout_style(layout_style)
+    html_body = _upgrade_escaped_details(html_body)
     if style == "classic":
         return html_body
 
