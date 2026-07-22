@@ -1,4 +1,4 @@
-import { EditOutlined, PictureOutlined, SaveOutlined, SendOutlined } from "@ant-design/icons";
+import { ArrowLeftOutlined, ArrowRightOutlined, EditOutlined, PictureOutlined, SaveOutlined, SendOutlined } from "@ant-design/icons";
 import { Alert, Button, Card, Col, Empty, Input, Row, Select, Space, Steps, Tag, Typography } from "antd";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -72,6 +72,7 @@ export function WechatMpWriterPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [workflowStep, setWorkflowStep] = useState(0);
   const articleId = Number(params.get("article"));
 
   useEffect(() => {
@@ -106,6 +107,7 @@ export function WechatMpWriterPage() {
         setSkill(loadedArticle.illustration_skill);
         setPrompts(loadedPrompts);
         setAssets(activeArticleAssets(articleId, loadedPrompts, loadedAssets.items));
+        setWorkflowStep(loadedPrompts.length > 0 ? 4 : 2);
       } catch {
         if (!cancelled) setError("文章或提示词加载失败。");
       }
@@ -120,7 +122,7 @@ export function WechatMpWriterPage() {
     }
     setBusy(true);
     setError(null);
-    setNotice("文章与配图提示词生成中；长文可能需要几分钟，请不要重复点击。");
+    setNotice("文章生成中；完成后进入编辑与预览。");
     try {
       const next = await createWechatMpArticle({
         title: title.trim(),
@@ -134,9 +136,10 @@ export function WechatMpWriterPage() {
       setEditTitle(next.title);
       setEditMarkdown(next.markdown_body);
       setParams({ article: String(next.id) });
-      setPrompts(await generateWechatMpPrompts(next.id, skill));
-      setArticle(await fetchWechatMpArticle(next.id));
-      setNotice("文章、排版和配图提示词已生成。");
+      setPrompts([]);
+      setAssets([]);
+      setWorkflowStep(2);
+      setNotice("文章和微信排版已生成。请检查正文，再进入提示词步骤。");
     } catch (err) {
       setError(errorMessage(err, "文章工作流生成失败，请确认文本模型配置。"));
     } finally {
@@ -188,6 +191,7 @@ export function WechatMpWriterPage() {
     try {
       setPrompts(await generateWechatMpPrompts(article.id, skill));
       setArticle(await fetchWechatMpArticle(article.id));
+      setWorkflowStep(4);
       setNotice("配图提示词已生成。none 模式保留可编辑提示词，但不会嵌入正文或生成正文图片。");
     } catch (err) {
       setError(errorMessage(err, "提示词生成失败。"));
@@ -258,14 +262,17 @@ export function WechatMpWriterPage() {
   const estimatedCost = imageEstimate?.pricing_available
     ? `预计每张 ¥${imageEstimate.estimated_yuan}`
     : "当前模型暂无价格估算";
+  const coverAsset = assets.find((asset) => asset.role === "cover");
+  const inlineImageCount = assets.filter((asset) => asset.role !== "cover").length;
+  const stepItems = ["输入主题/素材", "生成文章", "编辑与预览", "生成提示词", "编辑提示词并生图", "同步草稿/发布"].map((stepTitle) => ({ title: stepTitle }));
 
   return <WechatMpLayout>
     <PageHeader eyebrow="WeChat MP / Writer" title="文章写作" description="六步完成公众号文章、配图和草稿同步发布。默认插画技能为小猫。" />
-    <Steps current={activeStep} size="small" items={["输入主题/素材", "生成文章", "编辑与预览", "生成提示词", "编辑提示词并生图", "同步草稿/发布"].map((stepTitle) => ({ title: stepTitle }))} style={{ marginBottom: 16 }} />
+    <Steps current={workflowStep} size="small" items={stepItems} style={{ marginBottom: 16 }} />
     {error && <Alert type="error" message={error} showIcon closable onClose={() => setError(null)} style={{ marginBottom: 16 }} />}
     {notice && <Alert type="success" message={notice} showIcon closable onClose={() => setNotice(null)} style={{ marginBottom: 16 }} />}
 
-    <Card title="1. 输入主题与素材" style={{ marginBottom: 16 }}>
+    {workflowStep === 0 && <Card title="1. 输入主题与素材" style={{ marginBottom: 16 }}>
       <Row gutter={[12, 12]}>
         <Col xs={24} md={12}><Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="文章标题" /></Col>
         <Col xs={24} md={12}><Select value={skill} onChange={setSkill} style={{ width: "100%" }} options={[{ value: DEFAULT_SKILL, label: "小猫插画（xiaomao-illustrations）" }, { value: "none", label: "none（跳过正文配图）" }]} /></Col>
@@ -275,22 +282,40 @@ export function WechatMpWriterPage() {
         <Col span={24}><TextArea value={material} onChange={(event) => setMaterial(event.target.value)} placeholder="参考素材、事实和要点（可选）" rows={4} /></Col>
       </Row>
       <Text type="secondary">正文生成与提示词费用将在模型调用前按已配置价格展示；微信排版本身不收模型费。</Text>
-      <Button type="primary" icon={<EditOutlined />} loading={busy} onClick={() => void createArticle()} style={{ marginTop: 12 }}>生成文章</Button>
-    </Card>
+      <div style={{ marginTop: 16 }}>
+        <Button type="primary" icon={<ArrowRightOutlined />} disabled={!title.trim() || !topic.trim()} onClick={() => setWorkflowStep(1)}>下一步：生成文章</Button>
+      </div>
+    </Card>}
 
-    {article && <>
+    {workflowStep === 1 && <Card title="2. 生成文章" style={{ marginBottom: 16 }}>
+      <Space direction="vertical" size={12} style={{ width: "100%" }}>
+        <Paragraph>系统会根据标题、主题、目标读者、语气和参考素材生成公众号文章，并同步生成微信安全排版预览。</Paragraph>
+        <Card size="small">
+          <Text strong>{title}</Text>
+          <Paragraph type="secondary" style={{ marginTop: 8 }}>{topic}</Paragraph>
+          <Tag>{skill}</Tag>
+        </Card>
+        <Space>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => setWorkflowStep(0)}>返回修改输入</Button>
+          <Button type="primary" icon={<EditOutlined />} loading={busy} onClick={() => void createArticle()}>生成文章</Button>
+        </Space>
+      </Space>
+    </Card>}
+
+    {article && workflowStep === 2 && <Card title="3. 编辑与预览" extra={<Space><Tag>修订 {article.revision}</Tag><Tag>{article.status}</Tag></Space>}>
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
-          <Card title="2. 编辑文章" extra={<Space><Tag>修订 {article.revision}</Tag><Tag>{article.status}</Tag></Space>}>
-            <Space direction="vertical" size={12} style={{ width: "100%" }}>
-              <Input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} placeholder="公众号标题" />
-              <TextArea value={editMarkdown} onChange={(event) => setEditMarkdown(event.target.value)} rows={16} placeholder="Markdown 正文" />
+          <Space direction="vertical" size={12} style={{ width: "100%" }}>
+            <Input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} placeholder="公众号标题" />
+            <TextArea value={editMarkdown} onChange={(event) => setEditMarkdown(event.target.value)} rows={16} placeholder="Markdown 正文" />
+            <Space>
               <Button type="primary" icon={<SaveOutlined />} loading={busy} onClick={() => void saveArticle()}>保存标题与正文</Button>
+              <Button icon={<ArrowRightOutlined />} onClick={() => setWorkflowStep(3)}>下一步：生成提示词</Button>
             </Space>
-          </Card>
+          </Space>
         </Col>
         <Col xs={24} lg={12}>
-          <Card title="3. 微信排版预览">
+          <Card title="微信排版预览" size="small">
             <Text strong>{article.title}</Text>
             <Paragraph type="secondary">{article.digest}</Paragraph>
             <Paragraph type="secondary">累计实际模型费用（正文、提示词、封面、配图）：¥{String(article.cost_estimate.total_yuan ?? "0.0000")}，共 {String(article.cost_estimate.calls ?? 0)} 次调用</Paragraph>
@@ -298,14 +323,19 @@ export function WechatMpWriterPage() {
           </Card>
         </Col>
       </Row>
+    </Card>}
 
-      <Card title="4. 生成配图提示词" style={{ marginTop: 16 }}>
+    {article && workflowStep === 3 && <Card title="4. 生成配图提示词">
+        <Paragraph>文章已排版完成。现在按段落拆出配图提示词；长文会串行调用模型，可能需要几分钟。</Paragraph>
         <Paragraph>当前技能：<Text code>{skill}</Text>。<Text code>none</Text> 仍生成可编辑提示词，但不嵌入正文、不生成正文图片；公众号封面仍可生成。</Paragraph>
         <Paragraph type="secondary">提示词预估：所有技能均按文本模型 token 计费；<Text code>none</Text> 仅免去正文图片生成费用。</Paragraph>
-        <Button type="primary" icon={<PictureOutlined />} loading={busy} onClick={() => void makePrompts()}>重新生成提示词</Button>
-      </Card>
+        <Space>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => setWorkflowStep(2)}>返回编辑文章</Button>
+          <Button type="primary" icon={<PictureOutlined />} loading={busy} onClick={() => void makePrompts()}>{prompts.length > 0 ? "重新生成提示词" : "生成提示词"}</Button>
+        </Space>
+      </Card>}
 
-      <Card title="5. 编辑提示词并生成图片" style={{ marginTop: 16 }}>
+    {article && workflowStep === 4 && <Card title="5. 编辑提示词并生成图片">
         <Space direction="vertical" size={12} style={{ width: "100%" }}>
           <Select placeholder="使用后端默认图片模型" allowClear value={imageModel} onChange={setImageModel} options={imageModels.map((model) => ({ value: model.model_name, label: `${model.name}${model.is_default ? "（默认）" : ""}` }))} />
           <Text type="secondary">{estimatedCost}；执行后会写入上方累计实际费用。</Text>
@@ -320,17 +350,29 @@ export function WechatMpWriterPage() {
               </Space>
             </Card>
           )}
+          {assets.length > 0 && <Card title="已生成图片" size="small">
+            <Space wrap>{assets.map((asset) => <div key={asset.id}><Tag>{asset.role === "cover" ? "封面" : "正文"}</Tag><img src={asset.public_url} alt="公众号配图" style={{ width: 160, height: 90, objectFit: "cover", display: "block", marginTop: 6 }} /></div>)}</Space>
+          </Card>}
+          <Space>
+            <Button icon={<ArrowLeftOutlined />} onClick={() => setWorkflowStep(3)}>返回生成提示词</Button>
+            <Button type="primary" icon={<ArrowRightOutlined />} onClick={() => setWorkflowStep(5)}>下一步：同步草稿/发布</Button>
+          </Space>
         </Space>
-      </Card>
-
-      {assets.length > 0 && <Card title="生成图片" style={{ marginTop: 16 }}>
-        <Space wrap>{assets.map((asset) => <div key={asset.id}><Tag>{asset.role === "cover" ? "封面" : "正文"}</Tag><img src={asset.public_url} alt="公众号配图" style={{ width: 160, height: 90, objectFit: "cover", display: "block", marginTop: 6 }} /></div>)}</Space>
       </Card>}
 
-      <Card title="6. 同步草稿与发布" style={{ marginTop: 16 }}>
-        <Paragraph>文章编辑后必须重新同步公众号草稿，再提交发布。</Paragraph>
-        <Button icon={<SendOutlined />} href={`/platforms/wechat-mp/publish?article=${article.id}`}>前往发布中心</Button>
-      </Card>
-    </>}
+    {article && workflowStep === 5 && <Card title="6. 同步草稿与发布">
+        <Paragraph>写作流程已完成。发布前需要至少生成封面；如果正文仍有未生成占位符，同步草稿时会提示具体缺少的 prompt。</Paragraph>
+        <Space wrap>
+          <Tag color={coverAsset ? "green" : "orange"}>{coverAsset ? "封面已生成" : "还未生成封面"}</Tag>
+          <Tag>{inlineImageCount} 张正文图</Tag>
+          <Tag>{prompts.length} 条提示词</Tag>
+        </Space>
+        <div style={{ marginTop: 16 }}>
+          <Space>
+            <Button icon={<ArrowLeftOutlined />} onClick={() => setWorkflowStep(4)}>返回生图</Button>
+            <Button icon={<SendOutlined />} href={`/platforms/wechat-mp/publish?article=${article.id}`}>前往发布中心</Button>
+          </Space>
+        </div>
+      </Card>}
   </WechatMpLayout>;
 }
