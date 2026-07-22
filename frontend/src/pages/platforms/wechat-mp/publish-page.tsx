@@ -43,6 +43,7 @@ export function WechatMpPublishPage() {
   const [layoutStyles, setLayoutStyles] = useState<WechatMpLayoutStyle[]>([]);
   const [layoutStyle, setLayoutStyle] = useState("study_green");
   const [previewHtml, setPreviewHtml] = useState("");
+  const [previewKey, setPreviewKey] = useState("");
   const [previewLoading, setPreviewLoading] = useState(false);
   const [scheduledAt, setScheduledAt] = useState<Dayjs | null>(null);
   const [sync, setSync] = useState<WechatMpDraftSync | null>(null);
@@ -74,15 +75,9 @@ export function WechatMpPublishPage() {
   }, []);
 
   useEffect(() => {
-    if (!articleId || !layoutStyle) {
-      setPreviewHtml("");
-      return;
-    }
-    setPreviewLoading(true);
-    void fetchWechatMpLayoutPreview(articleId, layoutStyle)
-      .then((preview) => setPreviewHtml(preview.html_body))
-      .catch(() => setError("排版预览加载失败。"))
-      .finally(() => setPreviewLoading(false));
+    setPreviewHtml("");
+    setPreviewKey("");
+    if (articleId && layoutStyle) void refreshLayoutPreview(articleId, layoutStyle);
   }, [articleId, layoutStyle]);
 
   useEffect(() => {
@@ -99,9 +94,34 @@ export function WechatMpPublishPage() {
     setJobs((items) => [next, ...items.filter((item) => item.id !== next.id)]);
   }
 
+  async function refreshLayoutPreview(nextArticleId = articleId, nextLayoutStyle = layoutStyle) {
+    if (!nextArticleId || !nextLayoutStyle) {
+      setError("请选择文章和排版风格后再预览。");
+      return;
+    }
+    setPreviewLoading(true);
+    setError(null);
+    try {
+      const preview = await fetchWechatMpLayoutPreview(nextArticleId, nextLayoutStyle);
+      setPreviewHtml(preview.html_body);
+      setPreviewKey(`${nextArticleId}:${preview.layout_style}`);
+      setSync(null);
+    } catch {
+      setPreviewHtml("");
+      setPreviewKey("");
+      setError("排版预览加载失败。");
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
   async function syncDraft() {
     if (!articleId || !accountId) {
       setError("请选择文章与账号。");
+      return;
+    }
+    if (!canSyncDraft) {
+      setError("请先预览并确认排版布局，再同步到公众号草稿箱。");
       return;
     }
     setBusy(true);
@@ -114,6 +134,8 @@ export function WechatMpPublishPage() {
       setBusy(false);
     }
   }
+
+  const canSyncDraft = Boolean(articleId && accountId && previewHtml && previewKey === `${articleId}:${layoutStyle}`);
 
   async function submitPublish(confirm: boolean) {
     if (!articleId) return;
@@ -176,14 +198,14 @@ export function WechatMpPublishPage() {
         <Select
           placeholder="选择文章"
           value={articleId}
-          onChange={(value) => { setArticleId(value); setSync(null); }}
+          onChange={(value) => { setArticleId(value); setSync(null); setPreviewHtml(""); setPreviewKey(""); }}
           options={articles.map((article) => ({ value: article.id, label: `${article.title} (${article.status})` }))}
         />
         <Select placeholder="选择公众号账号" value={accountId} onChange={setAccountId} options={accounts.map((account) => ({ value: account.id, label: account.name }))} />
         <Select
           placeholder="排版风格"
           value={layoutStyle}
-          onChange={(value) => { setLayoutStyle(value); setSync(null); }}
+          onChange={(value) => { setLayoutStyle(value); setSync(null); setPreviewHtml(""); setPreviewKey(""); }}
           options={layoutStyles.map((style) => ({
             value: style.id,
             label: `${style.name} - ${style.description}`,
@@ -191,12 +213,22 @@ export function WechatMpPublishPage() {
         />
         <DatePicker showTime value={scheduledAt} onChange={setScheduledAt} placeholder="留空即立即发布" style={{ width: "100%" }} />
         <Text type="secondary">所选时间按本地时区显示，提交后统一以 UTC 保存。</Text>
-        <Text type="secondary">同步草稿预计费用：¥0（仅调用微信 API）</Text>
-        <Button icon={<CloudUploadOutlined />} type="primary" loading={busy} onClick={() => void syncDraft()}>同步到公众号草稿箱</Button>
+        <Text type="secondary">同步草稿预计费用：¥0（仅调用微信 API）。必须先预览确认当前排版布局。</Text>
+        <Button icon={<CloudUploadOutlined />} type="primary" disabled={!canSyncDraft} loading={busy} onClick={() => void syncDraft()}>同步到公众号草稿箱</Button>
       </Space>
     </Card>}
 
-    <Card title="发布前预览" style={{ marginTop: 16 }}>
+    <Card
+      title="发布前预览"
+      extra={<Button icon={<ReloadOutlined />} loading={previewLoading} disabled={!articleId || !layoutStyle} onClick={() => void refreshLayoutPreview()}>重新生成排版预览</Button>}
+      style={{ marginTop: 16 }}
+    >
+      <Alert
+        type={canSyncDraft ? "success" : "warning"}
+        showIcon
+        message={canSyncDraft ? "当前排版已预览，可以同步草稿。" : "请先预览并确认排版布局；更换文章或风格后需要重新生成预览。"}
+        style={{ marginBottom: 16 }}
+      />
       {previewLoading ? <Spin /> : previewHtml ? (
         <div style={{ background: "#f2f2f2", padding: 24, borderRadius: 12, maxHeight: 760, overflow: "auto" }}>
           <div

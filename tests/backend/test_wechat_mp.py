@@ -1865,8 +1865,13 @@ def test_wechat_mp_publish_page_supports_layout_style_preview():
 
     assert "fetchWechatMpLayoutStyles" in page_source
     assert "fetchWechatMpLayoutPreview" in page_source
+    assert "refreshLayoutPreview" in page_source
+    assert "previewKey" in page_source
+    assert "canSyncDraft" in page_source
+    assert "请先预览并确认排版布局" in page_source
     assert "排版风格" in page_source
     assert "发布前预览" in page_source
+    assert "重新生成排版预览" in page_source
     assert "dangerouslySetInnerHTML" in page_source
     assert "layout_style" in api_source
 
