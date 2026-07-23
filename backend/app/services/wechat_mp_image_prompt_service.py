@@ -26,9 +26,17 @@ def build_skill_prompt(
     user_id: int | None = None,
 ) -> str:
     character_prompt = resolve_character_prompt(db, user_id, skill_name)
+    diagram_contract = ""
+    if "图解类型：" in section_summary:
+        diagram_contract = (
+            "\n图解硬约束：必须逐字保留图解节点、分类名称和顺序；"
+            "优先画清晰的信息图、流程图、结构图或对比卡片；"
+            "不要把流程改成泛化插画，不要省略箭头、节点或关键文字；"
+            "主角形象只能作为角落辅助讲解，不得遮挡或替代图解主体。"
+        )
     if character_prompt:
-        return f"{character_prompt}\n文章：{article_title}\n场景：{section_summary}"
-    return f"16:9 微信公众号正文插画。\n文章：{article_title}\n场景：{section_summary}"
+        return f"{character_prompt}{diagram_contract}\n文章：{article_title}\n场景：{section_summary}"
+    return f"16:9 微信公众号正文插画。{diagram_contract}\n文章：{article_title}\n场景：{section_summary}"
 
 
 def _insert_prompt_placeholder(article: WechatMpArticle, section: WechatMpArticleSection, prompt: WechatMpImagePrompt) -> None:
