@@ -548,7 +548,7 @@ def _upgrade_markdown_leftovers(html_body: str) -> str:
         return f"<{tag}{attrs}>{_inline_markdown(unescape(body))}</{tag}>"
 
     return re.sub(
-        r"<(p|li|th|td|section)(\b[^>]*)>([^<]*\*\*[^<]*?)</\1>",
+        r"<(p|li|th|td|section|blockquote)(\b[^>]*)>([^<]*\*\*[^<]*?)</\1>",
         inline_container,
         html_body,
         flags=re.S,
