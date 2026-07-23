@@ -49,8 +49,16 @@ def _image_html(placeholder: dict) -> str:
     return f'<img src="{url}" alt="{alt}" style="display:block;max-width:100%;height:auto;margin:20px auto;" />'
 
 
+def _normalize_model_markdown(markdown_body: str) -> str:
+    body = markdown_body.strip()
+    if body.startswith("【") and body.endswith("】"):
+        body = body[1:-1].strip()
+    return body
+
+
 def _split_table_row(line: str) -> list[str]:
-    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+    cleaned = line.strip().strip("【】").strip()
+    return [cell.strip().strip("【】").strip() for cell in cleaned.strip("|").split("|")]
 
 
 def _is_table_separator(line: str) -> bool:
@@ -175,6 +183,7 @@ def _parse_details_block(lines: list[str], start_index: int) -> tuple[str, int]:
 
 def render_wechat_html(markdown_body: str, image_placeholders: list[dict]) -> str:
     """Render the limited article markdown subset accepted by WeChat drafts locally."""
+    markdown_body = _normalize_model_markdown(markdown_body)
     image_by_marker = {
         str(item.get("placeholder", "")): _image_html(item)
         for item in image_placeholders
