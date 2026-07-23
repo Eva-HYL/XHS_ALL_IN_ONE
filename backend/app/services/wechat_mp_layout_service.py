@@ -423,6 +423,24 @@ def _upgrade_markdown_leftovers(html_body: str) -> str:
         flags=re.S,
     )
 
+    paragraph_table_pattern = re.compile(
+        r'((?:<p\b[^>]*>\s*\|.*?\|\s*</p>\s*){2,})',
+        flags=re.S,
+    )
+
+    def paragraph_table(match: re.Match[str]) -> str:
+        rows = [
+            re.sub(r"<[^>]+>", "", row).strip()
+            for row in re.findall(r"<p\b[^>]*>(.*?)</p>", match.group(1), flags=re.S)
+        ]
+        if len(rows) < 2 or not _is_table_separator(rows[1]):
+            return match.group(0)
+        headers = _split_table_row(rows[0])
+        body_rows = [_split_table_row(row) for row in rows[2:] if "|" in row]
+        return _table_html(headers, body_rows)
+
+    html_body = paragraph_table_pattern.sub(paragraph_table, html_body)
+
     def inline_container(match: re.Match[str]) -> str:
         tag = match.group(1)
         attrs = match.group(2)
