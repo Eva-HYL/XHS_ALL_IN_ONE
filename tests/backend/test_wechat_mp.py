@@ -1730,6 +1730,49 @@ def test_generate_prompts_creates_shotlist_and_records_article_usage(api_client,
         session.close()
 
 
+def test_wechat_mp_shotlist_prioritizes_exact_process_diagrams():
+    from backend.app.services.wechat_mp_shotlist_service import choose_candidate_sections
+
+    candidates = choose_candidate_sections(
+        "## 数据工程\n\n"
+        "2.4 数据标准化\n\n"
+        "确定数据需求 → 制定数据标准 → 批准数据标准 → 实施数据标准\n\n"
+        "普通解释段落，没有明显图解价值。"
+    )
+
+    assert candidates[0]["source_excerpt"] == "确定数据需求 → 制定数据标准 → 批准数据标准 → 实施数据标准"
+    assert "图解类型：流程图" in candidates[0]["summary"]
+    assert "确定数据需求 -> 制定数据标准 -> 批准数据标准 -> 实施数据标准" in candidates[0]["summary"]
+
+
+def test_wechat_mp_shotlist_skips_plain_headings_when_diagram_sections_exist():
+    from backend.app.services.wechat_mp_shotlist_service import choose_candidate_sections
+
+    candidates = choose_candidate_sections(
+        "## 一、软件工程（重点）\n\n"
+        "1.1 软件工程组成\n\n"
+        "软件工程的三大要素：方法、工具、过程。\n\n"
+        "需求获取 → 需求分析 → 需求规格说明书编制 → 需求验证与确认"
+    )
+
+    assert all(not item["source_excerpt"].startswith("## ") for item in candidates)
+    assert candidates[0]["source_excerpt"] == "需求获取 → 需求分析 → 需求规格说明书编制 → 需求验证与确认"
+
+
+def test_xiaomao_prompt_contract_preserves_exact_diagram_nodes():
+    from backend.app.services.wechat_mp_image_prompt_service import build_skill_prompt
+
+    prompt = build_skill_prompt(
+        "xiaomao-illustrations",
+        "数据工程",
+        "图解类型：流程图\n必须准确呈现节点：确定数据需求 -> 制定数据标准 -> 批准数据标准 -> 实施数据标准\n原文：确定数据需求 → 制定数据标准 → 批准数据标准 → 实施数据标准",
+    )
+
+    assert "必须逐字保留图解节点" in prompt
+    assert "确定数据需求 -> 制定数据标准 -> 批准数据标准 -> 实施数据标准" in prompt
+    assert "不要把流程改成泛化插画" in prompt
+
+
 def test_generating_prompts_twice_reuses_prompts_and_placeholders(api_client, auth_headers, created_wechat_article, monkeypatch):
     from backend.app.models import WechatMpImagePrompt
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
