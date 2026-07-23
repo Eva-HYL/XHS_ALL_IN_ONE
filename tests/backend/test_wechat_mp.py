@@ -417,6 +417,55 @@ def test_sync_wechat_mp_article_applies_selected_layout_style(
     assert [name for name, _ in upload_calls] == ["cover_thumb", "content", "content"]
 
 
+def test_sync_wechat_mp_draft_repairs_saved_markdown_table_before_upload(
+    api_client, auth_headers, created_wechat_article_with_image, created_wechat_account, monkeypatch
+):
+    from backend.app.models import WechatMpArticle
+    from backend.app.services import wechat_mp_draft_service as draft_service
+
+    client, session_factory = api_client
+    draft_payloads = []
+
+    class FakeAdapter:
+        def upload_permanent_image(self, **kwargs):
+            return {"media_id": "thumb_media_id"}
+
+        def upload_content_image(self, **kwargs):
+            return {"url": "https://mmbiz.qpic.cn/fake.png"}
+
+        def add_draft(self, **kwargs):
+            draft_payloads.append(kwargs["article"])
+            return {"media_id": "repaired-draft"}
+
+    monkeypatch.setattr(draft_service, "WechatMpApiAdapter", lambda: FakeAdapter())
+    session = session_factory()
+    try:
+        article = session.get(WechatMpArticle, created_wechat_article_with_image.id)
+        article.html_body = (
+            '<p>| 风格 | 包含类型 |<br />'
+            '|------|----------|<br />'
+            '| **数据流风格** | 批处理序列、管道/过滤器 |</p>'
+            '<p><img src="/api/files/media/wechat-inline.png" alt="| **旧图** | 未清洗 |" /></p>'
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/sync-draft",
+        json={"account_id": created_wechat_account.id},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    content = draft_payloads[0]["content"]
+    assert "<table" in content
+    assert "<strong>数据流风格</strong>" in content
+    assert 'alt="旧图 未清洗"' in content
+    assert "|------|----------|" not in content
+    assert "| **旧图** |" not in content
+
+
 def test_sync_wechat_mp_draft_reports_unresolved_prompt_placeholders(
     api_client, auth_headers, created_wechat_prompt, created_wechat_account, tmp_path
 ):
@@ -887,6 +936,52 @@ def test_generate_wechat_mp_image_saves_only_wechat_asset_and_backfills_article(
         assert usage.image_count == 1
         assert article.cost_estimate["total_yuan"] == str(usage.cost_yuan)
         assert article.cost_estimate["calls"] == len(prompts) + 1
+    finally:
+        session.close()
+
+
+def test_generate_wechat_mp_image_backfills_plain_alt_text_for_markdown_sections(
+    api_client, auth_headers, created_wechat_prompt, monkeypatch
+):
+    from backend.app.models import WechatMpArticle, WechatMpArticleSection, WechatMpImagePrompt
+    from backend.app.services import wechat_mp_image_service as image_service
+
+    monkeypatch.setattr(
+        image_service,
+        "_call_image_model",
+        lambda **kwargs: {
+            "file_path": "/api/files/media/wechat-clean-alt.png",
+            "public_url": "/api/files/media/wechat-clean-alt.png",
+            "provider_response": {"ok": True},
+        },
+    )
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        prompt = session.get(WechatMpImagePrompt, created_wechat_prompt.id)
+        section = session.get(WechatMpArticleSection, prompt.section_id)
+        section.summary = "| 风格 | 包含类型 |\n|------|----------|\n| **数据流风格** | 批处理序列、管道/过滤器 |"
+        section.source_excerpt = "### 数据流风格\n| **数据流风格** | 批处理序列、管道/过滤器 |"
+        article = session.get(WechatMpArticle, prompt.article_id)
+        article.html_body = f"<p>正文</p>{{{{image:prompt-{prompt.id}}}}}"
+        session.commit()
+    finally:
+        session.close()
+
+    response = client.post(
+        f"/api/platforms/wechat-mp/prompts/{created_wechat_prompt.id}/image",
+        json={"image_model": "doubao-seedream-4-0-250828", "size": "16:9"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    session = session_factory()
+    try:
+        html = session.get(WechatMpArticle, created_wechat_prompt.article_id).html_body
+        assert 'alt="数据流风格；数据流风格 批处理序列、管道/过滤器"' in html
+        assert "|------" not in html
+        assert "**" not in html
+        assert "###" not in html
     finally:
         session.close()
 
@@ -1858,7 +1953,7 @@ def test_regenerating_embedded_prompt_restores_marker_for_next_image(api_client,
 
 
 def test_generate_prompts_records_completed_calls_when_a_later_model_call_fails(api_client, auth_headers, created_wechat_article, monkeypatch):
-    from backend.app.models import UsageRecord, WechatMpArticleSection, WechatMpImagePrompt
+    from backend.app.models import UsageRecord, WechatMpArticle, WechatMpArticleSection, WechatMpImagePrompt
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
 
     calls = 0
@@ -1872,6 +1967,16 @@ def test_generate_prompts_records_completed_calls_when_a_later_model_call_fails(
 
     monkeypatch.setattr(prompt_service, "_call_prompt_model", fake_prompt_call)
     client, session_factory = api_client
+    session = session_factory()
+    try:
+        article = session.get(WechatMpArticle, created_wechat_article.id)
+        article.markdown_body = (
+            "问题：总在计划开始时消耗精力。\n\n"
+            "方法：先做最小动作，让任务可以立刻进入下一步。"
+        )
+        session.commit()
+    finally:
+        session.close()
     response = client.post(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts", headers=auth_headers)
 
     assert response.status_code == 502
@@ -2110,6 +2215,26 @@ def test_wechat_mp_layout_style_upgrades_saved_markdown_table_paragraphs():
     assert "**仓库风格**" not in html
 
 
+def test_wechat_mp_layout_style_upgrades_saved_br_joined_markdown_tables():
+    from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style
+
+    stale_html = (
+        '<p style="margin:16px 0;">| 风格 | 包含类型 |<br />'
+        '|------|----------|<br />'
+        '| <strong>数据流风格</strong> | 批处理序列、管道/过滤器 |<br />'
+        '| **调用/返回风格** | 主程序/子程序、数据抽象和面向对象、层次结构 |</p>'
+    )
+
+    html = apply_wechat_layout_style(stale_html)
+
+    assert "<table" in html
+    assert "<strong>数据流风格</strong>" in html
+    assert "<strong>调用/返回风格</strong>" in html
+    assert "主程序/子程序、数据抽象和面向对象、层次结构" in html
+    assert "|------|----------|" not in html
+    assert "| 风格 |" not in html
+
+
 def test_wechat_mp_layout_style_upgrades_saved_markdown_paragraph_leftovers():
     from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style
 
@@ -2133,8 +2258,10 @@ def test_wechat_mp_layout_style_upgrades_saved_markdown_paragraph_leftovers():
     assert "**" not in html
 
 
-def test_get_wechat_mp_article_repairs_saved_markdown_table_html(api_client, auth_headers, created_wechat_article):
-    from backend.app.models import WechatMpArticle
+def test_get_wechat_mp_article_repairs_saved_markdown_table_html(
+    api_client, auth_headers, created_wechat_article, created_wechat_account
+):
+    from backend.app.models import WechatMpArticle, WechatMpDraftSync
 
     client, session_factory = api_client
     session = session_factory()
@@ -2145,7 +2272,18 @@ def test_get_wechat_mp_article_repairs_saved_markdown_table_html(api_client, aut
             '<p>|------|----------|</p>'
             '<p>| **数据流风格** | 批处理序列、管道/过滤器 |</p>'
         )
+        article.status = "synced_to_wechat"
+        sync = WechatMpDraftSync(
+            user_id=article.user_id,
+            account_id=created_wechat_account.id,
+            article_id=article.id,
+            article_revision=article.revision,
+            wechat_media_id="old-draft",
+            status="synced",
+        )
+        session.add(sync)
         session.commit()
+        original_revision = article.revision
     finally:
         session.close()
 
@@ -2157,10 +2295,13 @@ def test_get_wechat_mp_article_repairs_saved_markdown_table_html(api_client, aut
     assert response.status_code == 200
     assert "<table" in response.json()["html_body"]
     assert "|------|----------|" not in response.json()["html_body"]
+    assert response.json()["revision"] == original_revision + 1
+    assert response.json()["status"] == "layout_ready"
     session = session_factory()
     try:
         article = session.get(WechatMpArticle, created_wechat_article.id)
         assert "<table" in article.html_body
+        assert session.query(WechatMpDraftSync).filter_by(article_id=article.id).one().status == "stale"
     finally:
         session.close()
 

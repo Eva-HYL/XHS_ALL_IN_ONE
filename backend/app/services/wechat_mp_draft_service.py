@@ -12,6 +12,7 @@ from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiError
 from backend.app.models import WechatMpAccount, WechatMpArticle, WechatMpAsset, WechatMpDraftSync, WechatMpPublishJob
 from backend.app.services.wechat_mp_crypto_service import decrypt_secret
 from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style, layout_style_uses_hero, normalize_wechat_layout_style
+from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
 from backend.app.services.wechat_mp_token_service import get_cached_access_token, normalize_token_cache
 
 class WechatMpDraftValidationError(ValueError):
@@ -68,6 +69,16 @@ def sync_article_to_wechat_draft(
         raise LookupError("WeChat MP article not found")
     if account is None:
         raise LookupError("WeChat MP account not found")
+
+    repaired_html = apply_wechat_layout_style(article.html_body, "classic")
+    if repaired_html != article.html_body:
+        article.html_body = repaired_html
+        invalidate_synced_drafts(
+            db,
+            article,
+            next_status=article.status if article.status != "synced_to_wechat" else "layout_ready",
+        )
+        db.flush()
 
     assets = db.scalars(select(WechatMpAsset).where(
         WechatMpAsset.article_id == article.id,

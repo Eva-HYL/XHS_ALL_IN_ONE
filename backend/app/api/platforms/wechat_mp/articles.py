@@ -69,7 +69,14 @@ def _get_owned_prompt(db: Session, article: WechatMpArticle, prompt_id: int) -> 
 def _repair_saved_article_html(db: Session, article: WechatMpArticle) -> WechatMpArticle:
     repaired = apply_wechat_layout_style(article.html_body, "classic")
     if repaired != article.html_body:
+        from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
+
         article.html_body = repaired
+        invalidate_synced_drafts(
+            db,
+            article,
+            next_status=article.status if article.status != "synced_to_wechat" else "layout_ready",
+        )
         db.commit()
         db.refresh(article)
     return article
