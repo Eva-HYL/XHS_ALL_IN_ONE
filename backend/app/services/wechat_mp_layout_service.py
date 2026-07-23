@@ -60,13 +60,13 @@ def _is_table_separator(line: str) -> bool:
 
 def _table_html(headers: list[str], rows: list[list[str]]) -> str:
     head = "".join(
-        f'<th style="border:1px solid #d9d9d9;padding:8px 10px;text-align:left;background:#f6f6f6;">{escape(header)}</th>'
+        f'<th style="border:1px solid #d9d9d9;padding:8px 10px;text-align:left;background:#f6f6f6;">{_inline_markdown(header)}</th>'
         for header in headers
     )
     body_rows = []
     for row in rows:
         cells = "".join(
-            f'<td style="border:1px solid #d9d9d9;padding:8px 10px;">{escape(cell)}</td>'
+            f'<td style="border:1px solid #d9d9d9;padding:8px 10px;">{_inline_markdown(cell)}</td>'
             for cell in row
         )
         body_rows.append(f"<tr>{cells}</tr>")
@@ -188,16 +188,16 @@ def render_wechat_html(markdown_body: str, image_placeholders: list[dict]) -> st
             if list_tag and list_tag != tag:
                 flush_list()
             list_tag = tag
-            list_items.append(f'<li style="margin:8px 0;">{escape((ordered or unordered).group(1))}</li>')
+            list_items.append(f'<li style="margin:8px 0;">{_inline_markdown((ordered or unordered).group(1))}</li>')
             index += 1
             continue
         flush_list()
         if line.startswith("### "):
-            blocks.append(f"<h3>{escape(line[4:])}</h3>")
+            blocks.append(f"<h3>{_inline_markdown(line[4:])}</h3>")
         elif line.startswith("## "):
-            blocks.append(f"<h2>{escape(line[3:])}</h2>")
+            blocks.append(f"<h2>{_inline_markdown(line[3:])}</h2>")
         elif line.startswith("# "):
-            blocks.append(f"<h1>{escape(line[2:])}</h1>")
+            blocks.append(f"<h1>{_inline_markdown(line[2:])}</h1>")
         elif line.startswith("> "):
             blocks.append(f'<blockquote style="margin:16px 0;padding:12px 16px;border-left:4px solid #07c160;color:#576b95;">{_inline_markdown(line[2:])}</blockquote>')
         else:
@@ -298,9 +298,43 @@ def _upgrade_escaped_details(html_body: str) -> str:
     return pattern.sub(replace, html_body)
 
 
+def _upgrade_markdown_leftovers(html_body: str) -> str:
+    def paragraph_heading(match: re.Match[str]) -> str:
+        level = len(match.group(1))
+        tag = f"h{level}"
+        return f"<{tag}>{_inline_markdown(match.group(2).strip())}</{tag}>"
+
+    html_body = re.sub(
+        r'<p\b[^>]*>\s*(#{1,3})\s+(.+?)\s*</p>',
+        paragraph_heading,
+        html_body,
+        flags=re.S,
+    )
+    html_body = re.sub(
+        r'<p\b[^>]*>\s*-{3,}\s*</p>',
+        '<hr style="border:none;border-top:1px solid #e8e8e8;margin:24px 0;" />',
+        html_body,
+        flags=re.S,
+    )
+
+    def inline_container(match: re.Match[str]) -> str:
+        tag = match.group(1)
+        attrs = match.group(2)
+        body = match.group(3)
+        return f"<{tag}{attrs}>{_inline_markdown(body)}</{tag}>"
+
+    return re.sub(
+        r"<(li|th|td)(\b[^>]*)>([^<]*\*\*[^<]*?)</\1>",
+        inline_container,
+        html_body,
+        flags=re.S,
+    )
+
+
 def apply_wechat_layout_style(html_body: str, layout_style: str | None = "classic", hero_image_url: str | None = None) -> str:
     style = normalize_wechat_layout_style(layout_style)
     html_body = _upgrade_escaped_details(html_body)
+    html_body = _upgrade_markdown_leftovers(html_body)
     if style == "classic":
         return html_body
 
