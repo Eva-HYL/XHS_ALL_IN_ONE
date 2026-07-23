@@ -18,6 +18,7 @@ from backend.app.models import WechatMpArticle, WechatMpArticleSection, WechatMp
 from backend.app.services.usage_recording_service import record_image_usage
 from backend.app.services.illustration_size_service import normalize_illustration_size
 from backend.app.services.wechat_mp_cost_service import add_article_cost
+from backend.app.services.wechat_mp_layout_service import clean_markdown_plain_text
 
 PROMPT_REUSE_SIMILARITY_THRESHOLD = 0.92
 
@@ -76,7 +77,8 @@ def _call_image_model(
 
 def _backfill_article_html(article: WechatMpArticle, prompt: WechatMpImagePrompt, section: WechatMpArticleSection, public_url: str) -> None:
     marker = f"{{{{image:prompt-{prompt.id}}}}}"
-    image_html = f'<img src="{escape(public_url, quote=True)}" alt="{escape(section.summary, quote=True)}" />'
+    alt_text = clean_markdown_plain_text(section.source_excerpt or section.summary) or "公众号正文配图"
+    image_html = f'<img src="{escape(public_url, quote=True)}" alt="{escape(alt_text, quote=True)}" />'
     article.html_body = article.html_body.replace(marker, image_html)
 
 

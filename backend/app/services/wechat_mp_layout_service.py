@@ -93,6 +93,29 @@ def _table_html(headers: list[str], rows: list[list[str]]) -> str:
     )
 
 
+def clean_markdown_plain_text(text: str, max_length: int = 140) -> str:
+    text = unescape(str(text or ""))
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"```.*?```", " ", text, flags=re.S)
+    cleaned_lines: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip().strip("【】").strip()
+        if not stripped or _is_table_separator(stripped):
+            continue
+        stripped = re.sub(r"^#{1,6}\s*", "", stripped)
+        stripped = re.sub(r"\*\*(.*?)\*\*", r"\1", stripped)
+        stripped = re.sub(r"~~(.*?)~~", r"\1", stripped)
+        stripped = re.sub(r"`([^`]+)`", r"\1", stripped)
+        stripped = re.sub(r"[*_~]", "", stripped)
+        stripped = stripped.replace("|", " ")
+        stripped = re.sub(r"\s+", " ", stripped).strip()
+        if stripped:
+            cleaned_lines.append(stripped)
+    plain = "；".join(cleaned_lines).strip()
+    return plain[:max_length].rstrip()
+
+
 def _render_inline_segment(text: str) -> str:
     escaped = escape(text)
     escaped = re.sub(
@@ -448,6 +471,42 @@ def _upgrade_markdown_leftovers(html_body: str) -> str:
         return _table_html(headers, body_rows)
 
     html_body = paragraph_table_pattern.sub(paragraph_table, html_body)
+
+    def paragraph_br_table(match: re.Match[str]) -> str:
+        inner = match.group(1)
+        if "|" not in inner:
+            return match.group(0)
+        inner = re.sub(r"<strong\b[^>]*>(.*?)</strong>", r"**\1**", inner, flags=re.S | re.I)
+        inner = re.sub(r"<em\b[^>]*>(.*?)</em>", r"*\1*", inner, flags=re.S | re.I)
+        inner = re.sub(r"<code\b[^>]*>(.*?)</code>", r"`\1`", inner, flags=re.S | re.I)
+        rows = [
+            unescape(re.sub(r"<[^>]+>", "", row)).strip()
+            for row in re.split(r"<br\s*/?>", inner, flags=re.I)
+        ]
+        rows = [row for row in rows if row]
+        if len(rows) < 2 or not _is_table_separator(rows[1]):
+            return match.group(0)
+        headers = _split_table_row(rows[0])
+        body_rows = [_split_table_row(row) for row in rows[2:] if "|" in row]
+        return _table_html(headers, body_rows)
+
+    html_body = re.sub(
+        r'<p\b[^>]*>(.*?)</p>',
+        paragraph_br_table,
+        html_body,
+        flags=re.S,
+    )
+
+    def clean_img_alt(match: re.Match[str]) -> str:
+        alt_text = clean_markdown_plain_text(match.group(1)) or "公众号正文配图"
+        return f'alt="{escape(alt_text, quote=True)}"'
+
+    html_body = re.sub(
+        r'alt="([^"]*(?:\*\*|\|---|\||```|#{1,6}\s)[^"]*)"',
+        clean_img_alt,
+        html_body,
+        flags=re.S,
+    )
 
     def inline_container(match: re.Match[str]) -> str:
         tag = match.group(1)
