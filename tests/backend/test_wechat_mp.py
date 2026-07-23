@@ -1862,6 +1862,30 @@ def test_wechat_mp_layout_renderer_turns_details_into_answer_card():
     assert "<hr" in html
 
 
+def test_wechat_mp_layout_renderer_removes_markdown_syntax_in_headings_lists_and_tables():
+    from backend.app.services.wechat_mp_layout_service import render_wechat_html
+
+    html = render_wechat_html(
+        "### 1.10 软件测试\n"
+        "- **静态测试**：文档检查、代码走查\n"
+        "- **动态测试-白盒**：单元测试\n\n"
+        "| 类型 | 说明 |\n"
+        "|-----|-----|\n"
+        "| **静态测试** | 文档检查、代码走查 |\n"
+        "---",
+        [],
+    )
+
+    assert "<h3>1.10 软件测试</h3>" in html
+    assert "<strong>静态测试</strong>" in html
+    assert "<strong>动态测试-白盒</strong>" in html
+    assert "<table" in html
+    assert "|-----|-----|" not in html
+    assert "### 1.10 软件测试" not in html
+    assert "**" not in html
+    assert "<hr" in html
+
+
 def test_wechat_mp_layout_style_upgrades_previously_escaped_details():
     from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style
 
@@ -1877,6 +1901,24 @@ def test_wechat_mp_layout_style_upgrades_previously_escaped_details():
     assert "点击查看答案与解析" in styled
     assert "<strong>答案：A</strong>" in styled
     assert "border-left:4px solid #008575" in styled
+
+
+def test_wechat_mp_layout_style_cleans_existing_markdown_leftovers():
+    from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style
+
+    html = (
+        '<p style="margin:16px 0;">### 1.10 软件测试</p>'
+        '<ul style="padding-left:1.5em;margin:16px 0;">'
+        '<li style="margin:8px 0;">**静态测试**：文档检查、代码走查</li>'
+        '</ul>'
+        '<p style="margin:16px 0;">---</p>'
+    )
+    styled = apply_wechat_layout_style(html, "study_green")
+
+    assert "### 1.10 软件测试" not in styled
+    assert "<strong>静态测试</strong>" in styled
+    assert "**" not in styled
+    assert "<hr" in styled
 
 
 def test_wechat_mp_layout_styles_create_polished_publish_html():
