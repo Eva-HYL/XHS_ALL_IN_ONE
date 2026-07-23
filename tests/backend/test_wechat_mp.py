@@ -891,6 +891,66 @@ def test_generate_wechat_mp_image_saves_only_wechat_asset_and_backfills_article(
         session.close()
 
 
+def test_generate_wechat_mp_image_reuses_similar_existing_asset_without_model_call(
+    api_client, auth_headers, created_wechat_prompt, monkeypatch
+):
+    from backend.app.models import UsageRecord, WechatMpArticle, WechatMpAsset, WechatMpImagePrompt
+    from backend.app.services import wechat_mp_image_service as image_service
+
+    def fail_generate(**kwargs):
+        raise AssertionError("image model should not be called when a similar asset exists")
+
+    monkeypatch.setattr(image_service, "_call_image_model", fail_generate)
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        prompt = session.get(WechatMpImagePrompt, created_wechat_prompt.id)
+        prompt.editable_prompt = "一只小猫开始做最小动作，白色背景，16:9 横版构图"
+        article = session.get(WechatMpArticle, prompt.article_id)
+        article.html_body += f'{{{{image:prompt-{prompt.id}}}}}'
+        existing = WechatMpAsset(
+            user_id=prompt.user_id,
+            article_id=article.id,
+            prompt_id=None,
+            role="inline_illustration",
+            file_path="/tmp/reused-wechat-cat.png",
+            public_url="/api/files/media/reused-wechat-cat.png",
+            prompt="一只小猫开始做最小动作 白色背景 16:9横版构图",
+            skill_name=prompt.skill_name,
+            model_name="previous-model",
+            status="generated",
+            provider_response={"ok": True},
+        )
+        session.add(existing)
+        session.commit()
+        existing_id = existing.id
+        original_cost = dict(article.cost_estimate or {})
+    finally:
+        session.close()
+
+    response = client.post(
+        f"/api/platforms/wechat-mp/prompts/{created_wechat_prompt.id}/image",
+        json={"image_model": "doubao-seedream-4-0-250828", "size": "16:9"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    data = response.json()
+    assert data["public_url"] == "/api/files/media/reused-wechat-cat.png"
+    assert data["provider_response"]["reused_from_asset_id"] == existing_id
+    session = session_factory()
+    try:
+        prompt = session.get(WechatMpImagePrompt, created_wechat_prompt.id)
+        article = session.get(WechatMpArticle, prompt.article_id)
+        assert prompt.status == "generated"
+        assert 'src="/api/files/media/reused-wechat-cat.png"' in article.html_body
+        assert article.cost_estimate == original_cost
+        assert session.query(UsageRecord).filter_by(step="image_gen", resource_id=article.id).count() == 0
+        assert session.query(WechatMpAsset).filter_by(prompt_id=prompt.id).count() == 1
+    finally:
+        session.close()
+
+
 def test_wechat_mp_assets_are_owner_scoped_and_delete_local_media(api_client, auth_headers, created_wechat_prompt, monkeypatch, tmp_path):
     from types import SimpleNamespace
 
