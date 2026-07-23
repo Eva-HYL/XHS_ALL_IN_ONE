@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import base64
 import os
+import re
+from difflib import SequenceMatcher
 from html import escape
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import requests
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from backend.app.core.config import get_settings
@@ -16,6 +18,8 @@ from backend.app.models import WechatMpArticle, WechatMpArticleSection, WechatMp
 from backend.app.services.usage_recording_service import record_image_usage
 from backend.app.services.illustration_size_service import normalize_illustration_size
 from backend.app.services.wechat_mp_cost_service import add_article_cost
+
+PROMPT_REUSE_SIMILARITY_THRESHOLD = 0.92
 
 
 def _media_dir() -> Path:
@@ -76,6 +80,92 @@ def _backfill_article_html(article: WechatMpArticle, prompt: WechatMpImagePrompt
     article.html_body = article.html_body.replace(marker, image_html)
 
 
+def _normalize_prompt_for_reuse(prompt: str) -> str:
+    return re.sub(r"[\W_]+", "", prompt.lower(), flags=re.UNICODE)
+
+
+def _prompt_similarity(left: str, right: str) -> float:
+    normalized_left = _normalize_prompt_for_reuse(left)
+    normalized_right = _normalize_prompt_for_reuse(right)
+    if not normalized_left or not normalized_right:
+        return 0.0
+    if normalized_left == normalized_right:
+        return 1.0
+    return SequenceMatcher(None, normalized_left, normalized_right).ratio()
+
+
+def _find_reusable_asset(db: Session, *, user_id: int, prompt: WechatMpImagePrompt) -> tuple[WechatMpAsset, float] | None:
+    candidates = db.scalars(
+        select(WechatMpAsset)
+        .where(
+            WechatMpAsset.user_id == user_id,
+            WechatMpAsset.role == "inline_illustration",
+            WechatMpAsset.status == "generated",
+            WechatMpAsset.skill_name == prompt.skill_name,
+            WechatMpAsset.public_url != "",
+            or_(WechatMpAsset.prompt_id.is_(None), WechatMpAsset.prompt_id != prompt.id),
+        )
+        .order_by(WechatMpAsset.id.desc())
+        .limit(80)
+    ).all()
+    best: tuple[WechatMpAsset, float] | None = None
+    for asset in candidates:
+        score = _prompt_similarity(prompt.editable_prompt, asset.prompt)
+        if score < PROMPT_REUSE_SIMILARITY_THRESHOLD:
+            continue
+        if best is None or score > best[1]:
+            best = (asset, score)
+            if score == 1.0:
+                break
+    return best
+
+
+def _update_article_image_state(db: Session, article: WechatMpArticle, prompt: WechatMpImagePrompt) -> None:
+    remaining = db.scalars(select(WechatMpImagePrompt.status).where(
+        WechatMpImagePrompt.article_id == article.id,
+        WechatMpImagePrompt.id != prompt.id,
+    )).all()
+    article.status = "images_ready" if all(status == "generated" for status in remaining) else "images_partial"
+
+
+def _reuse_asset_for_prompt(
+    db: Session,
+    *,
+    user_id: int,
+    article: WechatMpArticle,
+    prompt: WechatMpImagePrompt,
+    section: WechatMpArticleSection,
+    source_asset: WechatMpAsset,
+    similarity: float,
+) -> WechatMpAsset:
+    from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
+
+    asset = WechatMpAsset(
+        user_id=user_id,
+        article_id=article.id,
+        prompt_id=prompt.id,
+        role="inline_illustration",
+        file_path=source_asset.file_path,
+        public_url=source_asset.public_url,
+        prompt=prompt.editable_prompt,
+        skill_name=prompt.skill_name,
+        model_name=source_asset.model_name,
+        status="generated",
+        provider_response={
+            "reused_from_asset_id": source_asset.id,
+            "reuse_similarity": round(similarity, 4),
+        },
+    )
+    db.add(asset)
+    prompt.status = "generated"
+    _backfill_article_html(article, prompt, section, asset.public_url)
+    invalidate_synced_drafts(db, article, next_status="images_partial")
+    _update_article_image_state(db, article, prompt)
+    db.commit()
+    db.refresh(asset)
+    return asset
+
+
 def generate_asset_for_prompt(
     db: Session,
     user_id: int,
@@ -105,6 +195,18 @@ def generate_asset_for_prompt(
         db=db, user_id=user_id, model_type="image", requested_model=image_model,
     )
     normalized_size = normalize_illustration_size(model.model_name, size)
+    reusable = _find_reusable_asset(db, user_id=user_id, prompt=prompt)
+    if reusable is not None:
+        source_asset, similarity = reusable
+        return _reuse_asset_for_prompt(
+            db=db,
+            user_id=user_id,
+            article=article,
+            prompt=prompt,
+            section=section,
+            source_asset=source_asset,
+            similarity=similarity,
+        )
 
     try:
         result = _call_image_model(
@@ -133,11 +235,7 @@ def generate_asset_for_prompt(
         prompt.status = "generated"
         _backfill_article_html(article, prompt, section, asset.public_url)
         invalidate_synced_drafts(db, article, next_status="images_partial")
-        remaining = db.scalars(select(WechatMpImagePrompt.status).where(
-            WechatMpImagePrompt.article_id == article.id,
-            WechatMpImagePrompt.id != prompt.id,
-        )).all()
-        article.status = "images_ready" if all(status == "generated" for status in remaining) else "images_partial"
+        _update_article_image_state(db, article, prompt)
         db.flush()
         usage = record_image_usage(
             db=db,

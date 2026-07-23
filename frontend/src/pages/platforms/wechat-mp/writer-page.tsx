@@ -339,7 +339,10 @@ export function WechatMpWriterPage() {
           setAssets((items) => [asset, ...items.filter((item) => item.prompt_id !== prompt.id)]);
           setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, status: "generated" } : item));
           setArticle(await fetchWechatMpArticle(prompt.article_id));
-          setNotice(`段落 #${prompt.section_id} 正文配图已生成并计入实际费用。`);
+          setNotice(asset.provider_response?.reused_from_asset_id
+            ? `段落 #${prompt.section_id} 已复用相似提示词的历史图片，未重复扣除图片生成费用。`
+            : `段落 #${prompt.section_id} 正文配图已生成并计入实际费用。`
+          );
         } catch {
           setError(`段落 #${prompt.section_id} 图片生成失败，请确认图片模型配置。`);
           setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, status: "failed" } : item));
