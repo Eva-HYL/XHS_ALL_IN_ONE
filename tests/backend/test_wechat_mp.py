@@ -2235,6 +2235,27 @@ def test_wechat_mp_layout_style_upgrades_saved_br_joined_markdown_tables():
     assert "| 风格 |" not in html
 
 
+def test_wechat_mp_layout_style_upgrades_saved_collapsed_markdown_tables():
+    from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style
+
+    stale_html = (
+        '<p style="margin:10px 0;line-height:1.8;color:#25322f;">'
+        '| 风格 | 包含类型 | |------|----------| '
+        '| <strong>数据流风格</strong> | 批处理序列、管道/过滤器 | '
+        '| <strong>调用/返回风格</strong> | 主程序/子程序、数据抽象和面向对象、层次结构 |'
+        '</p>'
+    )
+
+    html = apply_wechat_layout_style(stale_html)
+
+    assert "<table" in html
+    assert "<strong>数据流风格</strong>" in html
+    assert "<strong>调用/返回风格</strong>" in html
+    assert "批处理序列、管道/过滤器" in html
+    assert "|------|----------|" not in html
+    assert "| 风格 |" not in html
+
+
 def test_wechat_mp_layout_style_upgrades_saved_markdown_paragraph_leftovers():
     from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style
 

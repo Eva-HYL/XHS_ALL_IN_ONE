@@ -66,6 +66,37 @@ def _is_table_separator(line: str) -> bool:
     return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell.strip()) for cell in cells)
 
 
+def _split_collapsed_table_rows(text: str) -> list[str]:
+    match = re.match(
+        r"\s*(\|.*?\|)\s+(\|\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|)\s*(.*)$",
+        text,
+        flags=re.S,
+    )
+    if not match:
+        return []
+    header, separator, rest = match.groups()
+    column_count = len(_split_table_row(header))
+    rows = [header.strip(), separator.strip()]
+    rest = rest.strip()
+    while rest.startswith("|"):
+        pipe_count = 0
+        row_end = -1
+        for index, char in enumerate(rest):
+            if char == "|":
+                pipe_count += 1
+                if pipe_count == column_count + 1:
+                    row_end = index + 1
+                    break
+        if row_end == -1:
+            return []
+        row = rest[:row_end].strip()
+        if len(_split_table_row(row)) != column_count:
+            return []
+        rows.append(row)
+        rest = rest[row_end:].strip()
+    return rows if len(rows) > 2 else []
+
+
 def _next_nonempty_line_index(lines: list[str], start_index: int) -> int | None:
     index = start_index
     while index < len(lines):
@@ -484,6 +515,8 @@ def _upgrade_markdown_leftovers(html_body: str) -> str:
             for row in re.split(r"<br\s*/?>", inner, flags=re.I)
         ]
         rows = [row for row in rows if row]
+        if len(rows) == 1:
+            rows = _split_collapsed_table_rows(rows[0])
         if len(rows) < 2 or not _is_table_separator(rows[1]):
             return match.group(0)
         headers = _split_table_row(rows[0])
