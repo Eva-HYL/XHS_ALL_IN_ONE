@@ -103,6 +103,8 @@ const http = axios.create({
   timeout: 120000,
 });
 
+const WECHAT_MP_ARTICLE_TIMEOUT_MS = 420000;
+
 const REFRESH_TOKEN_KEY = "spider_xhs_refresh_token";
 let accessToken: string | null = null;
 
@@ -1048,7 +1050,7 @@ export async function fetchWechatMpArticle(articleId: number): Promise<WechatMpA
 }
 
 export async function createWechatMpArticle(payload: CreateWechatMpArticlePayload): Promise<WechatMpArticle> {
-  const response = await http.post<WechatMpArticle>("/platforms/wechat-mp/articles", payload);
+  const response = await http.post<WechatMpArticle>("/platforms/wechat-mp/articles", payload, { timeout: WECHAT_MP_ARTICLE_TIMEOUT_MS });
   return response.data;
 }
 
