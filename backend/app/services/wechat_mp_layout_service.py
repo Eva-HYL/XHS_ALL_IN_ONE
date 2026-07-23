@@ -85,13 +85,48 @@ def _table_html(headers: list[str], rows: list[list[str]]) -> str:
     )
 
 
-def _inline_markdown(text: str) -> str:
+def _render_inline_segment(text: str) -> str:
     escaped = escape(text)
-    return re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+    escaped = re.sub(
+        r"\[([^\]]+)\]\((https?://[^)\s]+)\)",
+        lambda m: (
+            f'<a href="{escape(m.group(2), quote=True)}" target="_blank" '
+            f'style="color:#576b95;text-decoration:none;">{m.group(1)}</a>'
+        ),
+        escaped,
+    )
+    escaped = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", escaped)
+    escaped = re.sub(r"~~(.+?)~~", r"<del>\1</del>", escaped)
+    escaped = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<em>\1</em>", escaped)
+    return re.sub(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", r"<em>\1</em>", escaped)
+
+
+def _inline_markdown(text: str) -> str:
+    parts = re.split(r"(`[^`]+`)", text)
+    rendered: list[str] = []
+    for part in parts:
+        if part.startswith("`") and part.endswith("`") and len(part) >= 2:
+            rendered.append(
+                '<code style="padding:2px 5px;border-radius:4px;background:#f4f4f4;'
+                f'font-size:90%;font-family:Menlo,Consolas,monospace;">{escape(part[1:-1])}</code>'
+            )
+        else:
+            rendered.append(_render_inline_segment(part))
+    return "".join(rendered)
 
 
 def _paragraph_html(text: str) -> str:
-    return f'<p style="margin:16px 0;line-height:1.75;color:#222;">{_inline_markdown(text)}</p>'
+    body = "<br />".join(_inline_markdown(line) for line in text.splitlines())
+    return f'<p style="margin:16px 0;line-height:1.75;color:#222;">{body}</p>'
+
+
+def _code_block_html(code: str, language: str = "") -> str:
+    label = f'<span style="display:block;margin-bottom:8px;color:#7a7a7a;font-size:12px;">{escape(language)}</span>' if language else ""
+    return (
+        '<pre style="margin:18px 0;padding:14px 16px;border-radius:8px;'
+        'background:#f6f8fa;overflow:auto;line-height:1.7;font-size:13px;">'
+        f'{label}<code style="font-family:Menlo,Consolas,monospace;color:#24292f;">{escape(code)}</code></pre>'
+    )
 
 
 def _answer_card_html(summary: str, body_lines: list[str]) -> str:
@@ -156,6 +191,22 @@ def render_wechat_html(markdown_body: str, image_placeholders: list[dict]) -> st
         list_items = []
         list_tag = None
 
+    def is_block_start(candidate: str) -> bool:
+        if not candidate:
+            return True
+        if candidate in image_by_marker:
+            return True
+        if re.fullmatch(r"<details>", candidate, flags=re.IGNORECASE):
+            return True
+        if candidate.startswith(("```", "# ", "## ", "### ", "> ")):
+            return True
+        if re.fullmatch(r"-{3,}", candidate):
+            return True
+        if _ORDERED_ITEM_RE.match(candidate) or _UNORDERED_ITEM_RE.match(candidate):
+            return True
+        separator = _next_nonempty_line_index(lines, index + 1) if "|" in candidate else None
+        return separator is not None and _is_table_separator(lines[separator].strip())
+
     lines = markdown_body.splitlines()
     index = 0
     while index < len(lines):
@@ -174,6 +225,18 @@ def render_wechat_html(markdown_body: str, image_placeholders: list[dict]) -> st
             flush_list()
             card_html, index = _parse_details_block(lines, index)
             blocks.append(card_html)
+            continue
+        if line.startswith("```"):
+            flush_list()
+            language = line[3:].strip()
+            code_lines: list[str] = []
+            index += 1
+            while index < len(lines) and not lines[index].strip().startswith("```"):
+                code_lines.append(lines[index])
+                index += 1
+            if index < len(lines):
+                index += 1
+            blocks.append(_code_block_html("\n".join(code_lines), language))
             continue
         if re.fullmatch(r"-{3,}", line):
             flush_list()
@@ -215,9 +278,27 @@ def render_wechat_html(markdown_body: str, image_placeholders: list[dict]) -> st
         elif line.startswith("# "):
             blocks.append(f"<h1>{_inline_markdown(line[2:])}</h1>")
         elif line.startswith("> "):
-            blocks.append(f'<blockquote style="margin:16px 0;padding:12px 16px;border-left:4px solid #07c160;color:#576b95;">{_inline_markdown(line[2:])}</blockquote>')
+            quote_lines = [line[2:].strip()]
+            index += 1
+            while index < len(lines) and lines[index].strip().startswith("> "):
+                quote_lines.append(lines[index].strip()[2:].strip())
+                index += 1
+            blocks.append(
+                '<blockquote style="margin:16px 0;padding:12px 16px;border-left:4px solid #07c160;color:#576b95;">'
+                f'{"<br />".join(_inline_markdown(item) for item in quote_lines)}</blockquote>'
+            )
+            continue
         else:
-            blocks.append(_paragraph_html(line))
+            paragraph_lines = [line]
+            index += 1
+            while index < len(lines):
+                next_line = lines[index].strip()
+                if is_block_start(next_line):
+                    break
+                paragraph_lines.append(next_line)
+                index += 1
+            blocks.append(_paragraph_html("\n".join(paragraph_lines)))
+            continue
         index += 1
     flush_list()
     return "\n".join(block for block in blocks if block)

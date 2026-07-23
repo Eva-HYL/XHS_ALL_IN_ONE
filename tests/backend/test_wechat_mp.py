@@ -1959,6 +1959,36 @@ def test_wechat_mp_layout_renderer_supports_tables_with_blank_lines_between_rows
     assert "| **仓库风格** |" not in html
 
 
+def test_wechat_mp_layout_renderer_supports_common_markdown_formatting():
+    from backend.app.services.wechat_mp_layout_service import render_wechat_html
+
+    html = render_wechat_html(
+        "## 核心总结\n"
+        "第一行说明\n"
+        "第二行包含 [参考链接](https://example.com/doc) 和 `status_code`\n\n"
+        "> 第一句引用\n"
+        "> 第二句引用\n\n"
+        "```python\n"
+        "print('hello')\n"
+        "```\n\n"
+        "- *斜体重点*、~~过时说法~~、**最终结论**",
+        [],
+    )
+
+    assert "<h2>核心总结</h2>" in html
+    assert "第一行说明<br />第二行包含" in html
+    assert '<a href="https://example.com/doc"' in html
+    assert "<code" in html
+    assert "status_code" in html
+    assert "第一句引用<br />第二句引用" in html
+    assert "<pre" in html
+    assert "print(&#x27;hello&#x27;)" in html
+    assert "<em>斜体重点</em>" in html
+    assert "<del>过时说法</del>" in html
+    assert "<strong>最终结论</strong>" in html
+    assert "```" not in html
+
+
 def test_wechat_mp_layout_style_upgrades_previously_escaped_details():
     from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style
 
