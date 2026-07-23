@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from html import escape
+from html import escape, unescape
 import re
 
 
@@ -422,6 +422,14 @@ def _upgrade_markdown_leftovers(html_body: str) -> str:
         html_body,
         flags=re.S,
     )
+    html_body = re.sub(
+        r'<p\b[^>]*>\s*```\s*</p>\s*(.*?)\s*<p\b[^>]*>\s*```\s*</p>',
+        lambda match: _code_block_html(
+            unescape(re.sub(r"<br\s*/?>", "\n", re.sub(r"<[^>]+>", "", match.group(1), flags=re.S), flags=re.I).strip())
+        ),
+        html_body,
+        flags=re.S,
+    )
 
     paragraph_table_pattern = re.compile(
         r'((?:<p\b[^>]*>\s*\|.*?\|\s*</p>\s*){2,})',
@@ -445,10 +453,10 @@ def _upgrade_markdown_leftovers(html_body: str) -> str:
         tag = match.group(1)
         attrs = match.group(2)
         body = match.group(3)
-        return f"<{tag}{attrs}>{_inline_markdown(body)}</{tag}>"
+        return f"<{tag}{attrs}>{_inline_markdown(unescape(body))}</{tag}>"
 
     return re.sub(
-        r"<(li|th|td)(\b[^>]*)>([^<]*\*\*[^<]*?)</\1>",
+        r"<(p|li|th|td|section)(\b[^>]*)>([^<]*\*\*[^<]*?)</\1>",
         inline_container,
         html_body,
         flags=re.S,

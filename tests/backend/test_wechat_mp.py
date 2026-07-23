@@ -2067,6 +2067,29 @@ def test_wechat_mp_layout_style_upgrades_saved_markdown_table_paragraphs():
     assert "**仓库风格**" not in html
 
 
+def test_wechat_mp_layout_style_upgrades_saved_markdown_paragraph_leftovers():
+    from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style
+
+    stale_html = (
+        '<p style="margin:16px 0;">**UML关系强弱排序**（必须牢记）：</p>'
+        '<p style="margin:16px 0;">```</p>'
+        '<p style="margin:16px 0;">泛化 = 实现 &gt; 组合 &gt; 聚合 &gt; 关联 &gt; 依赖</p>'
+        '<p style="margin:16px 0;">```</p>'
+        '<p style="margin:16px 0;">💡 🧠 **速记口诀**：泛化&gt;实现&gt;组合&gt;聚合&gt;关联&gt;依赖</p>'
+        '<p style="margin:16px 0;">**UML五种视图**：</p>'
+    )
+
+    html = apply_wechat_layout_style(stale_html)
+
+    assert "<strong>UML关系强弱排序</strong>" in html
+    assert "<strong>速记口诀</strong>" in html
+    assert "<strong>UML五种视图</strong>" in html
+    assert "<pre" in html
+    assert "泛化 = 实现 &gt; 组合 &gt; 聚合 &gt; 关联 &gt; 依赖" in html
+    assert "```" not in html
+    assert "**" not in html
+
+
 def test_get_wechat_mp_article_repairs_saved_markdown_table_html(api_client, auth_headers, created_wechat_article):
     from backend.app.models import WechatMpArticle
 
