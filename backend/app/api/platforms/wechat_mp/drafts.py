@@ -2,12 +2,13 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiError
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
-from backend.app.models import User, WechatMpDraftSync
+from backend.app.models import User, WechatMpArticle, WechatMpDraftSync
 from backend.app.schemas.wechat_mp import WechatMpDraftSyncStatus
 from backend.app.services.wechat_mp_layout_service import normalize_wechat_layout_style
 from backend.app.services.wechat_mp_draft_service import WechatMpDraftValidationError, sync_article_to_wechat_draft
@@ -34,6 +35,31 @@ class WechatMpDraftSyncResponse(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+@router.get("/{article_id}/draft-syncs/latest", response_model=WechatMpDraftSyncResponse)
+def get_latest_draft_sync(
+    article_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    article = db.scalar(select(WechatMpArticle).where(
+        WechatMpArticle.id == article_id,
+        WechatMpArticle.user_id == current_user.id,
+    ))
+    if article is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="WeChat MP article not found")
+    draft_sync = db.scalar(
+        select(WechatMpDraftSync)
+        .where(
+            WechatMpDraftSync.article_id == article.id,
+            WechatMpDraftSync.user_id == current_user.id,
+        )
+        .order_by(WechatMpDraftSync.id.desc())
+    )
+    if draft_sync is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="WeChat MP draft sync not found")
+    return draft_sync
 
 
 @router.post("/{article_id}/sync-draft", response_model=WechatMpDraftSyncResponse, status_code=status.HTTP_201_CREATED)

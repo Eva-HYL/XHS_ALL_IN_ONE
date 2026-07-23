@@ -12,6 +12,7 @@ import {
   fetchWechatMpLayoutPreview,
   fetchWechatMpLayoutStyles,
   fetchWechatMpPublishJobs,
+  fetchLatestWechatMpDraftSync,
   pollWechatMpPublishJob,
   publishWechatMpArticle,
   syncWechatMpDraft,
@@ -88,11 +89,18 @@ export function WechatMpPublishPage() {
   useEffect(() => {
     if (!articleId) {
       setJobs([]);
+      setSync(null);
       return;
     }
     void fetchWechatMpPublishJobs(articleId)
       .then(setJobs)
       .catch(() => setError("发布任务加载失败。"));
+    void fetchLatestWechatMpDraftSync(articleId)
+      .then((latestSync) => {
+        setSync(latestSync);
+        setAccountId(latestSync.account_id);
+      })
+      .catch(() => setSync(null));
   }, [articleId]);
 
   function upsertJob(next: WechatMpPublishJob) {
@@ -110,7 +118,6 @@ export function WechatMpPublishPage() {
       const preview = await fetchWechatMpLayoutPreview(nextArticleId, nextLayoutStyle);
       setPreviewHtml(preview.html_body);
       setPreviewKey(`${nextArticleId}:${preview.layout_style}`);
-      setSync(null);
     } catch {
       setPreviewHtml("");
       setPreviewKey("");
@@ -143,7 +150,11 @@ export function WechatMpPublishPage() {
     }
   }
 
+  const selectedArticle = articles.find((article) => article.id === articleId);
   const canSyncDraft = Boolean(articleId && accountId && previewHtml && previewKey === `${articleId}:${layoutStyle}`);
+  const canPublish = Boolean(
+    sync && sync.status === "synced" && selectedArticle && sync.article_revision === selectedArticle.revision,
+  );
 
   async function submitPublish(confirm: boolean) {
     if (!articleId) return;
@@ -271,13 +282,21 @@ export function WechatMpPublishPage() {
     </Card>
 
     <Card title="草稿同步状态" style={{ marginTop: 16 }}>
-      {sync ? <Space><CheckCircleOutlined style={{ color: "#52c41a" }} /><Text>草稿 #{sync.id}：{sync.status}</Text><Tag>{sync.wechat_media_id}</Tag></Space> : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="本次会话尚未同步草稿；编辑文章后请重新同步" />}
+      {sync ? (
+        <Space wrap>
+          <CheckCircleOutlined style={{ color: sync.status === "synced" ? "#52c41a" : "#faad14" }} />
+          <Text>草稿 #{sync.id}：{sync.status}</Text>
+          <Tag>{sync.wechat_media_id || "未获得 media_id"}</Tag>
+          <Tag>修订 {sync.article_revision}</Tag>
+          {selectedArticle && sync.article_revision !== selectedArticle.revision && <Tag color="orange">文章已更新，请重新同步</Tag>}
+        </Space>
+      ) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无草稿同步记录；同步成功后刷新仍会保留状态" />}
     </Card>
 
     <Card title="发布" style={{ marginTop: 16 }}>
       <Paragraph>{scheduledAt ? `定时发布：${scheduledAt.format("YYYY-MM-DD HH:mm")}` : "立即发布：点击后将要求明确确认。"}</Paragraph>
       <Paragraph type="secondary">发布预计费用：¥0（仅调用微信 API）</Paragraph>
-      <Button type="primary" danger icon={<SendOutlined />} disabled={!sync || busy} loading={busy} onClick={publish}>{scheduledAt ? "确认定时发布" : "立即发布"}</Button>
+      <Button type="primary" danger icon={<SendOutlined />} disabled={!canPublish || busy} loading={busy} onClick={publish}>{scheduledAt ? "确认定时发布" : "立即发布"}</Button>
     </Card>
 
     <Card title="发布任务" extra={<Button icon={<ReloadOutlined />} disabled={!articleId} loading={busy} onClick={() => articleId && void fetchWechatMpPublishJobs(articleId).then(setJobs)}>刷新任务</Button>} style={{ marginTop: 16 }}>
