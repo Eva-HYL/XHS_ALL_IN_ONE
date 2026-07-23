@@ -2379,6 +2379,7 @@ def test_wechat_mp_layout_style_cleans_existing_markdown_leftovers():
 
     html = (
         '<p style="margin:16px 0;">### 1.10 软件测试</p>'
+        '<blockquote style="margin:16px 0;">📚 **软考高级·信息系统项目管理师**</blockquote>'
         '<ul style="padding-left:1.5em;margin:16px 0;">'
         '<li style="margin:8px 0;">**静态测试**：文档检查、代码走查</li>'
         '</ul>'
@@ -2387,6 +2388,7 @@ def test_wechat_mp_layout_style_cleans_existing_markdown_leftovers():
     styled = apply_wechat_layout_style(html, "study_green")
 
     assert "### 1.10 软件测试" not in styled
+    assert "<strong>软考高级·信息系统项目管理师</strong>" in styled
     assert "<strong>静态测试</strong>" in styled
     assert "**" not in styled
     assert "<hr" in styled
