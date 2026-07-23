@@ -719,7 +719,11 @@ def test_publish_routes_hide_foreign_article_and_map_api_failure_to_502(api_clie
 
     class FailingAdapter:
         def submit_publish(self, **kwargs):
-            raise WechatMpApiError("wechat publish submit failed", errcode=40001, payload={"errcode": 40001})
+            raise WechatMpApiError(
+                "wechat publish submit failed",
+                errcode=48001,
+                payload={"errcode": 48001, "errmsg": "api unauthorized"},
+            )
 
     monkeypatch.setattr(publish_service, "WechatMpApiAdapter", lambda: FailingAdapter())
     client, _ = api_client
@@ -739,6 +743,8 @@ def test_publish_routes_hide_foreign_article_and_map_api_failure_to_502(api_clie
 
     assert foreign.status_code == 404
     assert failed.status_code == 502
+    assert "48001" in failed.json()["detail"]
+    assert "api unauthorized" in failed.json()["detail"]
 
 
 @pytest.fixture

@@ -21,6 +21,16 @@ from backend.app.services.wechat_mp_publish_service import (
 router = APIRouter(prefix="/platforms/wechat-mp", tags=["wechat-mp-publish"])
 
 
+def _wechat_api_error_detail(exc: WechatMpApiError, fallback: str) -> str:
+    parts = [str(exc) or fallback]
+    if exc.errcode is not None:
+        parts.append(f"errcode: {exc.errcode}")
+    errmsg = exc.payload.get("errmsg")
+    if isinstance(errmsg, str) and errmsg:
+        parts.append(errmsg)
+    return " - ".join(parts)
+
+
 class WechatMpPublishRequest(BaseModel):
     confirm: bool = False
     scheduled_at: datetime | None = None
@@ -86,7 +96,9 @@ def submit_publish(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except WechatMpPublishValidationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except (WechatMpApiError, ValueError) as exc:
+    except WechatMpApiError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_wechat_api_error_detail(exc, "WeChat MP publish failed")) from exc
+    except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="WeChat MP publish failed") from exc
 
 
@@ -102,7 +114,9 @@ def poll_publish(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except WechatMpPublishValidationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except (WechatMpApiError, ValueError) as exc:
+    except WechatMpApiError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=_wechat_api_error_detail(exc, "WeChat MP publish status check failed")) from exc
+    except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="WeChat MP publish status check failed") from exc
 
 
