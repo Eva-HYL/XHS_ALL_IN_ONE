@@ -2044,6 +2044,61 @@ def test_wechat_mp_layout_renderer_supports_wrapped_markdown_tables_from_model_o
     assert "】" not in html
 
 
+def test_wechat_mp_layout_style_upgrades_saved_markdown_table_paragraphs():
+    from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style
+
+    stale_html = (
+        '<p style="margin:16px 0;">这是考试中<strong>必考</strong>的知识点，要求能<strong>区分具体类型属于哪种风格</strong>。</p>'
+        '<p style="margin:16px 0;">| 风格 | 包含类型 |</p>'
+        '<p style="margin:16px 0;">|------|----------|</p>'
+        '<p style="margin:16px 0;">| **数据流风格** | 批处理序列、管道/过滤器 |</p>'
+        '<p style="margin:16px 0;">| **调用/返回风格** | 主程序/子程序、数据抽象和面向对象、层次结构 |</p>'
+        '<p style="margin:16px 0;">| **独立构件风格** | 进程通讯、事件驱动系统 |</p>'
+        '<p style="margin:16px 0;">| **虚拟机风格** | 解释器、基于规则的系统 |</p>'
+        '<p style="margin:16px 0;">| **仓库风格** | 数据库系统、黑板系统、超文本系统 |</p>'
+    )
+
+    html = apply_wechat_layout_style(stale_html)
+
+    assert "<table" in html
+    assert "<strong>仓库风格</strong>" in html
+    assert "数据库系统、黑板系统、超文本系统" in html
+    assert "|------|----------|" not in html
+    assert "**仓库风格**" not in html
+
+
+def test_get_wechat_mp_article_repairs_saved_markdown_table_html(api_client, auth_headers, created_wechat_article):
+    from backend.app.models import WechatMpArticle
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        article = session.get(WechatMpArticle, created_wechat_article.id)
+        article.html_body = (
+            '<p>| 风格 | 包含类型 |</p>'
+            '<p>|------|----------|</p>'
+            '<p>| **数据流风格** | 批处理序列、管道/过滤器 |</p>'
+        )
+        session.commit()
+    finally:
+        session.close()
+
+    response = client.get(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert "<table" in response.json()["html_body"]
+    assert "|------|----------|" not in response.json()["html_body"]
+    session = session_factory()
+    try:
+        article = session.get(WechatMpArticle, created_wechat_article.id)
+        assert "<table" in article.html_body
+    finally:
+        session.close()
+
+
 def test_wechat_mp_layout_renderer_supports_common_markdown_formatting():
     from backend.app.services.wechat_mp_layout_service import render_wechat_html
 

@@ -66,6 +66,15 @@ def _get_owned_prompt(db: Session, article: WechatMpArticle, prompt_id: int) -> 
     return prompt
 
 
+def _repair_saved_article_html(db: Session, article: WechatMpArticle) -> WechatMpArticle:
+    repaired = apply_wechat_layout_style(article.html_body, "classic")
+    if repaired != article.html_body:
+        article.html_body = repaired
+        db.commit()
+        db.refresh(article)
+    return article
+
+
 @router.post("", response_model=WechatMpArticleResponse, status_code=status.HTTP_201_CREATED)
 def create_article(payload: WechatMpArticleCreateRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     try:
@@ -88,7 +97,7 @@ def list_layout_styles(current_user: User = Depends(get_current_user)):
 
 @router.get("/{article_id}", response_model=WechatMpArticleResponse)
 def get_article(article_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return _get_owned_article(db, current_user, article_id)
+    return _repair_saved_article_html(db, _get_owned_article(db, current_user, article_id))
 
 
 @router.get("/{article_id}/layout-preview", response_model=WechatMpLayoutPreviewResponse)
