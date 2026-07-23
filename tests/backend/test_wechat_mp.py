@@ -1937,6 +1937,28 @@ def test_wechat_mp_layout_renderer_removes_markdown_syntax_in_headings_lists_and
     assert "<hr" in html
 
 
+def test_wechat_mp_layout_renderer_supports_tables_with_blank_lines_between_rows():
+    from backend.app.services.wechat_mp_layout_service import render_wechat_html
+
+    html = render_wechat_html(
+        "| 风格 | 包含类型 |\n\n"
+        "|------|----------|\n\n"
+        "| **数据流风格** | 批处理序列、管道/过滤器 |\n\n"
+        "| **调用/返回风格** | 主程序/子程序、数据抽象和面向对象、层次结构 |\n\n"
+        "| **独立构件风格** | 进程通讯、事件驱动系统 |\n\n"
+        "| **虚拟机风格** | 解释器、基于规则的系统 |\n\n"
+        "| **仓库风格** | 数据库系统、黑板系统、超文本系统 |",
+        [],
+    )
+
+    assert "<table" in html
+    assert html.count("<tr>") == 6
+    assert "<strong>数据流风格</strong>" in html
+    assert "批处理序列、管道/过滤器" in html
+    assert "|------|----------|" not in html
+    assert "| **仓库风格** |" not in html
+
+
 def test_wechat_mp_layout_style_upgrades_previously_escaped_details():
     from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style
 

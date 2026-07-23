@@ -58,6 +58,15 @@ def _is_table_separator(line: str) -> bool:
     return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell.strip()) for cell in cells)
 
 
+def _next_nonempty_line_index(lines: list[str], start_index: int) -> int | None:
+    index = start_index
+    while index < len(lines):
+        if lines[index].strip():
+            return index
+        index += 1
+    return None
+
+
 def _table_html(headers: list[str], rows: list[list[str]]) -> str:
     head = "".join(
         f'<th style="border:1px solid #d9d9d9;padding:8px 10px;text-align:left;background:#f6f6f6;">{_inline_markdown(header)}</th>'
@@ -171,13 +180,20 @@ def render_wechat_html(markdown_body: str, image_placeholders: list[dict]) -> st
             blocks.append('<hr style="border:none;border-top:1px solid #e8e8e8;margin:24px 0;" />')
             index += 1
             continue
-        if "|" in line and index + 1 < len(lines) and _is_table_separator(lines[index + 1].strip()):
+        separator_index = _next_nonempty_line_index(lines, index + 1) if "|" in line else None
+        if separator_index is not None and _is_table_separator(lines[separator_index].strip()):
             flush_list()
             headers = _split_table_row(line)
             rows: list[list[str]] = []
-            index += 2
-            while index < len(lines) and "|" in lines[index].strip():
-                rows.append(_split_table_row(lines[index]))
+            index = separator_index + 1
+            while index < len(lines):
+                table_line = lines[index].strip()
+                if not table_line:
+                    index += 1
+                    continue
+                if "|" not in table_line:
+                    break
+                rows.append(_split_table_row(table_line))
                 index += 1
             blocks.append(_table_html(headers, rows))
             continue
