@@ -8,6 +8,7 @@ import {
   createWechatMpArticle,
   fetchModelConfigs,
   fetchWechatMpArticle,
+  fetchWechatMpArticles,
   fetchWechatMpAssets,
   fetchWechatMpImageCostEstimate,
   fetchWechatMpIllustrationCharacters,
@@ -34,6 +35,9 @@ import { WechatMpLayout } from "./wechat-mp-layout";
 const { Text, Paragraph } = Typography;
 const { TextArea } = Input;
 const DEFAULT_SKILL = "xiaomao-illustrations";
+const ARTICLE_RECOVERY_DELAY_MS = 12000;
+const ARTICLE_RECOVERY_POLL_MS = 5000;
+const ARTICLE_RECOVERY_CREATED_AT_MARGIN_MS = 30000;
 
 function errorMessage(error: unknown, fallback: string): string {
   if (typeof error === "object" && error !== null && "response" in error) {
@@ -156,37 +160,95 @@ export function WechatMpWriterPage() {
     }, 120);
   }, [focusPromptId, workflowStep, prompts.length]);
 
+  function applyCreatedArticle(next: WechatMpArticle, message: string) {
+    setArticle(next);
+    setEditTitle(next.title);
+    setEditMarkdown(next.markdown_body);
+    setParams({ article: String(next.id) });
+    setPrompts([]);
+    setAssets([]);
+    setSelectedMaterialIds([]);
+    setWorkflowStep(2);
+    setNotice(message);
+  }
+
+  async function recoverCreatedArticle(expectedTitle: string, startedAtMs: number): Promise<boolean> {
+    const items = await fetchWechatMpArticles();
+    const createdAfter = startedAtMs - ARTICLE_RECOVERY_CREATED_AT_MARGIN_MS;
+    const match = items
+      .filter((item) => item.title === expectedTitle)
+      .filter((item) => !item.created_at || new Date(item.created_at).getTime() >= createdAfter)
+      .sort((left, right) => {
+        const leftTime = left.created_at ? new Date(left.created_at).getTime() : 0;
+        const rightTime = right.created_at ? new Date(right.created_at).getTime() : 0;
+        return rightTime - leftTime;
+      })[0];
+    if (!match) return false;
+    const next = await fetchWechatMpArticle(match.id);
+    applyCreatedArticle(next, "文章已生成，已自动进入编辑步骤。");
+    return true;
+  }
+
   async function createArticle() {
-    if (!title.trim() || !topic.trim()) {
+    const expectedTitle = title.trim();
+    const expectedTopic = topic.trim();
+    if (!expectedTitle || !expectedTopic) {
       setError("请填写标题和主题。");
       return;
     }
+    const startedAtMs = Date.now();
+    let recovered = false;
+    let recoveryDelayId: number | undefined;
+    let recoveryIntervalId: number | undefined;
+    const clearRecoveryTimers = () => {
+      if (recoveryDelayId !== undefined) window.clearTimeout(recoveryDelayId);
+      if (recoveryIntervalId !== undefined) window.clearInterval(recoveryIntervalId);
+    };
+    const tryRecover = async () => {
+      try {
+        const ok = await recoverCreatedArticle(expectedTitle, startedAtMs);
+        if (!ok) return;
+        recovered = true;
+        clearRecoveryTimers();
+        setBusy(false);
+      } catch {
+        // Recovery is opportunistic; the original create request still owns hard failures.
+      }
+    };
     setBusy(true);
     setError(null);
-    setNotice("文章生成中；完成后进入编辑与预览。");
+    setNotice("文章生成中；完成后进入编辑与预览。若模型响应较慢，页面会自动检测已生成文章。");
+    recoveryDelayId = window.setTimeout(() => {
+      recoveryIntervalId = window.setInterval(() => {
+        void tryRecover();
+      }, ARTICLE_RECOVERY_POLL_MS);
+      void tryRecover();
+    }, ARTICLE_RECOVERY_DELAY_MS);
     try {
       const next = await createWechatMpArticle({
-        title: title.trim(),
-        topic: topic.trim(),
+        title: expectedTitle,
+        topic: expectedTopic,
         source_material: material,
         material_ids: selectedMaterialIds,
         target_reader: reader,
         tone,
         illustration_skill: skill,
       });
-      setArticle(next);
-      setEditTitle(next.title);
-      setEditMarkdown(next.markdown_body);
-      setParams({ article: String(next.id) });
-      setPrompts([]);
-      setAssets([]);
-      setSelectedMaterialIds([]);
-      setWorkflowStep(2);
-      setNotice("文章和微信排版已生成。请检查正文，再进入提示词步骤。");
+      if (recovered) return;
+      applyCreatedArticle(next, "文章和微信排版已生成。请检查正文，再进入提示词步骤。");
     } catch (err) {
+      try {
+        if (await recoverCreatedArticle(expectedTitle, startedAtMs)) {
+          recovered = true;
+          return;
+        }
+      } catch {
+        // Keep the original create error visible if the recovery lookup also fails.
+      }
       setError(errorMessage(err, "文章工作流生成失败，请确认文本模型配置。"));
     } finally {
-      setBusy(false);
+      clearRecoveryTimers();
+      if (!recovered) setBusy(false);
     }
   }
 

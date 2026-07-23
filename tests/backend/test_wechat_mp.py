@@ -3477,3 +3477,15 @@ def test_deleting_obsolete_asset_keeps_current_prompt_and_article_state(
         assert prompt.status == "generated"
     finally:
         session.close()
+
+
+def test_wechat_mp_writer_recovers_article_generation_after_slow_response():
+    api_source = Path("frontend/src/lib/api.ts").read_text()
+    writer_source = Path("frontend/src/pages/platforms/wechat-mp/writer-page.tsx").read_text()
+
+    assert "WECHAT_MP_ARTICLE_TIMEOUT_MS = 420000" in api_source
+    assert '"/platforms/wechat-mp/articles", payload, { timeout: WECHAT_MP_ARTICLE_TIMEOUT_MS }' in api_source
+    assert "fetchWechatMpArticles" in writer_source
+    assert "recoverCreatedArticle" in writer_source
+    assert "window.setInterval" in writer_source
+    assert "文章已生成，已自动进入编辑步骤。" in writer_source
