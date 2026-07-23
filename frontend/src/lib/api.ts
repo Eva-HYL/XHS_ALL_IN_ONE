@@ -1179,6 +1179,11 @@ export async function syncWechatMpDraft(articleId: number, accountId: number, la
   return response.data;
 }
 
+export async function fetchLatestWechatMpDraftSync(articleId: number): Promise<WechatMpDraftSync> {
+  const response = await http.get<WechatMpDraftSync>(`/platforms/wechat-mp/articles/${articleId}/draft-syncs/latest`);
+  return response.data;
+}
+
 export async function publishWechatMpArticle(articleId: number, payload: { confirm: boolean; scheduled_at?: string | null }): Promise<WechatMpPublishJob> {
   const response = await http.post<WechatMpPublishJob>(`/platforms/wechat-mp/articles/${articleId}/publish`, payload);
   return response.data;

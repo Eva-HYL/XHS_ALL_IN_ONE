@@ -323,6 +323,51 @@ def test_sync_wechat_mp_article_creates_draft_sync(api_client, auth_headers, cre
         session.close()
 
 
+def test_get_latest_wechat_mp_draft_sync_restores_synced_state(api_client, auth_headers, created_wechat_article_with_image, created_wechat_account, monkeypatch):
+    from backend.app.models import WechatMpDraftSync
+    from backend.app.services import wechat_mp_draft_service as draft_service
+
+    class FakeAdapter:
+        def upload_permanent_image(self, **kwargs): return {"media_id": "thumb_media_id"}
+        def upload_content_image(self, **kwargs): return {"url": "https://mmbiz.qpic.cn/fake.png"}
+        def add_draft(self, **kwargs): return {"media_id": "wechat_draft_media_id"}
+
+    monkeypatch.setattr(draft_service, "WechatMpApiAdapter", lambda: FakeAdapter())
+    client, session_factory = api_client
+    synced = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/sync-draft",
+        json={"account_id": created_wechat_account.id},
+        headers=auth_headers,
+    )
+    assert synced.status_code == 201
+
+    latest = client.get(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/draft-syncs/latest",
+        headers=auth_headers,
+    )
+
+    assert latest.status_code == 200
+    assert latest.json()["id"] == synced.json()["id"]
+    assert latest.json()["status"] == "synced"
+    assert latest.json()["wechat_media_id"] == "wechat_draft_media_id"
+
+    other = client.post("/api/auth/register", json={"username": "draft-sync-other", "password": "secret123"})
+    other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
+    assert client.get(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article_with_image.id}/draft-syncs/latest",
+        headers=other_headers,
+    ).status_code == 404
+
+    empty = client.get("/api/platforms/wechat-mp/articles/999999/draft-syncs/latest", headers=auth_headers)
+    assert empty.status_code == 404
+
+    session = session_factory()
+    try:
+        assert session.query(WechatMpDraftSync).filter_by(article_id=created_wechat_article_with_image.id).count() == 1
+    finally:
+        session.close()
+
+
 def test_sync_wechat_mp_article_applies_selected_layout_style(
     api_client, auth_headers, created_wechat_article_with_image, created_wechat_account, monkeypatch
 ):
@@ -1964,6 +2009,10 @@ def test_wechat_mp_publish_page_supports_layout_style_preview():
     assert "extractMissingPromptIds" in page_source
     assert "回写作页补图" in page_source
     assert "&prompt=${missingPromptIds[0]}" in page_source
+    assert "fetchLatestWechatMpDraftSync" in api_source
+    assert "fetchLatestWechatMpDraftSync" in page_source
+    assert "setSync(latestSync)" in page_source
+    assert "canPublish" in page_source
     assert "layout_style" in api_source
 
 
