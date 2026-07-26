@@ -2680,12 +2680,17 @@ def test_wechat_mp_publish_status_includes_submitted():
     assert "submitted" in get_args(WechatMpPublishStatus)
 
 
-def test_xiaomao_prompt_contract_is_applied_server_side():
+def test_xiaomao_prompt_contract_keeps_rendering_instructions_out_of_image_text():
     from backend.app.services.wechat_mp_image_prompt_service import build_skill_prompt
 
     prompt = build_skill_prompt("xiaomao-illustrations", "稳定输出", "先做最小动作")
-    for required in ("白色背景", "16:9", "手绘", "慵懒", "玳瑁猫"):
+    for required in ("白色背景", "手绘", "慵懒", "玳瑁猫", "不得渲染"):
         assert required in prompt
+    assert "16:9" not in prompt
+    assert "横版构图" not in prompt
+
+    fallback_prompt = build_skill_prompt("missing-character", "稳定输出", "先做最小动作")
+    assert "16:9" not in fallback_prompt
 
 
 def test_none_skill_rejects_image_generation(api_client, auth_headers, created_wechat_prompt):

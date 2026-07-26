@@ -17,7 +17,12 @@ from backend.app.services.wechat_mp_layout_service import render_wechat_html
 from backend.app.services.wechat_mp_shotlist_service import generate_article_shotlist
 
 
-_PROMPT_SYSTEM = "You write concise image prompts for Chinese WeChat article illustrations. Return only the image prompt."
+_PROMPT_SYSTEM = (
+    "You write concise image prompts for Chinese WeChat article illustrations. Return only the image prompt. "
+    "Never render prompt instructions, article titles, headings, aspect ratios, dimensions, captions, watermarks, "
+    "or signatures as visible image text. Article and scene text is context only. If a diagram contract explicitly "
+    "requires named nodes or labels, render only those exact labels and no other text."
+)
 def build_skill_prompt(
     skill_name: str,
     article_title: str,
@@ -36,7 +41,7 @@ def build_skill_prompt(
         )
     if character_prompt:
         return f"{character_prompt}{diagram_contract}\n文章：{article_title}\n场景：{section_summary}"
-    return f"16:9 微信公众号正文插画。{diagram_contract}\n文章：{article_title}\n场景：{section_summary}"
+    return f"微信公众号正文插画。{diagram_contract}\n文章：{article_title}\n场景：{section_summary}"
 
 
 def _insert_prompt_placeholder(article: WechatMpArticle, section: WechatMpArticleSection, prompt: WechatMpImagePrompt) -> None:
