@@ -7035,6 +7035,84 @@ def test_model_fallback_recognizes_provider_access_denied():
     assert is_quota_error(ValueError("Access to model denied. Please make sure you are eligible for using the model."))
 
 
+def test_volc_ark_usage_client_parses_official_daily_usage(monkeypatch):
+    from backend.app.services.volc_ark_usage_service import VolcArkUsageClient
+
+    monkeypatch.setenv("VOLC_ACCESS_KEY", "ak-test")
+    monkeypatch.setenv("VOLC_SECRET_KEY", "sk-test")
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "Result": {
+                    "Fields": [
+                        {"Name": "Day"},
+                        {"Name": "InputTokens"},
+                        {"Name": "OutputTokens"},
+                        {"Name": "ImageCount"},
+                        {"Name": "ReqCnt"},
+                    ],
+                    "Data": [["2026-07-26", "120", "80", "3", "7"]],
+                }
+            }
+
+    captured = {}
+
+    def fake_post(url, data, headers, timeout):
+        captured.update({"url": url, "data": data, "headers": headers, "timeout": timeout})
+        return FakeResponse()
+
+    monkeypatch.setattr("backend.app.services.volc_ark_usage_service.requests.post", fake_post)
+
+    result = VolcArkUsageClient().fetch_inference_usage(days=7)
+
+    assert result["source"] == "volc_ark"
+    assert result["items"] == [{
+        "day": "2026-07-26",
+        "input_tokens": 120,
+        "output_tokens": 80,
+        "image_count": 3,
+        "request_count": 7,
+    }]
+    assert result["totals"] == {
+        "input_tokens": 120,
+        "output_tokens": 80,
+        "image_count": 3,
+        "request_count": 7,
+    }
+    assert "Action=GetInferenceUsage" in captured["url"]
+    assert captured["headers"]["Authorization"].startswith("HMAC-SHA256 Credential=ak-test/")
+
+
+def test_provider_usage_endpoint_returns_official_usage(monkeypatch, tmp_path):
+    from backend.app.services.volc_ark_usage_service import VolcArkUsageClient
+
+    db_dependency = _override_database(tmp_path)
+    try:
+        register = client.post("/api/auth/register", json={"username": "providerusage", "password": "pw123456"}).json()
+        monkeypatch.setattr(VolcArkUsageClient, "fetch_inference_usage", lambda _self, days: {
+            "source": "volc_ark",
+            "interval_days": days,
+            "items": [],
+            "totals": {"input_tokens": 10, "output_tokens": 20, "image_count": 1, "request_count": 2},
+        })
+        monkeypatch.setenv("VOLC_ACCESS_KEY", "ak-test")
+        monkeypatch.setenv("VOLC_SECRET_KEY", "sk-test")
+
+        response = client.get(
+            "/api/illustrations/provider-usage?days=14",
+            headers={"Authorization": f"Bearer {register['access_token']}"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["interval_days"] == 14
+        assert response.json()["totals"]["image_count"] == 1
+    finally:
+        app.dependency_overrides.pop(db_dependency, None)
+
+
 def test_generate_illustration_image_rejects_other_users_character(tmp_path):
     from backend.app.models import Character, ModelConfig
     from backend.app.core.security import encrypt_text
