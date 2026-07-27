@@ -266,9 +266,16 @@ export function WechatMpWriterPage() {
         title: editTitle.trim(),
         markdown_body: editMarkdown,
       });
-      setArticle(updated);
-      setEditTitle(updated.title);
-      setEditMarkdown(updated.markdown_body);
+      let refreshed = updated;
+      try {
+        // Use the persisted HTML so the preview never keeps a stale pre-save layout snapshot.
+        refreshed = await fetchWechatMpArticle(article.id);
+      } catch {
+        // The PATCH has already succeeded; retain its response if a follow-up read is transiently unavailable.
+      }
+      setArticle(refreshed);
+      setEditTitle(refreshed.title);
+      setEditMarkdown(refreshed.markdown_body);
       if (bodyChanged) {
         const [loadedPrompts, loadedAssets] = await Promise.all([
           fetchWechatMpPrompts(article.id),

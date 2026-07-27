@@ -2480,6 +2480,16 @@ def test_wechat_mp_articles_are_owner_scoped_and_patch_renders_markdown(api_clie
     assert client.patch(f"/api/platforms/wechat-mp/articles/{article_id}", json={"title": "越权"}, headers=other_headers).status_code == 404
 
 
+def test_wechat_writer_refreshes_article_after_saving_markdown():
+    source = open("frontend/src/pages/platforms/wechat-mp/writer-page.tsx", encoding="utf-8").read()
+
+    save_start = source.index("async function saveArticle()")
+    save_end = source.index("async function makePrompts()", save_start)
+    save_source = source[save_start:save_end]
+    assert "await fetchWechatMpArticle(article.id)" in save_source
+    assert "setArticle(refreshed)" in save_source
+
+
 def test_noop_article_save_preserves_embedded_images_and_revision(
     api_client, auth_headers, created_wechat_prompt
 ):
