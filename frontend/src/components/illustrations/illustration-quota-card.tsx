@@ -15,7 +15,7 @@ export function IllustrationQuotaCard({ quotas }: IllustrationQuotaCardProps) {
   if (!quotas.length || !canViewInternalBilling(auth.user)) return null;
 
   return (
-    <Card className="illustration-quota-card" size="small" title="免费额度监控与自动切换" style={{ marginTop: 16 }}>
+    <Card className="illustration-quota-card" size="small" title="模型调用策略与本平台记录" style={{ marginTop: 16 }}>
       <Row gutter={[12, 12]}>
         {quotas.map((quota) => (
           <Col xs={24} md={12} xl={8} key={quota.model_config_id}>
@@ -26,14 +26,14 @@ export function IllustrationQuotaCard({ quotas }: IllustrationQuotaCardProps) {
                 {quota.is_default && <Tag>默认</Tag>}
               </Space>
               <Text type={quota.free_remaining > 0 ? undefined : "secondary"}>
-                免费剩余 {quota.free_remaining.toLocaleString()} / {quota.free_ceiling.toLocaleString()} {quota.model_type === "text" ? "tokens" : "张"}
+                本平台预估剩余 {quota.free_remaining.toLocaleString()} / {quota.free_ceiling.toLocaleString()} {quota.model_type === "text" ? "tokens" : "张"}
               </Text>
               <Text type="secondary">用尽后按优先级自动切换 · 标价 ¥{quota.unit_price_yuan}</Text>
             </Space>
           </Col>
         ))}
       </Row>
-      <Alert type="info" showIcon message="这里统计本平台已记录用量；最终账单以模型服务商控制台为准。" style={{ marginTop: 12 }} />
+      <Alert type="info" showIcon message="这是本平台记录与切换策略，不等同于火山的真实免费余额；官方账户用量请到账单中心查看。" style={{ marginTop: 12 }} />
     </Card>
   );
 }

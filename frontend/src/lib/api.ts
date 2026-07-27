@@ -36,6 +36,7 @@ import type {
   IllustrationAsset,
   IllustrationCharacter,
   IllustrationModelQuota,
+  VolcArkInferenceUsage,
   IllustrationRun,
   IllustrationShot,
   IllustrationShotList,
@@ -659,6 +660,11 @@ export async function fetchIllustrationUsageSummary(pipelineRunId?: string): Pro
 
 export async function fetchIllustrationModelQuotas(): Promise<{ items: IllustrationModelQuota[] }> {
   const response = await http.get<{ items: IllustrationModelQuota[] }>("/illustrations/model-quotas");
+  return response.data;
+}
+
+export async function fetchVolcArkInferenceUsage(days = 30): Promise<VolcArkInferenceUsage> {
+  const response = await http.get<VolcArkInferenceUsage>("/illustrations/provider-usage", { params: { days } });
   return response.data;
 }
 

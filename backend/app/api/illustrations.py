@@ -29,6 +29,7 @@ from backend.app.services.model_selector_service import (
     is_quota_error,
     select_model_config,
 )
+from backend.app.services.volc_ark_usage_service import VolcArkUsageClient, VolcArkUsageError
 
 router = APIRouter(prefix="/illustrations", tags=["illustrations"])
 
@@ -106,6 +107,18 @@ def list_model_quotas(
     db: Session = Depends(get_db),
 ):
     return {"items": [status.serialize() for status in get_model_quota_statuses(db, current_user.id)]}
+
+
+@router.get("/provider-usage")
+def get_provider_usage(
+    days: int = 30,
+    current_user: User = Depends(get_current_user),
+):
+    del current_user  # Usage is account-level, but this endpoint remains authenticated.
+    try:
+        return VolcArkUsageClient().fetch_inference_usage(days=days)
+    except (ValueError, VolcArkUsageError) as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
 
 @router.get("/assets")

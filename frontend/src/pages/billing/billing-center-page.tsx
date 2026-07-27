@@ -1,5 +1,6 @@
 import {
   Alert,
+  Button,
   Card,
   Col,
   Empty,
@@ -19,10 +20,12 @@ import { IllustrationQuotaCard } from "../../components/illustrations/illustrati
 import {
   fetchIllustrationModelQuotas,
   fetchIllustrationUsageSummary,
+  fetchVolcArkInferenceUsage,
 } from "../../lib/api";
 import type {
   IllustrationModelQuota,
   IllustrationUsageSummary,
+  VolcArkInferenceUsage,
 } from "../../types";
 
 const { Text } = Typography;
@@ -44,6 +47,8 @@ function stepLabel(step: string): string {
 export function BillingCenterPage() {
   const [usage, setUsage] = useState<IllustrationUsageSummary>();
   const [quotas, setQuotas] = useState<IllustrationModelQuota[]>([]);
+  const [providerUsage, setProviderUsage] = useState<VolcArkInferenceUsage>();
+  const [providerError, setProviderError] = useState<string>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string>();
 
@@ -57,6 +62,13 @@ export function BillingCenterPage() {
       ]);
       setUsage(usageResult);
       setQuotas(quotaResult.items);
+      try {
+        setProviderUsage(await fetchVolcArkInferenceUsage());
+        setProviderError(undefined);
+      } catch {
+        setProviderUsage(undefined);
+        setProviderError("火山方舟官方用量暂不可同步。请检查服务端 AK/SK 与权限。");
+      }
     } catch {
       setError("账单中心加载失败。");
     } finally {
@@ -109,7 +121,7 @@ export function BillingCenterPage() {
       <PageHeader
         eyebrow="Billing Center"
         title="账单中心"
-        description="汇总当前账号在文章配图能力中的拆文、生图用量与估算费用。"
+        description="汇总平台记录的费用，并同步火山方舟账户级官方推理用量。"
       />
 
       {error && <Alert type="error" showIcon message={error} closable onClose={() => setError(undefined)} style={{ marginBottom: 16 }} />}
@@ -140,6 +152,30 @@ export function BillingCenterPage() {
               </Card>
             </Col>
           </Row>
+
+          <Card
+            title="火山方舟官方用量统计"
+            extra={<Button onClick={() => void loadBilling()} loading={loading}>刷新官方用量</Button>}
+          >
+            {providerError ? (
+              <Alert type="warning" showIcon message={providerError} />
+            ) : providerUsage ? (
+              <>
+                <Row gutter={[16, 16]}>
+                  <Col xs={24} md={6}><Statistic title="输入 Tokens" value={providerUsage.totals.input_tokens} /></Col>
+                  <Col xs={24} md={6}><Statistic title="输出 Tokens" value={providerUsage.totals.output_tokens} /></Col>
+                  <Col xs={24} md={6}><Statistic title="图片生成" value={providerUsage.totals.image_count} suffix="张" /></Col>
+                  <Col xs={24} md={6}><Statistic title="请求数" value={providerUsage.totals.request_count} /></Col>
+                </Row>
+                <Alert
+                  type="info"
+                  showIcon
+                  message={`已同步近 ${providerUsage.interval_days} 天的火山方舟账户级用量。火山公开接口当前不提供逐模型免费额度余额。`}
+                  style={{ marginTop: 16 }}
+                />
+              </>
+            ) : <Spin tip="正在同步火山方舟官方用量..." />}
+          </Card>
 
           <IllustrationQuotaCard quotas={quotas} />
 

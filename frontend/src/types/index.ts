@@ -466,6 +466,24 @@ export type IllustrationModelQuota = {
   capabilities: string[];
 };
 
+export type VolcArkInferenceUsage = {
+  source: "volc_ark";
+  interval_days: number;
+  items: Array<{
+    day: string;
+    input_tokens: number;
+    output_tokens: number;
+    image_count: number;
+    request_count: number;
+  }>;
+  totals: {
+    input_tokens: number;
+    output_tokens: number;
+    image_count: number;
+    request_count: number;
+  };
+};
+
 export type IllustrationRun = {
   id: string;
   character_id: number;
