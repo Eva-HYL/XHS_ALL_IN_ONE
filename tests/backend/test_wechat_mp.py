@@ -2688,6 +2688,7 @@ def test_xiaomao_prompt_contract_keeps_rendering_instructions_out_of_image_text(
         assert required in prompt
     assert "16:9" not in prompt
     assert "横版构图" not in prompt
+    assert "15-25%" not in prompt
 
     fallback_prompt = build_skill_prompt("missing-character", "稳定输出", "先做最小动作")
     assert "16:9" not in fallback_prompt
