@@ -154,11 +154,16 @@ http.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config as typeof error.config & { _authRetry?: boolean; _silent?: boolean };
-    if (error.response?.status !== 401 || originalRequest?._authRetry || !getRefreshToken()) {
+    // A rejected refresh request must not try to refresh itself again. Otherwise an
+    // expired token keeps the route guard in its initial "checking" state forever.
+    const isRefreshRequest = originalRequest?.url === "/auth/refresh";
+    if (error.response?.status !== 401 || isRefreshRequest || originalRequest?._authRetry || !getRefreshToken()) {
       if (!originalRequest?._silent) {
-        const detail = error.response?.data?.detail;
-        const msg = typeof detail === "string" ? detail : "请求失败，请稍后重试";
-        message.error(msg);
+        if (!isRefreshRequest) {
+          const detail = error.response?.data?.detail;
+          const msg = typeof detail === "string" ? detail : "请求失败，请稍后重试";
+          message.error(msg);
+        }
       }
       return Promise.reject(error);
     }
@@ -194,6 +199,9 @@ export async function refreshAccessToken(): Promise<string> {
 
   const response = await http.post<{ access_token: string; token_type: "bearer" }>("/auth/refresh", {
     refresh_token: refreshToken
+  }, {
+    // Route guards should recover to the login screen instead of appearing stuck.
+    timeout: 15000
   });
   setAccessToken(response.data.access_token);
   return response.data.access_token;
