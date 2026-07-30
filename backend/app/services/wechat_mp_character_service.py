@@ -41,7 +41,11 @@ def _empty_view(view: str) -> dict:
 def _serialize_character(character: WechatMpIllustrationCharacter) -> dict:
     records = {item.view: item for item in character.views}
     views = [records[view] if view in records else _empty_view(view) for view in VIEW_ORDER]
-    available = all(item.status == "confirmed" and item.public_url for item in views)
+    available = all(
+        (item["status"] == "confirmed" and item["public_url"]) if isinstance(item, dict)
+        else (item.status == "confirmed" and item.public_url)
+        for item in views
+    )
     return {
         "id": character.id, "user_id": character.user_id, "name": character.name,
         "skill_name": character.skill_name, "prompt": character.prompt, "status": "confirmed" if available else "draft",
