@@ -13,10 +13,15 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("wechat_mp_illustration_characters", sa.Column("anchor_version", sa.Integer(), nullable=False, server_default="1"))
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    character_columns = {column["name"] for column in inspector.get_columns("wechat_mp_illustration_characters")}
+    if "anchor_version" not in character_columns:
+        op.add_column("wechat_mp_illustration_characters", sa.Column("anchor_version", sa.Integer(), nullable=False, server_default="1"))
     op.execute("UPDATE wechat_mp_illustration_characters SET status = 'draft' WHERE status = 'active'")
-    op.alter_column("wechat_mp_illustration_characters", "anchor_version", server_default=None)
-    op.create_table(
+    tables = set(inspector.get_table_names())
+    if "wechat_mp_character_views" not in tables:
+        op.create_table(
         "wechat_mp_character_views",
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("character_id", sa.Integer(), sa.ForeignKey("wechat_mp_illustration_characters.id"), nullable=False),
@@ -30,12 +35,14 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(), nullable=False),
         sa.Column("updated_at", sa.DateTime(), nullable=False),
         sa.UniqueConstraint("character_id", "view", name="uq_wechat_mp_character_view"),
-    )
-    op.create_index("ix_wechat_mp_character_views_character_id", "wechat_mp_character_views", ["character_id"])
-    op.create_index("ix_wechat_mp_character_views_user_id", "wechat_mp_character_views", ["user_id"])
-    op.create_index("ix_wechat_mp_character_views_status", "wechat_mp_character_views", ["status"])
-    op.add_column("wechat_mp_image_prompts", sa.Column("character_id", sa.Integer(), sa.ForeignKey("wechat_mp_illustration_characters.id"), nullable=True))
-    op.create_index("ix_wechat_mp_image_prompts_character_id", "wechat_mp_image_prompts", ["character_id"])
+        )
+        op.create_index("ix_wechat_mp_character_views_character_id", "wechat_mp_character_views", ["character_id"])
+        op.create_index("ix_wechat_mp_character_views_user_id", "wechat_mp_character_views", ["user_id"])
+        op.create_index("ix_wechat_mp_character_views_status", "wechat_mp_character_views", ["status"])
+    prompt_columns = {column["name"] for column in inspector.get_columns("wechat_mp_image_prompts")}
+    if "character_id" not in prompt_columns:
+        op.add_column("wechat_mp_image_prompts", sa.Column("character_id", sa.Integer(), sa.ForeignKey("wechat_mp_illustration_characters.id"), nullable=True))
+        op.create_index("ix_wechat_mp_image_prompts_character_id", "wechat_mp_image_prompts", ["character_id"])
 
 
 def downgrade() -> None:
