@@ -863,15 +863,28 @@ export type WechatMpIllustrationCharacter = {
   skill_name: string;
   prompt: string;
   status: string;
+  anchor_version?: number;
+  is_available?: boolean;
+  views?: WechatMpCharacterView[];
   is_builtin: boolean;
   created_at?: string | null;
   updated_at?: string | null;
+};
+
+export type WechatMpCharacterView = {
+  id: number | null;
+  view: "front" | "back" | "left" | "right";
+  prompt: string;
+  public_url: string;
+  model_name: string;
+  status: "draft" | "confirmed";
 };
 
 export interface WechatMpImagePrompt {
   id: number;
   article_id: number;
   section_id: number;
+  character_id?: number | null;
   skill_name: string;
   prompt: string;
   editable_prompt: string;

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.models import WechatMpArticle, WechatMpArticleSection, WechatMpAsset, WechatMpImagePrompt
 from backend.app.services.usage_recording_service import record_text_usage
-from backend.app.services.wechat_mp_character_service import XIAOMAO_SKILL_NAME, resolve_character_prompt
+from backend.app.services.wechat_mp_character_service import XIAOMAO_SKILL_NAME, ensure_builtin_character, resolve_character_prompt
 from backend.app.services.wechat_mp_cost_service import add_article_cost
 from backend.app.services.wechat_mp_layout_service import render_wechat_html
 from backend.app.services.wechat_mp_shotlist_service import generate_article_shotlist
@@ -180,6 +180,15 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
     if article is None:
         raise LookupError("WeChat MP article not found")
     selected_skill = skill_name or article.illustration_skill or XIAOMAO_SKILL_NAME
+    if selected_skill == XIAOMAO_SKILL_NAME:
+        ensure_builtin_character(db, user_id)
+    selected_character = None
+    if selected_skill != "none":
+        from backend.app.models import WechatMpIllustrationCharacter
+        selected_character = db.scalar(select(WechatMpIllustrationCharacter).where(
+            WechatMpIllustrationCharacter.user_id == user_id,
+            WechatMpIllustrationCharacter.skill_name == selected_skill,
+        ))
     if selected_skill == "none" and article.illustration_skill != "none":
         has_inline_state = bool(db.scalar(
             select(WechatMpImagePrompt.id).where(WechatMpImagePrompt.article_id == article.id).limit(1)
@@ -214,6 +223,7 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
                     user_id=user_id,
                     article_id=article.id,
                     section_id=section.id,
+                    character_id=selected_character.id if selected_character else None,
                     skill_name=selected_skill,
                     prompt=result["prompt"],
                     editable_prompt=result["prompt"],
@@ -226,6 +236,7 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
                 if selected_skill != "none":
                     _restore_prompt_placeholder(db, article, section, prompt)
                 prompt.skill_name = selected_skill
+                prompt.character_id = selected_character.id if selected_character else None
                 prompt.prompt = result["prompt"]
                 prompt.editable_prompt = result["prompt"]
                 prompt.version += 1

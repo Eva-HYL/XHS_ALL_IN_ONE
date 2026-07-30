@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.core.database import Base
@@ -65,6 +65,7 @@ class WechatMpImagePrompt(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
     article_id: Mapped[int] = mapped_column(ForeignKey("wechat_mp_articles.id"), index=True, nullable=False)
     section_id: Mapped[int] = mapped_column(ForeignKey("wechat_mp_article_sections.id"), index=True, nullable=False)
+    character_id: Mapped[int | None] = mapped_column(ForeignKey("wechat_mp_illustration_characters.id"), index=True, nullable=True)
     skill_name: Mapped[str] = mapped_column(String(80), default="xiaomao-illustrations", nullable=False)
     skill_version: Mapped[str] = mapped_column(String(32), default="v1.0.0", nullable=False)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
@@ -84,7 +85,26 @@ class WechatMpIllustrationCharacter(Base):
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     skill_name: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(String(32), default="active", index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="draft", index=True, nullable=False)
+    anchor_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    views: Mapped[list["WechatMpCharacterView"]] = relationship(cascade="all, delete-orphan")
+
+
+class WechatMpCharacterView(Base):
+    __tablename__ = "wechat_mp_character_views"
+    __table_args__ = (UniqueConstraint("character_id", "view", name="uq_wechat_mp_character_view"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    character_id: Mapped[int] = mapped_column(ForeignKey("wechat_mp_illustration_characters.id"), index=True, nullable=False)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    view: Mapped[str] = mapped_column(String(16), nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    file_path: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    public_url: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    model_name: Mapped[str] = mapped_column(String(128), default="", nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="draft", index=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

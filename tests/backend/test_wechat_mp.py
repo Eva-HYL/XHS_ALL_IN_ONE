@@ -1470,6 +1470,69 @@ def test_wechat_mp_illustration_characters_are_user_managed(api_client, auth_hea
     assert all(item["skill_name"] != data["skill_name"] for item in client.get("/api/platforms/wechat-mp/illustration-characters", headers=other_headers).json())
 
 
+def test_wechat_mp_character_requires_four_confirmed_views_and_replacement_resets_state(api_client, auth_headers):
+    client, _ = api_client
+    created = client.post(
+        "/api/platforms/wechat-mp/illustration-characters",
+        json={"name": "四视图熊", "prompt": "固定外观的手绘白熊。"},
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+    character_id = created.json()["id"]
+    assert [view["view"] for view in created.json()["views"]] == ["front", "back", "left", "right"]
+
+    missing = client.post(
+        f"/api/platforms/wechat-mp/illustration-characters/{character_id}/views/front/confirm",
+        headers=auth_headers,
+    )
+    assert missing.status_code == 400
+
+    for view in ("front", "back", "left", "right"):
+        uploaded = client.post(
+            f"/api/platforms/wechat-mp/illustration-characters/{character_id}/views/{view}/upload",
+            files={"file": (f"{view}.png", b"not-a-real-png-but-a-stored-test-file", "image/png")},
+            headers=auth_headers,
+        )
+        assert uploaded.status_code == 201
+        confirmed = client.post(
+            f"/api/platforms/wechat-mp/illustration-characters/{character_id}/views/{view}/confirm",
+            headers=auth_headers,
+        )
+        assert confirmed.status_code == 200
+
+    listed = client.get("/api/platforms/wechat-mp/illustration-characters", headers=auth_headers).json()
+    character = next(item for item in listed if item["id"] == character_id)
+    assert character["status"] == "confirmed"
+    assert character["is_available"] is True
+
+    replacement = client.post(
+        f"/api/platforms/wechat-mp/illustration-characters/{character_id}/views/front/upload",
+        files={"file": ("front.png", b"replacement", "image/png")},
+        headers=auth_headers,
+    )
+    assert replacement.status_code == 201
+    listed_after = client.get("/api/platforms/wechat-mp/illustration-characters", headers=auth_headers).json()
+    character_after = next(item for item in listed_after if item["id"] == character_id)
+    assert character_after["status"] == "draft"
+    assert character_after["is_available"] is False
+
+
+def test_wechat_mp_character_view_endpoints_are_owner_scoped(api_client, auth_headers):
+    client, _ = api_client
+    created = client.post(
+        "/api/platforms/wechat-mp/illustration-characters",
+        json={"name": "私有角色", "prompt": "只属于当前用户。"},
+        headers=auth_headers,
+    )
+    other = client.post("/api/auth/register", json={"username": "wechat-four-view-other", "password": "secret123"})
+    other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
+    response = client.post(
+        f"/api/platforms/wechat-mp/illustration-characters/{created.json()['id']}/views/front/confirm",
+        headers=other_headers,
+    )
+    assert response.status_code == 404
+
+
 def test_custom_wechat_mp_character_prompt_is_used_for_image_prompt(api_client, auth_headers, created_wechat_article, monkeypatch):
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
 
