@@ -1101,6 +1101,11 @@ export async function uploadWechatMpCharacterView(characterId: number, view: str
   return response.data;
 }
 
+export async function fetchWechatMpCharacterViewPreview(path: string): Promise<string> {
+  const response = await http.get(path, { responseType: "blob" });
+  return URL.createObjectURL(response.data as Blob);
+}
+
 export async function fetchWechatMpLayoutStyles(): Promise<WechatMpLayoutStyle[]> {
   const response = await http.get<WechatMpLayoutStyle[]>("/platforms/wechat-mp/articles/layout-styles");
   return response.data;

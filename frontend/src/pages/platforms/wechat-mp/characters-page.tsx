@@ -3,7 +3,7 @@ import { Alert, Button, Card, Col, Empty, Form, Input, Row, Space, Spin, Tag, Ty
 import { useEffect, useState } from "react";
 
 import { PageHeader } from "../../../components/layout/app-shell";
-import { confirmWechatMpCharacterView, createWechatMpIllustrationCharacter, fetchWechatMpIllustrationCharacters, generateWechatMpCharacterView, uploadWechatMpCharacterView } from "../../../lib/api";
+import { confirmWechatMpCharacterView, createWechatMpIllustrationCharacter, fetchWechatMpCharacterViewPreview, fetchWechatMpIllustrationCharacters, generateWechatMpCharacterView, uploadWechatMpCharacterView } from "../../../lib/api";
 import type { WechatMpIllustrationCharacter } from "../../../types";
 import { WechatMpLayout } from "./wechat-mp-layout";
 
@@ -18,12 +18,19 @@ export function WechatMpCharactersPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [viewBusy, setViewBusy] = useState<string | null>(null);
+  const [previews, setPreviews] = useState<Record<string, string>>({});
 
   async function loadCharacters() {
     setLoading(true);
     setError(null);
     try {
-      setCharacters(await fetchWechatMpIllustrationCharacters());
+      const items = await fetchWechatMpIllustrationCharacters();
+      setCharacters(items);
+      const available = items.flatMap((character) => (character.views ?? [])
+        .filter((view) => Boolean(view.public_url))
+        .map((view) => ({ key: `${character.id}-${view.view}`, path: view.public_url })));
+      const next = await Promise.all(available.map(async (item) => [item.key, await fetchWechatMpCharacterViewPreview(item.path)] as const));
+      setPreviews(Object.fromEntries(next));
     } catch {
       setError("公众号形象库加载失败。");
     } finally {
@@ -113,7 +120,7 @@ export function WechatMpCharactersPage() {
                             const busy = viewBusy === key;
                             return <Col span={12} key={view.view}>
                               <Card size="small" title={view.view === "front" ? "正面" : view.view === "back" ? "背面" : view.view === "left" ? "左侧" : "右侧"} extra={<Tag color={view.status === "confirmed" ? "green" : "default"}>{view.status === "confirmed" ? "已确认" : "待确认"}</Tag>}>
-                                {view.public_url ? <img src={view.public_url} alt={`${character.name}${view.view}`} style={{ width: "100%", height: 100, objectFit: "contain", background: "#111" }} /> : <Text type="secondary">尚无视图</Text>}
+                                {view.public_url ? <img src={previews[key]} alt={`${character.name}${view.view}`} style={{ width: "100%", height: 100, objectFit: "contain", background: "#111" }} /> : <Text type="secondary">尚无视图</Text>}
                                 <Space wrap style={{ marginTop: 8 }}>
                                   <Button size="small" loading={busy} onClick={() => void refreshAfterView(() => generateWechatMpCharacterView(character.id!, view.view), key)}>{view.public_url ? "重新生成" : "生成"}</Button>
                                   <Upload accept="image/jpeg,image/png,image/webp" showUploadList={false} beforeUpload={(file) => { void refreshAfterView(() => uploadWechatMpCharacterView(character.id!, view.view, file), key); return false; }}><Button size="small" icon={<UploadOutlined />}>替换</Button></Upload>
