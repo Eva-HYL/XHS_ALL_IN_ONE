@@ -36,7 +36,23 @@ class WechatMpIllustrationCharacterResponse(BaseModel):
     skill_name: str
     prompt: str
     status: str
+    anchor_version: int = 1
+    is_available: bool = False
+    views: list["WechatMpCharacterViewResponse"] = Field(default_factory=list)
     is_builtin: bool = False
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class WechatMpCharacterViewResponse(BaseModel):
+    id: int | None = None
+    view: str
+    prompt: str = ""
+    public_url: str = ""
+    model_name: str = ""
+    status: str = "draft"
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -85,6 +101,7 @@ class WechatMpImagePromptResponse(BaseModel):
     user_id: int
     article_id: int
     section_id: int
+    character_id: int | None = None
     skill_name: str
     skill_version: str
     prompt: str

@@ -50,7 +50,7 @@ class WechatMpImageValidationError(ValueError):
 
 
 def _call_image_model(
-    *, prompt: str, model_name: str, size: str, base_url: str = "", api_key: str = "",
+    *, prompt: str, model_name: str, size: str, base_url: str = "", api_key: str = "", reference_images: list[str] | None = None,
 ) -> dict[str, Any]:
     """Call the configured image provider; tests monkeypatch this narrow seam."""
     base_url = (base_url or os.getenv("WECHAT_MP_IMAGE_BASE_URL", "")).rstrip("/")
@@ -58,10 +58,13 @@ def _call_image_model(
     if not base_url or not api_key:
         raise ValueError("WeChat MP image model is not configured")
     try:
+        body = {"model": model_name, "prompt": prompt, "size": size, "response_format": "url"}
+        if reference_images:
+            body["reference_images"] = reference_images
         response = requests.post(
             f"{base_url}/images/generations",
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={"model": model_name, "prompt": prompt, "size": size, "response_format": "url"},
+            json=body,
             timeout=180,
         )
         response.raise_for_status()
@@ -193,11 +196,24 @@ def generate_asset_for_prompt(
     from backend.app.services.wechat_mp_model_service import resolve_wechat_mp_model
     from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
 
+    from backend.app.services.wechat_mp_character_service import resolve_confirmed_character_anchor, resolve_prompt_character
+
+    character, scene_prompt = resolve_prompt_character(
+        db, user_id=user_id, default_skill_name=prompt.skill_name, text=prompt.editable_prompt,
+    )
+    anchor = resolve_confirmed_character_anchor(
+        db, user_id=user_id, character_id=character.id if character else None, skill_name=None if character else prompt.skill_name,
+    )
+    reference_images = anchor[1] if anchor else None
+    if character is not None:
+        prompt.character_id = character.id
+    effective_prompt = f"{character.prompt}\n具体画面：{scene_prompt}" if character else scene_prompt
     model = resolve_wechat_mp_model(
         db=db, user_id=user_id, model_type="image", requested_model=image_model,
     )
     normalized_size = normalize_illustration_size(model.model_name, size)
-    reusable = _find_reusable_asset(db, user_id=user_id, prompt=prompt)
+    # A text-similar asset from another character must never bypass a four-view anchor.
+    reusable = None if reference_images else _find_reusable_asset(db, user_id=user_id, prompt=prompt)
     if reusable is not None:
         source_asset, similarity = reusable
         return _reuse_asset_for_prompt(
@@ -212,8 +228,8 @@ def generate_asset_for_prompt(
 
     try:
         result = _call_image_model(
-            prompt=prompt.editable_prompt, model_name=model.model_name, size=normalized_size,
-            base_url=model.base_url, api_key=model.api_key,
+            prompt=effective_prompt, model_name=model.model_name, size=normalized_size,
+            base_url=model.base_url, api_key=model.api_key, reference_images=reference_images,
         )
         if isinstance(result.get("image_ref"), str):
             file_path, public_url = _save_image_response(result["image_ref"], user_id)
@@ -227,7 +243,7 @@ def generate_asset_for_prompt(
             role="inline_illustration",
             file_path=file_path,
             public_url=public_url,
-            prompt=prompt.editable_prompt,
+            prompt=effective_prompt,
             skill_name=prompt.skill_name,
             model_name=model.model_name,
             status="generated",
@@ -284,9 +300,16 @@ def generate_cover_asset(
     prompt_text = build_skill_prompt(
         article.illustration_skill, article.title, article.cover_brief or article.title,
     )
+    from backend.app.services.wechat_mp_character_service import resolve_confirmed_character_anchor
+    anchor = resolve_confirmed_character_anchor(db, user_id=user_id, skill_name=article.illustration_skill)
+    if anchor is not None:
+        character, reference_images = anchor
+        prompt_text = f"{character.prompt}\n{prompt_text}"
+    else:
+        reference_images = None
     result = _call_image_model(
         prompt=prompt_text, model_name=model.model_name, size=normalized_size,
-        base_url=model.base_url, api_key=model.api_key,
+        base_url=model.base_url, api_key=model.api_key, reference_images=reference_images,
     )
     if isinstance(result.get("image_ref"), str):
         file_path, public_url = _save_image_response(result["image_ref"], user_id)

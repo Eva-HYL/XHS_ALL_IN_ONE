@@ -1,9 +1,9 @@
-import { PlusOutlined, ReloadOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, Col, Empty, Form, Input, Row, Space, Spin, Tag, Typography } from "antd";
+import { CheckOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from "@ant-design/icons";
+import { Alert, Button, Card, Col, Empty, Form, Input, Row, Space, Spin, Tag, Typography, Upload } from "antd";
 import { useEffect, useState } from "react";
 
 import { PageHeader } from "../../../components/layout/app-shell";
-import { createWechatMpIllustrationCharacter, fetchWechatMpIllustrationCharacters } from "../../../lib/api";
+import { confirmWechatMpCharacterView, createWechatMpIllustrationCharacter, fetchWechatMpIllustrationCharacters, generateWechatMpCharacterView, uploadWechatMpCharacterView } from "../../../lib/api";
 import type { WechatMpIllustrationCharacter } from "../../../types";
 import { WechatMpLayout } from "./wechat-mp-layout";
 
@@ -17,6 +17,7 @@ export function WechatMpCharactersPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [viewBusy, setViewBusy] = useState<string | null>(null);
 
   async function loadCharacters() {
     setLoading(true);
@@ -53,6 +54,20 @@ export function WechatMpCharactersPage() {
     }
   }
 
+  async function refreshAfterView(action: () => Promise<unknown>, label: string) {
+    setViewBusy(label);
+    setError(null);
+    try {
+      await action();
+      await loadCharacters();
+      setNotice(`${label}已完成，请继续确认其余视图。`);
+    } catch {
+      setError(`${label}失败，请检查图片模型或文件格式。`);
+    } finally {
+      setViewBusy(null);
+    }
+  }
+
   return (
     <WechatMpLayout>
       <PageHeader
@@ -86,12 +101,28 @@ export function WechatMpCharactersPage() {
               <Row gutter={[12, 12]}>
                 {characters.map((character) => (
                   <Col xs={24} md={12} key={character.skill_name}>
-                    <Card size="small" title={character.name} extra={<Tag color={character.is_builtin ? "blue" : "green"}>{character.is_builtin ? "内置" : "自定义"}</Tag>}>
+                    <Card size="small" title={character.name} extra={<Space><Tag color={character.is_available ? "green" : "gold"}>{character.is_available ? "四视图已确认" : "待确认四视图"}</Tag><Tag color={character.is_builtin ? "blue" : "green"}>{character.is_builtin ? "内置" : "自定义"}</Tag></Space>}>
                       <Space direction="vertical" size={8} style={{ width: "100%" }}>
                         <Text code>{character.skill_name}</Text>
                         <Paragraph ellipsis={{ rows: 4, expandable: true, symbol: "展开" }} style={{ marginBottom: 0 }}>
                           {character.prompt || "系统内置形象，无自定义提示词。"}
                         </Paragraph>
+                        {character.id && <Row gutter={[8, 8]}>
+                          {(character.views ?? []).map((view) => {
+                            const key = `${character.id}-${view.view}`;
+                            const busy = viewBusy === key;
+                            return <Col span={12} key={view.view}>
+                              <Card size="small" title={view.view === "front" ? "正面" : view.view === "back" ? "背面" : view.view === "left" ? "左侧" : "右侧"} extra={<Tag color={view.status === "confirmed" ? "green" : "default"}>{view.status === "confirmed" ? "已确认" : "待确认"}</Tag>}>
+                                {view.public_url ? <img src={view.public_url} alt={`${character.name}${view.view}`} style={{ width: "100%", height: 100, objectFit: "contain", background: "#111" }} /> : <Text type="secondary">尚无视图</Text>}
+                                <Space wrap style={{ marginTop: 8 }}>
+                                  <Button size="small" loading={busy} onClick={() => void refreshAfterView(() => generateWechatMpCharacterView(character.id!, view.view), key)}>{view.public_url ? "重新生成" : "生成"}</Button>
+                                  <Upload accept="image/jpeg,image/png,image/webp" showUploadList={false} beforeUpload={(file) => { void refreshAfterView(() => uploadWechatMpCharacterView(character.id!, view.view, file), key); return false; }}><Button size="small" icon={<UploadOutlined />}>替换</Button></Upload>
+                                  <Button size="small" icon={<CheckOutlined />} disabled={!view.public_url || view.status === "confirmed"} onClick={() => void refreshAfterView(() => confirmWechatMpCharacterView(character.id!, view.view), key)}>确认</Button>
+                                </Space>
+                              </Card>
+                            </Col>;
+                          })}
+                        </Row>}
                       </Space>
                     </Card>
                   </Col>

@@ -92,6 +92,7 @@ import type {
   WechatMpImageCostEstimate,
   WechatMpImagePrompt,
   WechatMpIllustrationCharacter,
+  WechatMpCharacterView,
   WechatMpLayoutPreview,
   WechatMpLayoutStyle,
   WechatMpMaterial,
@@ -1080,6 +1081,23 @@ export async function fetchWechatMpIllustrationCharacters(): Promise<WechatMpIll
 
 export async function createWechatMpIllustrationCharacter(payload: { name: string; prompt: string }): Promise<WechatMpIllustrationCharacter> {
   const response = await http.post<WechatMpIllustrationCharacter>("/platforms/wechat-mp/illustration-characters", payload);
+  return response.data;
+}
+
+export async function generateWechatMpCharacterView(characterId: number, view: string, imageModel?: string): Promise<WechatMpCharacterView> {
+  const response = await http.post<WechatMpCharacterView>(`/platforms/wechat-mp/illustration-characters/${characterId}/views/${view}/generate`, null, { params: { image_model: imageModel } });
+  return response.data;
+}
+
+export async function confirmWechatMpCharacterView(characterId: number, view: string): Promise<WechatMpCharacterView> {
+  const response = await http.post<WechatMpCharacterView>(`/platforms/wechat-mp/illustration-characters/${characterId}/views/${view}/confirm`);
+  return response.data;
+}
+
+export async function uploadWechatMpCharacterView(characterId: number, view: string, file: File): Promise<WechatMpCharacterView> {
+  const form = new FormData();
+  form.append("file", file);
+  const response = await http.post<WechatMpCharacterView>(`/platforms/wechat-mp/illustration-characters/${characterId}/views/${view}/upload`, form);
   return response.data;
 }
 

@@ -417,7 +417,8 @@ export function WechatMpWriterPage() {
               { name: "none（跳过正文配图）", skill_name: "none", prompt: "", is_builtin: true },
             ] as WechatMpIllustrationCharacter[]).map((character) => ({
               value: character.skill_name,
-              label: `${character.name}${character.is_builtin ? "" : "（自定义）"}`,
+              label: `${character.name}${character.is_available === false ? "（待确认四视图）" : character.is_builtin ? "" : "（自定义）"}`,
+              disabled: character.skill_name !== "none" && character.is_available === false,
             }))}
           />
           <Text type="secondary" style={{ display: "block", marginTop: 6 }}>
@@ -548,6 +549,14 @@ export function WechatMpWriterPage() {
                 <Col xs={24} lg={15}>
                   <TextArea value={prompt.editable_prompt} onChange={(event) => setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, editable_prompt: event.target.value } : item))} rows={5} />
                   <Space style={{ marginTop: 8 }} wrap>
+                    <Select
+                      size="small"
+                      placeholder="@已确认形象"
+                      style={{ minWidth: 150 }}
+                      value={undefined}
+                      options={characters.filter((character) => character.is_available).map((character) => ({ value: character.name, label: `@${character.name}` }))}
+                      onChange={(name) => setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, editable_prompt: `${item.editable_prompt.replace(/@[^\s@,，。；;：:（）()]+/g, "").trim()} @${name}`.trim() } : item))}
+                    />
                     <Button onClick={() => void regenerate(prompt)} loading={promptBusy}>重新生成提示词</Button>
                     <Button
                       type="primary"

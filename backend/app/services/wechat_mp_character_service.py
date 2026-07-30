@@ -1,15 +1,23 @@
 from __future__ import annotations
 
-from datetime import datetime
+import base64
+from pathlib import Path
+from uuid import uuid4
 
+import requests
+from fastapi import UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.app.models import WechatMpIllustrationCharacter
+from backend.app.core.config import get_settings
+from backend.app.models import WechatMpCharacterView, WechatMpIllustrationCharacter
 
 
 XIAOMAO_SKILL_NAME = "xiaomao-illustrations"
 NONE_SKILL_NAME = "none"
+VIEW_ORDER = ("front", "back", "left", "right")
+MAX_CHARACTER_IMAGE_BYTES = 10 * 1024 * 1024
+ALLOWED_CHARACTER_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 XIAOMAO_PROMPT = (
     "白色背景，横向画幅，轻微抖动的手绘线稿，少量浅橙、红、蓝批注；"
     "主角必须是一只胖胖慵懒、半推半就但会把活干完的玳瑁猫，"
@@ -20,63 +28,64 @@ XIAOMAO_PROMPT = (
 )
 
 
-def builtin_characters() -> list[dict]:
-    now = datetime.utcnow()
-    return [
-        {
-            "id": None,
-            "user_id": None,
-            "name": "小猫插画",
-            "skill_name": XIAOMAO_SKILL_NAME,
-            "prompt": XIAOMAO_PROMPT,
-            "status": "active",
-            "is_builtin": True,
-            "created_at": now,
-            "updated_at": now,
-        },
-        {
-            "id": None,
-            "user_id": None,
-            "name": "none（跳过正文配图）",
-            "skill_name": NONE_SKILL_NAME,
-            "prompt": "不生成正文配图提示词；封面仍可生成。",
-            "status": "active",
-            "is_builtin": True,
-            "created_at": now,
-            "updated_at": now,
-        },
-    ]
+def _character_dir(user_id: int) -> Path:
+    path = Path(get_settings().storage_dir) / "character-images" / f"u{user_id}"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _empty_view(view: str) -> dict:
+    return {"id": None, "view": view, "prompt": "", "public_url": "", "model_name": "", "status": "draft"}
+
+
+def _serialize_character(character: WechatMpIllustrationCharacter) -> dict:
+    records = {item.view: item for item in character.views}
+    views = [records[view] if view in records else _empty_view(view) for view in VIEW_ORDER]
+    available = all(item.status == "confirmed" and item.public_url for item in views)
+    return {
+        "id": character.id, "user_id": character.user_id, "name": character.name,
+        "skill_name": character.skill_name, "prompt": character.prompt, "status": "confirmed" if available else "draft",
+        "anchor_version": character.anchor_version, "is_available": available,
+        "views": views, "is_builtin": character.skill_name == XIAOMAO_SKILL_NAME,
+        "created_at": character.created_at, "updated_at": character.updated_at,
+    }
+
+
+def ensure_builtin_character(db: Session, user_id: int) -> WechatMpIllustrationCharacter:
+    character = db.scalar(select(WechatMpIllustrationCharacter).where(
+        WechatMpIllustrationCharacter.user_id == user_id,
+        WechatMpIllustrationCharacter.skill_name == XIAOMAO_SKILL_NAME,
+    ))
+    if character is None:
+        character = WechatMpIllustrationCharacter(
+            user_id=user_id, name="小猫插画", skill_name=XIAOMAO_SKILL_NAME,
+            prompt=XIAOMAO_PROMPT, status="draft", anchor_version=1,
+        )
+        db.add(character)
+        db.commit()
+    return character
 
 
 def list_illustration_characters(db: Session, user_id: int) -> list[dict]:
-    custom = db.scalars(
+    ensure_builtin_character(db, user_id)
+    characters = db.scalars(
         select(WechatMpIllustrationCharacter)
-        .where(WechatMpIllustrationCharacter.user_id == user_id, WechatMpIllustrationCharacter.status == "active")
-        .order_by(WechatMpIllustrationCharacter.id.desc())
-    ).all()
-    return builtin_characters() + [
-        {
-            "id": item.id,
-            "user_id": item.user_id,
-            "name": item.name,
-            "skill_name": item.skill_name,
-            "prompt": item.prompt,
-            "status": item.status,
-            "is_builtin": False,
-            "created_at": item.created_at,
-            "updated_at": item.updated_at,
-        }
-        for item in custom
-    ]
+        .where(WechatMpIllustrationCharacter.user_id == user_id)
+        .order_by(WechatMpIllustrationCharacter.skill_name != XIAOMAO_SKILL_NAME, WechatMpIllustrationCharacter.id.desc())
+    ).unique().all()
+    builtin = [item for item in characters if item.skill_name == XIAOMAO_SKILL_NAME]
+    custom = [item for item in characters if item.skill_name != XIAOMAO_SKILL_NAME]
+    result = [_serialize_character(item) for item in builtin]
+    result.append({"id": None, "user_id": None, "name": "none（跳过正文配图）", "skill_name": NONE_SKILL_NAME,
+                   "prompt": "不生成正文配图提示词；封面仍可生成。", "status": "confirmed", "anchor_version": 1,
+                   "is_available": True, "views": [], "is_builtin": True})
+    result.extend(_serialize_character(item) for item in custom)
+    return result
 
 
 def create_illustration_character(db: Session, user_id: int, *, name: str, prompt: str) -> WechatMpIllustrationCharacter:
     character = WechatMpIllustrationCharacter(
-        user_id=user_id,
-        name=name.strip(),
-        skill_name="pending",
-        prompt=prompt.strip(),
-        status="active",
+        user_id=user_id, name=name.strip(), skill_name="pending", prompt=prompt.strip(), status="draft", anchor_version=1,
     )
     db.add(character)
     db.flush()
@@ -86,18 +95,139 @@ def create_illustration_character(db: Session, user_id: int, *, name: str, promp
     return character
 
 
+def get_owned_character(db: Session, user_id: int, character_id: int) -> WechatMpIllustrationCharacter:
+    character = db.scalar(select(WechatMpIllustrationCharacter).where(
+        WechatMpIllustrationCharacter.id == character_id,
+        WechatMpIllustrationCharacter.user_id == user_id,
+    ))
+    if character is None:
+        raise LookupError("WeChat MP character not found")
+    return character
+
+
+def _get_or_create_view(db: Session, character: WechatMpIllustrationCharacter, view: str) -> WechatMpCharacterView:
+    if view not in VIEW_ORDER:
+        raise ValueError("Unsupported character view")
+    record = db.scalar(select(WechatMpCharacterView).where(
+        WechatMpCharacterView.character_id == character.id, WechatMpCharacterView.view == view,
+    ))
+    if record is None:
+        record = WechatMpCharacterView(character_id=character.id, user_id=character.user_id, view=view)
+        db.add(record)
+    return record
+
+
+def _refresh_character_status(db: Session, character: WechatMpIllustrationCharacter) -> None:
+    records = {item.view: item for item in db.scalars(select(WechatMpCharacterView).where(
+        WechatMpCharacterView.character_id == character.id
+    )).all()}
+    character.status = "confirmed" if all(
+        records.get(view) is not None and records[view].status == "confirmed" and records[view].public_url
+        for view in VIEW_ORDER
+    ) else "draft"
+
+
+def _replace_view(character: WechatMpIllustrationCharacter, record: WechatMpCharacterView, *, prompt: str, file_path: str, public_url: str, model_name: str) -> None:
+    record.prompt = prompt
+    record.file_path = file_path
+    record.public_url = public_url
+    record.model_name = model_name
+    record.status = "draft"
+    character.status = "draft"
+    character.anchor_version += 1
+
+
+async def upload_character_view(db: Session, *, character: WechatMpIllustrationCharacter, view: str, upload: UploadFile) -> WechatMpCharacterView:
+    if upload.content_type not in ALLOWED_CHARACTER_IMAGE_TYPES:
+        raise ValueError("Character view must be JPEG, PNG, or WebP")
+    content = await upload.read()
+    if not content or len(content) > MAX_CHARACTER_IMAGE_BYTES:
+        raise ValueError("Character view must be no larger than 10 MiB")
+    suffix = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}[upload.content_type]
+    filename = f"{uuid4().hex}{suffix}"
+    path = _character_dir(character.user_id) / filename
+    path.write_bytes(content)
+    record = _get_or_create_view(db, character, view)
+    _replace_view(character, record, prompt=character.prompt, file_path=str(path),
+                  public_url=f"/api/platforms/wechat-mp/illustration-characters/files/{filename}", model_name="uploaded")
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def _view_prompt(character: WechatMpIllustrationCharacter, view: str) -> str:
+    return f"{character.prompt}\nSame character, {view} view, full body, neutral pose. Do not render any text, labels, watermark, or view name."
+
+
+def generate_character_view(db: Session, *, character: WechatMpIllustrationCharacter, view: str, model_name: str, base_url: str, api_key: str) -> WechatMpCharacterView:
+    from backend.app.services.wechat_mp_image_service import _call_image_model
+
+    if view not in VIEW_ORDER:
+        raise ValueError("Unsupported character view")
+    confirmed_urls = [item.public_url for item in character.views if item.status == "confirmed" and item.public_url]
+    result = _call_image_model(prompt=_view_prompt(character, view), model_name=model_name, size="1024x1024", base_url=base_url, api_key=api_key, reference_images=confirmed_urls or None)
+    image_ref = result["image_ref"]
+    content = requests.get(image_ref, timeout=30).content if image_ref.startswith(("http://", "https://")) else base64.b64decode(image_ref)
+    filename = f"{uuid4().hex}.png"
+    path = _character_dir(character.user_id) / filename
+    path.write_bytes(content)
+    record = _get_or_create_view(db, character, view)
+    _replace_view(character, record, prompt=_view_prompt(character, view), file_path=str(path),
+                  public_url=f"/api/platforms/wechat-mp/illustration-characters/files/{filename}", model_name=model_name)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
+def confirm_character_view(db: Session, *, character: WechatMpIllustrationCharacter, view: str) -> WechatMpCharacterView:
+    record = _get_or_create_view(db, character, view)
+    if not record.public_url:
+        raise ValueError("Character view must be generated or uploaded before confirmation")
+    record.status = "confirmed"
+    _refresh_character_status(db, character)
+    db.commit()
+    db.refresh(record)
+    return record
+
+
 def resolve_character_prompt(db: Session | None, user_id: int | None, skill_name: str) -> str | None:
-    if skill_name == XIAOMAO_SKILL_NAME:
-        return XIAOMAO_PROMPT
     if skill_name == NONE_SKILL_NAME:
         return "不生成正文配图。"
-    if db is None or user_id is None or not skill_name.startswith("custom-"):
+    if db is None or user_id is None:
         return None
-    character = db.scalar(
-        select(WechatMpIllustrationCharacter).where(
-            WechatMpIllustrationCharacter.user_id == user_id,
-            WechatMpIllustrationCharacter.skill_name == skill_name,
-            WechatMpIllustrationCharacter.status == "active",
-        )
-    )
+    character = db.scalar(select(WechatMpIllustrationCharacter).where(
+        WechatMpIllustrationCharacter.user_id == user_id, WechatMpIllustrationCharacter.skill_name == skill_name,
+    ))
     return character.prompt if character else None
+
+
+def resolve_confirmed_character_anchor(db: Session, *, user_id: int, character_id: int | None = None, skill_name: str | None = None) -> tuple[WechatMpIllustrationCharacter, list[str]] | None:
+    if skill_name == NONE_SKILL_NAME:
+        return None
+    character = get_owned_character(db, user_id, character_id) if character_id else db.scalar(select(WechatMpIllustrationCharacter).where(
+        WechatMpIllustrationCharacter.user_id == user_id, WechatMpIllustrationCharacter.skill_name == skill_name,
+    ))
+    if character is None:
+        raise ValueError("Selected character is not available")
+    records = {item.view: item for item in character.views}
+    urls = [records[view].public_url for view in VIEW_ORDER if records.get(view) and records[view].status == "confirmed" and records[view].public_url]
+    if len(urls) != 4:
+        raise ValueError("Selected character needs four confirmed views before image generation")
+    return character, urls
+
+
+def resolve_prompt_character(db: Session, *, user_id: int, default_skill_name: str, text: str) -> tuple[WechatMpIllustrationCharacter | None, str]:
+    names = [match.group(1).strip() for match in __import__("re").finditer(r"@([^\s@,，。；;：:（）()]+)", text)]
+    unique_names = list(dict.fromkeys(names))
+    if len(unique_names) > 1:
+        raise ValueError("Each prompt supports one primary @character mention")
+    if not unique_names:
+        anchor = resolve_confirmed_character_anchor(db, user_id=user_id, skill_name=default_skill_name)
+        return (anchor[0] if anchor else None), text
+    character = db.scalar(select(WechatMpIllustrationCharacter).where(
+        WechatMpIllustrationCharacter.user_id == user_id, WechatMpIllustrationCharacter.name == unique_names[0],
+    ))
+    if character is None:
+        raise ValueError("Mentioned character was not found")
+    resolve_confirmed_character_anchor(db, user_id=user_id, character_id=character.id)
+    return character, text.replace(f"@{unique_names[0]}", "").strip()
