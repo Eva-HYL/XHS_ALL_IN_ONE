@@ -21,7 +21,7 @@ VIEW_ORDER = ("front", "back", "left", "right")
 MAX_CHARACTER_IMAGE_BYTES = 10 * 1024 * 1024
 ALLOWED_CHARACTER_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 XIAOMAO_PROMPT = (
-    "白色背景，横向画幅，轻微抖动的手绘线稿，少量浅橙、红、蓝批注；"
+    "白色背景，横向画幅，轻微抖动的手绘线稿；"
     "主角必须是一只胖胖慵懒、半推半就但会把活干完的玳瑁猫，"
     "身体以黑白色块为主，背、头、尾点缀少量橙斑，半闭眼、冷淡表情；"
     "小猫自然趴卧并辅助表达画面核心概念，不穿衣、不画成可爱吉祥物；"
