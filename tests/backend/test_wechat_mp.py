@@ -1468,6 +1468,7 @@ def test_wechat_mp_illustration_characters_are_user_managed(api_client, auth_hea
     listed = client.get("/api/platforms/wechat-mp/illustration-characters", headers=auth_headers)
     assert listed.status_code == 200
     assert [item["skill_name"] for item in listed.json()][:2] == ["xiaomao-illustrations", "none"]
+    assert "少量浅橙、红、蓝批注" not in listed.json()[0]["prompt"]
 
     created = client.post(
         "/api/platforms/wechat-mp/illustration-characters",
