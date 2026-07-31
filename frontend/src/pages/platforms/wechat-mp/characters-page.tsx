@@ -1,9 +1,9 @@
-import { CheckOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, Col, Empty, Form, Input, Modal, Row, Space, Spin, Tag, Typography, Upload } from "antd";
+import { CheckOutlined, DeleteOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from "@ant-design/icons";
+import { Alert, Button, Card, Col, Empty, Form, Input, Modal, Popconfirm, Row, Space, Spin, Tag, Typography, Upload } from "antd";
 import { useEffect, useState } from "react";
 
 import { PageHeader } from "../../../components/layout/app-shell";
-import { confirmWechatMpCharacterView, createWechatMpIllustrationCharacter, fetchWechatMpCharacterViewPreview, fetchWechatMpIllustrationCharacters, generateWechatMpCharacterView, uploadWechatMpCharacterView } from "../../../lib/api";
+import { archiveWechatMpIllustrationCharacter, confirmWechatMpCharacterView, createWechatMpIllustrationCharacter, fetchWechatMpCharacterViewPreview, fetchWechatMpIllustrationCharacters, generateWechatMpCharacterView, uploadWechatMpCharacterView } from "../../../lib/api";
 import type { WechatMpIllustrationCharacter } from "../../../types";
 import { WechatMpLayout } from "./wechat-mp-layout";
 
@@ -20,6 +20,7 @@ export function WechatMpCharactersPage() {
   const [viewBusy, setViewBusy] = useState<string | null>(null);
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const [createOpen, setCreateOpen] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   async function loadCharacters() {
     setLoading(true);
@@ -77,6 +78,22 @@ export function WechatMpCharactersPage() {
     }
   }
 
+  async function archiveCharacter(character: WechatMpIllustrationCharacter) {
+    if (!character.id || character.is_builtin) return;
+    setDeletingId(character.id);
+    setError(null);
+    setNotice(null);
+    try {
+      await archiveWechatMpIllustrationCharacter(character.id);
+      setCharacters((items) => items.filter((item) => item.id !== character.id));
+      setNotice(`形象「${character.name}」已删除，历史文章不受影响。`);
+    } catch {
+      setError(`形象「${character.name}」删除失败。`);
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   return (
     <WechatMpLayout>
       <PageHeader
@@ -108,7 +125,25 @@ export function WechatMpCharactersPage() {
               <Row gutter={[12, 12]}>
                 {characters.map((character) => (
                   <Col xs={24} md={12} key={character.skill_name}>
-                    <Card size="small" title={character.name} extra={<Space><Tag color={character.is_available ? "green" : "gold"}>{character.is_available ? "四视图已确认" : "待确认四视图"}</Tag><Tag color={character.is_builtin ? "blue" : "green"}>{character.is_builtin ? "内置" : "自定义"}</Tag></Space>}>
+                    <Card
+                      size="small"
+                      title={character.name}
+                      extra={
+                        <Space>
+                          <Tag color={character.is_available ? "green" : "gold"}>{character.is_available ? "四视图已确认" : "待确认四视图"}</Tag>
+                          <Tag color={character.is_builtin ? "blue" : "green"}>{character.is_builtin ? "内置" : "自定义"}</Tag>
+                          {!character.is_builtin && character.id && (
+                            <Popconfirm
+                              title={`删除形象「${character.name}」？`}
+                              description="删除后不再出现在形象库，但历史文章仍保留。"
+                              onConfirm={() => void archiveCharacter(character)}
+                            >
+                              <Button danger size="small" icon={<DeleteOutlined />} loading={deletingId === character.id}>删除</Button>
+                            </Popconfirm>
+                          )}
+                        </Space>
+                      }
+                    >
                       <Space direction="vertical" size={8} style={{ width: "100%" }}>
                         <Text code>{character.skill_name}</Text>
                         <Paragraph ellipsis={{ rows: 4, expandable: true, symbol: "展开" }} style={{ marginBottom: 0 }}>

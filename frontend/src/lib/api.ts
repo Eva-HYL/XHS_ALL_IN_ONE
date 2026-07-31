@@ -1084,6 +1084,10 @@ export async function createWechatMpIllustrationCharacter(payload: { name: strin
   return response.data;
 }
 
+export async function archiveWechatMpIllustrationCharacter(characterId: number): Promise<void> {
+  await http.delete(`/platforms/wechat-mp/illustration-characters/${characterId}`);
+}
+
 export async function generateWechatMpCharacterView(characterId: number, view: string, imageModel?: string): Promise<WechatMpCharacterView> {
   const response = await http.post<WechatMpCharacterView>(`/platforms/wechat-mp/illustration-characters/${characterId}/views/${view}/generate`, null, { params: { image_model: imageModel } });
   return response.data;

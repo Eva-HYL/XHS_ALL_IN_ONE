@@ -1441,6 +1441,17 @@ def test_wechat_mp_writer_cover_generation_is_independent_and_inline_previewed()
     assert "loading={promptBusy}" in source
 
 
+def test_wechat_mp_character_page_exposes_custom_archive_action():
+    source = Path("frontend/src/pages/platforms/wechat-mp/characters-page.tsx").read_text(encoding="utf-8")
+    api_source = Path("frontend/src/lib/api.ts").read_text(encoding="utf-8")
+
+    assert "archiveWechatMpIllustrationCharacter" in api_source
+    assert "Popconfirm" in source
+    assert "DeleteOutlined" in source
+    assert "!character.is_builtin" in source
+    assert "删除后不再出现在形象库，但历史文章仍保留" in source
+
+
 def test_wechat_mp_illustration_characters_are_user_managed(api_client, auth_headers):
     client, _ = api_client
 
