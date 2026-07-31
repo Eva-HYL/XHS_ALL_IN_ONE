@@ -1452,6 +1452,15 @@ def test_wechat_mp_character_page_exposes_custom_archive_action():
     assert "删除后不再出现在形象库，但历史文章仍保留" in source
 
 
+def test_wechat_mp_character_page_keeps_list_when_a_preview_fails():
+    source = Path("frontend/src/pages/platforms/wechat-mp/characters-page.tsx").read_text(encoding="utf-8")
+    api_source = Path("frontend/src/lib/api.ts").read_text(encoding="utf-8")
+
+    assert "Promise.allSettled" in source
+    assert "部分形象预览加载失败" in source
+    assert 'responseType: "blob", _silent: true' in api_source
+
+
 def test_wechat_mp_illustration_characters_are_user_managed(api_client, auth_headers):
     client, _ = api_client
 

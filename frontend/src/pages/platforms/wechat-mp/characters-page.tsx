@@ -16,6 +16,7 @@ export function WechatMpCharactersPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [previewWarning, setPreviewWarning] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [viewBusy, setViewBusy] = useState<string | null>(null);
   const [previews, setPreviews] = useState<Record<string, string>>({});
@@ -25,14 +26,21 @@ export function WechatMpCharactersPage() {
   async function loadCharacters() {
     setLoading(true);
     setError(null);
+    setPreviewWarning(null);
     try {
       const items = await fetchWechatMpIllustrationCharacters();
       setCharacters(items);
       const available = items.flatMap((character) => (character.views ?? [])
         .filter((view) => Boolean(view.public_url))
         .map((view) => ({ key: `${character.id}-${view.view}`, path: view.public_url })));
-      const next = await Promise.all(available.map(async (item) => [item.key, await fetchWechatMpCharacterViewPreview(item.path)] as const));
+      const results = await Promise.allSettled(
+        available.map(async (item) => [item.key, await fetchWechatMpCharacterViewPreview(item.path)] as const),
+      );
+      const next = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
       setPreviews(Object.fromEntries(next));
+      if (results.some((result) => result.status === "rejected")) {
+        setPreviewWarning("部分形象预览加载失败，可刷新重试；形象数据不受影响。");
+      }
     } catch {
       setError("公众号形象库加载失败。");
     } finally {
@@ -103,6 +111,7 @@ export function WechatMpCharactersPage() {
         action={<Space><Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新增形象</Button><Button icon={<ReloadOutlined />} onClick={() => void loadCharacters()}>刷新</Button></Space>}
       />
       {error && <Alert type="error" message={error} showIcon closable onClose={() => setError(null)} style={{ marginBottom: 16 }} />}
+      {previewWarning && <Alert type="warning" message={previewWarning} showIcon closable onClose={() => setPreviewWarning(null)} style={{ marginBottom: 16 }} />}
       {notice && <Alert type="success" message={notice} showIcon closable onClose={() => setNotice(null)} style={{ marginBottom: 16 }} />}
 
       <Modal title="新增形象" open={createOpen} onCancel={() => setCreateOpen(false)} footer={null} destroyOnHidden>
