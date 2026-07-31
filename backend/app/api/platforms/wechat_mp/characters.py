@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
@@ -13,6 +13,7 @@ from backend.app.schemas.wechat_mp import (
     WechatMpIllustrationCharacterResponse,
 )
 from backend.app.services.wechat_mp_character_service import (
+    archive_illustration_character,
     confirm_character_view,
     create_illustration_character,
     generate_character_view,
@@ -39,6 +40,17 @@ def list_characters(current_user: User = Depends(get_current_user), db: Session 
 def create_character(payload: WechatMpIllustrationCharacterCreateRequest, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     character = create_illustration_character(db, current_user.id, name=payload.name, prompt=payload.prompt)
     return next(item for item in list_illustration_characters(db, current_user.id) if item["id"] == character.id)
+
+
+@router.delete("/{character_id}", status_code=status.HTTP_204_NO_CONTENT)
+def archive_character(character_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    try:
+        archive_illustration_character(db, current_user.id, character_id)
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except LookupError as exc:
+        raise _not_found(exc) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.post("/{character_id}/views/{view}/upload", response_model=WechatMpCharacterViewResponse, status_code=status.HTTP_201_CREATED)

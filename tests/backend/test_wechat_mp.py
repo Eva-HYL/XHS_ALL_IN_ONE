@@ -1567,6 +1567,96 @@ def test_wechat_mp_character_view_uses_provider_legal_square_size(api_client, au
     assert captured["size"] == "2048x2048"
 
 
+def test_archive_wechat_mp_character_hides_it_and_preserves_historical_views(api_client, auth_headers):
+    from backend.app.models import WechatMpCharacterView, WechatMpIllustrationCharacter, User
+    from backend.app.services.wechat_mp_character_service import resolve_confirmed_character_anchor
+
+    client, session_factory = api_client
+    created = client.post(
+        "/api/platforms/wechat-mp/illustration-characters",
+        json={"name": "待归档角色", "prompt": "固定外观的手绘角色。"},
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+    character_id = created.json()["id"]
+
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        for view in ("front", "back", "left", "right"):
+            session.add(WechatMpCharacterView(
+                character_id=character_id,
+                user_id=owner.id,
+                view=view,
+                public_url=f"/api/platforms/wechat-mp/illustration-characters/files/{view}.png",
+                status="confirmed",
+            ))
+        session.commit()
+    finally:
+        session.close()
+
+    archived = client.delete(
+        f"/api/platforms/wechat-mp/illustration-characters/{character_id}",
+        headers=auth_headers,
+    )
+
+    assert archived.status_code == 204
+    assert archived.content == b""
+    listed = client.get("/api/platforms/wechat-mp/illustration-characters", headers=auth_headers)
+    assert all(item["id"] != character_id for item in listed.json())
+
+    session = session_factory()
+    try:
+        character = session.get(WechatMpIllustrationCharacter, character_id)
+        assert character.archived_at is not None
+        assert session.query(WechatMpCharacterView).filter_by(character_id=character_id).count() == 4
+        resolved, urls = resolve_confirmed_character_anchor(
+            session,
+            user_id=character.user_id,
+            character_id=character_id,
+        )
+        assert resolved.id == character_id
+        assert len(urls) == 4
+    finally:
+        session.close()
+
+    repeated = client.delete(
+        f"/api/platforms/wechat-mp/illustration-characters/{character_id}",
+        headers=auth_headers,
+    )
+    assert repeated.status_code == 404
+
+
+def test_archive_wechat_mp_character_rejects_builtin_and_other_users(api_client, auth_headers):
+    client, _ = api_client
+    listed = client.get("/api/platforms/wechat-mp/illustration-characters", headers=auth_headers)
+    builtin = next(item for item in listed.json() if item["skill_name"] == "xiaomao-illustrations")
+
+    builtin_response = client.delete(
+        f"/api/platforms/wechat-mp/illustration-characters/{builtin['id']}",
+        headers=auth_headers,
+    )
+    assert builtin_response.status_code == 400
+    assert "cannot be deleted" in builtin_response.json()["detail"]
+
+    created = client.post(
+        "/api/platforms/wechat-mp/illustration-characters",
+        json={"name": "私有归档角色", "prompt": "只属于当前用户。"},
+        headers=auth_headers,
+    )
+    other = client.post(
+        "/api/auth/register",
+        json={"username": "wechat-archive-other", "password": "secret123"},
+    )
+    other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
+
+    foreign_response = client.delete(
+        f"/api/platforms/wechat-mp/illustration-characters/{created.json()['id']}",
+        headers=other_headers,
+    )
+    assert foreign_response.status_code == 404
+
+
 def test_wechat_mp_image_provider_uses_volc_multi_image_contract(monkeypatch):
     from backend.app.services import wechat_mp_image_service as image_service
 
