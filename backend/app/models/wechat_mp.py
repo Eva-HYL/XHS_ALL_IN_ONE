@@ -87,6 +87,7 @@ class WechatMpIllustrationCharacter(Base):
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="draft", index=True, nullable=False)
     anchor_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     views: Mapped[list["WechatMpCharacterView"]] = relationship(cascade="all, delete-orphan")

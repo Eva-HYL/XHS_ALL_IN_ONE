@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -75,7 +76,10 @@ def list_illustration_characters(db: Session, user_id: int) -> list[dict]:
     ensure_builtin_character(db, user_id)
     characters = db.scalars(
         select(WechatMpIllustrationCharacter)
-        .where(WechatMpIllustrationCharacter.user_id == user_id)
+        .where(
+            WechatMpIllustrationCharacter.user_id == user_id,
+            WechatMpIllustrationCharacter.archived_at.is_(None),
+        )
         .order_by(WechatMpIllustrationCharacter.skill_name != XIAOMAO_SKILL_NAME, WechatMpIllustrationCharacter.id.desc())
     ).unique().all()
     builtin = [item for item in characters if item.skill_name == XIAOMAO_SKILL_NAME]
@@ -108,6 +112,20 @@ def get_owned_character(db: Session, user_id: int, character_id: int) -> WechatM
     if character is None:
         raise LookupError("WeChat MP character not found")
     return character
+
+
+def archive_illustration_character(db: Session, user_id: int, character_id: int) -> None:
+    character = db.scalar(select(WechatMpIllustrationCharacter).where(
+        WechatMpIllustrationCharacter.id == character_id,
+        WechatMpIllustrationCharacter.user_id == user_id,
+        WechatMpIllustrationCharacter.archived_at.is_(None),
+    ))
+    if character is None:
+        raise LookupError("WeChat MP character not found")
+    if character.skill_name == XIAOMAO_SKILL_NAME:
+        raise ValueError("Built-in WeChat MP character cannot be deleted")
+    character.archived_at = datetime.utcnow()
+    db.commit()
 
 
 def _get_or_create_view(db: Session, character: WechatMpIllustrationCharacter, view: str) -> WechatMpCharacterView:
