@@ -1533,6 +1533,40 @@ def test_wechat_mp_character_view_endpoints_are_owner_scoped(api_client, auth_he
     assert response.status_code == 404
 
 
+def test_wechat_mp_character_view_uses_provider_legal_square_size(api_client, auth_headers, monkeypatch):
+    from backend.app.services import wechat_mp_character_service as character_service
+    from backend.app.services import wechat_mp_image_service as image_service
+
+    client, _ = api_client
+    created = client.post(
+        "/api/platforms/wechat-mp/illustration-characters",
+        json={"name": "尺寸测试角色", "prompt": "固定外观的手绘角色。"},
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+
+    captured = {}
+
+    def fake_generate(**kwargs):
+        captured.update(kwargs)
+        return {"image_ref": "https://example.com/character.png", "provider_response": {"ok": True}}
+
+    class FakeDownload:
+        content = b"generated-character-image"
+
+    monkeypatch.setattr(image_service, "_call_image_model", fake_generate)
+    monkeypatch.setattr(character_service.requests, "get", lambda *args, **kwargs: FakeDownload())
+
+    response = client.post(
+        f"/api/platforms/wechat-mp/illustration-characters/{created.json()['id']}/views/front/generate",
+        params={"image_model": "doubao-seedream-5-0-260128"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    assert captured["size"] == "2048x2048"
+
+
 def test_wechat_mp_image_provider_uses_volc_multi_image_contract(monkeypatch):
     from backend.app.services import wechat_mp_image_service as image_service
 

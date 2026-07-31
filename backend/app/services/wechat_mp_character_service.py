@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.config import get_settings
 from backend.app.models import WechatMpCharacterView, WechatMpIllustrationCharacter
+from backend.app.services.illustration_size_service import normalize_illustration_size
 
 
 XIAOMAO_SKILL_NAME = "xiaomao-illustrations"
@@ -169,7 +170,8 @@ def generate_character_view(db: Session, *, character: WechatMpIllustrationChara
     if view not in VIEW_ORDER:
         raise ValueError("Unsupported character view")
     confirmed_urls = [item.public_url for item in character.views if item.status == "confirmed" and item.public_url]
-    result = _call_image_model(prompt=_view_prompt(character, view), model_name=model_name, size="1024x1024", base_url=base_url, api_key=api_key, reference_images=confirmed_urls or None)
+    size = normalize_illustration_size(model_name, "1:1")
+    result = _call_image_model(prompt=_view_prompt(character, view), model_name=model_name, size=size, base_url=base_url, api_key=api_key, reference_images=confirmed_urls or None)
     image_ref = result["image_ref"]
     content = requests.get(image_ref, timeout=30).content if image_ref.startswith(("http://", "https://")) else base64.b64decode(image_ref)
     filename = f"{uuid4().hex}.png"
