@@ -1,5 +1,5 @@
 import { CheckOutlined, PlusOutlined, ReloadOutlined, UploadOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, Col, Empty, Form, Input, Row, Space, Spin, Tag, Typography, Upload } from "antd";
+import { Alert, Button, Card, Col, Empty, Form, Input, Modal, Row, Space, Spin, Tag, Typography, Upload } from "antd";
 import { useEffect, useState } from "react";
 
 import { PageHeader } from "../../../components/layout/app-shell";
@@ -19,6 +19,7 @@ export function WechatMpCharactersPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [viewBusy, setViewBusy] = useState<string | null>(null);
   const [previews, setPreviews] = useState<Record<string, string>>({});
+  const [createOpen, setCreateOpen] = useState(false);
 
   async function loadCharacters() {
     setLoading(true);
@@ -53,6 +54,7 @@ export function WechatMpCharactersPage() {
       });
       setCharacters((items) => [...items, created]);
       form.resetFields();
+      setCreateOpen(false);
       setNotice(`形象「${created.name}」已创建，可在写作页选择使用。`);
     } catch {
       setError("自定义形象创建失败。");
@@ -81,14 +83,12 @@ export function WechatMpCharactersPage() {
         eyebrow="WeChat MP / Characters"
         title="公众号形象"
         description="管理公众号配图主角形象。可以自己写提示词，生成文章配图提示词时会套用对应形象设定。"
-        action={<Button icon={<ReloadOutlined />} onClick={() => void loadCharacters()}>刷新</Button>}
+        action={<Space><Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新增形象</Button><Button icon={<ReloadOutlined />} onClick={() => void loadCharacters()}>刷新</Button></Space>}
       />
       {error && <Alert type="error" message={error} showIcon closable onClose={() => setError(null)} style={{ marginBottom: 16 }} />}
       {notice && <Alert type="success" message={notice} showIcon closable onClose={() => setNotice(null)} style={{ marginBottom: 16 }} />}
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} lg={8}>
-          <Card title="新增形象">
+      <Modal title="新增形象" open={createOpen} onCancel={() => setCreateOpen(false)} footer={null} destroyOnHidden>
             <Form form={form} layout="vertical" onFinish={(values) => void submit(values)}>
               <Form.Item name="name" label="形象名称" rules={[{ required: true, message: "请填写形象名称" }]}>
                 <Input placeholder="如：小护士、验收小猫、产品经理兔" />
@@ -98,9 +98,9 @@ export function WechatMpCharactersPage() {
               </Form.Item>
               <Button type="primary" icon={<PlusOutlined />} htmlType="submit" loading={saving}>新增形象</Button>
             </Form>
-          </Card>
-        </Col>
-        <Col xs={24} lg={16}>
+      </Modal>
+      <Row gutter={[16, 16]}>
+        <Col span={24}>
           <Card title="形象库">
             {loading ? <Spin /> : characters.length === 0 ? (
               <Empty description="暂无公众号形象" />

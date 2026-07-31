@@ -1533,6 +1533,35 @@ def test_wechat_mp_character_view_endpoints_are_owner_scoped(api_client, auth_he
     assert response.status_code == 404
 
 
+def test_wechat_mp_image_provider_uses_volc_multi_image_contract(monkeypatch):
+    from backend.app.services import wechat_mp_image_service as image_service
+
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": [{"url": "https://example.com/generated.png"}]}
+
+    def fake_post(*args, **kwargs):
+        captured.update(kwargs["json"])
+        return FakeResponse()
+
+    monkeypatch.setattr(image_service.requests, "post", fake_post)
+    result = image_service._call_image_model(
+        prompt="scene", model_name="doubao-seedream-4-5-251128", size="2K",
+        base_url="https://ark.example/api/v3", api_key="secret",
+        reference_images=["https://example.com/front.png", "https://example.com/back.png"],
+    )
+
+    assert result["image_ref"] == "https://example.com/generated.png"
+    assert captured["image"] == ["https://example.com/front.png", "https://example.com/back.png"]
+    assert captured["sequential_image_generation"] == "disabled"
+    assert "reference_images" not in captured
+
+
 def test_custom_wechat_mp_character_prompt_is_used_for_image_prompt(api_client, auth_headers, created_wechat_article, monkeypatch):
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
 
