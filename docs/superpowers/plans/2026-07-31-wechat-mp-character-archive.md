@@ -350,11 +350,13 @@ ssh Atlas 'cd /root/xhs-all-in-one && docker compose up -d --build app'
 - [ ] **Step 4: Verify runtime migration and health**
 
 ```bash
-ssh Atlas 'docker exec spider-xhs alembic -c backend/alembic.ini upgrade head'
+ssh Atlas 'docker exec -e PYTHONPATH=/app -e DATABASE_URL=sqlite:////app/data/spider_xhs.db spider-xhs alembic -c backend/alembic.ini upgrade head'
 ssh Atlas 'docker exec spider-xhs python -c "import sqlite3; db=sqlite3.connect(\"/app/data/spider_xhs.db\"); print(db.execute(\"select version_num from alembic_version\").fetchone()); print([row[1] for row in db.execute(\"pragma table_info(wechat_mp_illustration_characters)\") if row[1] == \"archived_at\"])"'
 ssh Atlas 'docker inspect spider-xhs --format "{{.State.Status}} {{.State.Health.Status}}"'
 ssh Atlas 'curl -fsS http://127.0.0.1:8000/api/health'
 ```
+
+`init_db()` runs migrations against the configured production database during container startup. The explicit Alembic command is an idempotent verification path and must override the development URL from `backend/alembic.ini`.
 
 Expected:
 
