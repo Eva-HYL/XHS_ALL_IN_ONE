@@ -36,6 +36,7 @@ export function AppRouter() {
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Navigate to="/platform-select" replace />} />
+        <Route path="/platforms" element={<Navigate to="/platform-select" replace />} />
         <Route
           path="/login"
           element={
