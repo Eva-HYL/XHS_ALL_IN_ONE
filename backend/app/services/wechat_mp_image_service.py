@@ -49,6 +49,21 @@ class WechatMpImageValidationError(ValueError):
     pass
 
 
+def _resolve_reference_image(image_ref: str) -> str:
+    if image_ref.startswith(("http://", "https://", "data:")):
+        return image_ref
+    file_name = Path(image_ref).name
+    local: Path | None = None
+    if image_ref.startswith("/api/files/media/"):
+        local = Path(get_settings().storage_dir) / "media" / file_name
+    elif image_ref.startswith("/api/platforms/wechat-mp/illustration-characters/files/"):
+        local = next((Path(get_settings().storage_dir) / "character-images").glob(f"u*/{file_name}"), None)
+    if local is None or not local.is_file():
+        raise ValueError("WeChat MP reference image is unavailable")
+    mime = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp"}.get(local.suffix.lower(), "image/png")
+    return f"data:{mime};base64,{base64.b64encode(local.read_bytes()).decode()}"
+
+
 def _call_image_model(
     *, prompt: str, model_name: str, size: str, base_url: str = "", api_key: str = "", reference_images: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -60,21 +75,35 @@ def _call_image_model(
     try:
         body = {"model": model_name, "prompt": prompt, "size": size, "response_format": "url"}
         if reference_images:
-            body["reference_images"] = reference_images
+            resolved = [_resolve_reference_image(item) for item in reference_images]
+            body["image"] = resolved[0] if len(resolved) == 1 else resolved
+            if len(resolved) > 1:
+                body["sequential_image_generation"] = "disabled"
+            body["watermark"] = False
         response = requests.post(
             f"{base_url}/images/generations",
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json=body,
             timeout=180,
         )
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            try:
+                payload = response.json()
+                detail = payload.get("error", {}).get("message", "")
+            except Exception:
+                detail = ""
+            raise ValueError(f"WeChat MP image model request failed: {detail or exc}") from exc
         provider_response = response.json()
         item = provider_response["data"][0]
         image_ref = item.get("url") or item.get("b64_json")
         if not isinstance(image_ref, str) or not image_ref:
             raise ValueError("image response missing url or b64_json")
-    except (requests.RequestException, KeyError, IndexError, TypeError, ValueError) as exc:
-        raise ValueError("WeChat MP image model returned malformed output") from exc
+    except requests.RequestException as exc:
+        raise ValueError(f"WeChat MP image model request failed: {exc}") from exc
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ValueError("WeChat MP image model response is missing data[0].url") from exc
     return {"image_ref": image_ref, "provider_response": provider_response}
 
 
