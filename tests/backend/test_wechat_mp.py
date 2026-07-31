@@ -1458,6 +1458,7 @@ def test_wechat_mp_character_page_keeps_list_when_a_preview_fails():
 
     assert "Promise.allSettled" in source
     assert "部分形象预览加载失败" in source
+    assert 'path.startsWith("/api/") ? path.slice(4) : path' in api_source
     assert 'responseType: "blob", _silent: true' in api_source
 
 

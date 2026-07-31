@@ -1106,7 +1106,8 @@ export async function uploadWechatMpCharacterView(characterId: number, view: str
 }
 
 export async function fetchWechatMpCharacterViewPreview(path: string): Promise<string> {
-  const response = await http.get(path, { responseType: "blob", _silent: true } as never);
+  const endpoint = path.startsWith("/api/") ? path.slice(4) : path;
+  const response = await http.get(endpoint, { responseType: "blob", _silent: true } as never);
   return URL.createObjectURL(response.data as Blob);
 }
 
