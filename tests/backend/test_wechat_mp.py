@@ -4111,3 +4111,12 @@ def test_wechat_mp_writer_recovers_article_generation_after_slow_response():
     assert "recoverCreatedArticle" in writer_source
     assert "window.setInterval" in writer_source
     assert "文章已生成，已自动进入编辑步骤。" in writer_source
+
+
+def test_wechat_mp_character_images_are_persisted_outside_the_container():
+    compose_source = Path("docker-compose.yml").read_text()
+
+    assert (
+        "./backend/app/storage/character-images:"
+        "/app/backend/app/storage/character-images"
+    ) in compose_source

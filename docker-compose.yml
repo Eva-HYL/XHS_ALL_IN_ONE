@@ -14,6 +14,7 @@ services:
       - ./config:/app/config
       - ./backend/app/storage/media:/app/backend/app/storage/media
       - ./backend/app/storage/exports:/app/backend/app/storage/exports
+      - ./backend/app/storage/character-images:/app/backend/app/storage/character-images
     environment:
       - CONFIG_FILE=/app/config/default.yaml
       - SECRET_KEY=${SECRET_KEY}
