@@ -20,6 +20,7 @@ XIAOMAO_SKILL_NAME = "xiaomao-illustrations"
 XIAOMAO_CHARACTER_NAME = "小猫生图"
 NONE_SKILL_NAME = "none"
 CHARACTER_MENTION_RE = re.compile(r"(?m)^[ \t]*主角[：:][ \t]*@([^\s@,，。；;：:（）()]+)[ \t]*$")
+CHARACTER_MENTION_DIRECTIVE_RE = re.compile(r"主角[：:][ \t]*@([^\s@,，。；;：:（）()]+)")
 VIEW_ORDER = ("front", "back", "left", "right")
 MAX_CHARACTER_IMAGE_BYTES = 10 * 1024 * 1024
 ALLOWED_CHARACTER_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
@@ -72,10 +73,28 @@ def format_character_prompt(character: WechatMpIllustrationCharacter, scene_prom
     return "\n".join(part for part in (format_character_mention(character), cleaned) if part)
 
 
+def canonicalize_character_prompt(
+    character: WechatMpIllustrationCharacter | None,
+    scene_prompt: str,
+    *,
+    include_character: bool,
+) -> str:
+    """Keep stored prompts in reference form, never with a full character contract."""
+    cleaned = scene_prompt.replace(character.prompt, "") if character is not None else scene_prompt
+    cleaned = CHARACTER_MENTION_DIRECTIVE_RE.sub("", cleaned)
+    cleaned = "\n".join(line.strip() for line in cleaned.splitlines() if line.strip())
+    if include_character and character is not None:
+        return format_character_prompt(character, cleaned)
+    return cleaned.strip()
+
+
 def parse_character_mention(text: str) -> tuple[str | None, str]:
+    directives = CHARACTER_MENTION_DIRECTIVE_RE.findall(text)
     names = CHARACTER_MENTION_RE.findall(text)
-    if len(names) > 1:
+    if len(directives) > 1:
         raise ValueError("Each prompt supports one primary @character mention")
+    if directives and len(names) != 1:
+        raise ValueError("Character mention must be on its own line")
     name = names[0] if names else None
     cleaned = CHARACTER_MENTION_RE.sub("", text).strip()
     return name, cleaned

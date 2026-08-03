@@ -5,7 +5,14 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
-from backend.app.models import User, WechatMpArticle, WechatMpArticleSection, WechatMpAsset, WechatMpImagePrompt
+from backend.app.models import (
+    User,
+    WechatMpArticle,
+    WechatMpArticleSection,
+    WechatMpAsset,
+    WechatMpIllustrationCharacter,
+    WechatMpImagePrompt,
+)
 from backend.app.schemas.wechat_mp import WechatMpArticleCreateRequest, WechatMpArticleResponse, WechatMpAssetResponse, WechatMpImagePromptResponse
 from backend.app.services.wechat_mp_image_service import (
     WechatMpImageValidationError,
@@ -17,6 +24,12 @@ from backend.app.services.wechat_mp_image_prompt_service import (
     generate_image_prompts,
     regenerate_image_prompt,
     reset_inline_illustrations,
+)
+from backend.app.services.wechat_mp_character_service import (
+    NONE_SKILL_NAME,
+    canonicalize_character_prompt,
+    parse_character_mention,
+    resolve_character_by_skill,
 )
 from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style, get_wechat_layout_styles, normalize_wechat_layout_style, render_wechat_html
 from backend.app.services.wechat_mp_writer_service import generate_wechat_article
@@ -149,7 +162,17 @@ def update_article(article_id: int, payload: WechatMpArticleUpdateRequest, curre
     if markdown_changed:
         article.markdown_body = payload.markdown_body or ""
     if skill_changed:
+        previous_character = db.scalar(select(WechatMpIllustrationCharacter).where(
+            WechatMpIllustrationCharacter.user_id == current_user.id,
+            WechatMpIllustrationCharacter.skill_name == article.illustration_skill,
+        ))
         article.illustration_skill = payload.illustration_skill or article.illustration_skill
+        if article.illustration_skill == NONE_SKILL_NAME:
+            article.cover_brief = canonicalize_character_prompt(
+                previous_character,
+                article.cover_brief,
+                include_character=False,
+            )
     if body_changed or skill_changed:
         if payload.html_body is not None:
             next_html = payload.html_body
@@ -211,7 +234,20 @@ def update_prompt(
     section = db.get(WechatMpArticleSection, prompt.section_id)
     if section is None or section.article_id != article.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="WeChat MP prompt not found")
-    prompt.editable_prompt = payload.editable_prompt
+    try:
+        parse_character_mention(payload.editable_prompt)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    character = resolve_character_by_skill(
+        db,
+        user_id=current_user.id,
+        skill_name=prompt.skill_name,
+    )
+    prompt.editable_prompt = canonicalize_character_prompt(
+        character,
+        payload.editable_prompt,
+        include_character=character is not None,
+    )
     prompt.version += 1
     prompt.status = "skipped" if prompt.skill_name == "none" else "prompt_ready"
     if prompt.skill_name != "none":

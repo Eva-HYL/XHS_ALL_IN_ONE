@@ -13,7 +13,7 @@ from backend.app.schemas.wechat_mp import WechatMpArticleCreateRequest
 from backend.app.services.usage_recording_service import record_text_usage
 from backend.app.services.wechat_mp_character_service import (
     XIAOMAO_SKILL_NAME,
-    format_character_prompt,
+    canonicalize_character_prompt,
     resolve_character_by_skill,
 )
 from backend.app.services.wechat_mp_layout_service import render_wechat_html
@@ -129,10 +129,10 @@ def generate_wechat_article(*, db: Session, user_id: int, request: WechatMpArtic
     )
     illustration_skill = request.illustration_skill or XIAOMAO_SKILL_NAME
     character = resolve_character_by_skill(db, user_id=user_id, skill_name=illustration_skill)
-    cover_brief = (
-        format_character_prompt(character, result["cover_brief"])
-        if character is not None
-        else result["cover_brief"].strip()
+    cover_brief = canonicalize_character_prompt(
+        character,
+        result["cover_brief"],
+        include_character=character is not None,
     )
     try:
         article = WechatMpArticle(

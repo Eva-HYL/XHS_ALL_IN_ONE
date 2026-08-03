@@ -1928,13 +1928,14 @@ def test_wechat_mp_account_test_caches_successful_token(api_client, auth_headers
 def test_create_wechat_mp_article_generates_markdown_html_and_usage(api_client, auth_headers, monkeypatch):
     from backend.app.models import UsageRecord
     from backend.app.services import wechat_mp_writer_service as writer
+    from backend.app.services.wechat_mp_character_service import XIAOMAO_PROMPT
 
     def fake_call(*, topic, source_material, target_reader, tone, model_name, **kwargs):
         return {
             "title": "会偷懒的人，反而更稳定",
             "markdown_body": "## 开头\n正文第一段\n\n## 方法\n正文第二段",
             "digest": "一篇关于稳定输出的文章",
-            "cover_brief": "小猫压住一张计划表",
+            "cover_brief": f"{XIAOMAO_PROMPT}\n小猫压住一张计划表",
             "input_tokens": 100,
             "output_tokens": 200,
             "model_name": model_name,
@@ -2029,6 +2030,7 @@ def test_create_wechat_mp_article_can_use_material_library_items(api_client, aut
 
 def test_generate_prompts_defaults_to_xiaomao_skill(api_client, auth_headers, created_wechat_article, monkeypatch):
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+    from backend.app.services.wechat_mp_character_service import XIAOMAO_PROMPT
 
     class FakeResponse:
         def raise_for_status(self):
@@ -2036,7 +2038,7 @@ def test_generate_prompts_defaults_to_xiaomao_skill(api_client, auth_headers, cr
 
         def json(self):
             return {
-                "choices": [{"message": {"content": "小猫懒洋洋地压住便签堆。"}}],
+                "choices": [{"message": {"content": f"{XIAOMAO_PROMPT}\n小猫懒洋洋地压住便签堆。"}}],
                 "usage": {"prompt_tokens": 50, "completion_tokens": 80},
             }
 
@@ -2054,6 +2056,7 @@ def test_generate_prompts_defaults_to_xiaomao_skill(api_client, auth_headers, cr
     assert data[0]["skill_name"] == "xiaomao-illustrations"
     assert data[0]["editable_prompt"].startswith("主角：@小猫生图\n具体画面：")
     assert "主角必须是一只胖胖慵懒" not in data[0]["editable_prompt"]
+    assert data[0]["editable_prompt"].count("主角：@") == 1
     assert data[0]["status"] == "prompt_ready"
     assert data[0]["version"] == 1
     assert data[0]["editable_prompt"] == data[0]["prompt"]
@@ -2315,7 +2318,7 @@ def test_edit_and_regenerate_prompt_increment_version(api_client, auth_headers, 
         headers=auth_headers,
     )
     assert edited.status_code == 200
-    assert edited.json()["editable_prompt"] == "编辑后的提示词"
+    assert edited.json()["editable_prompt"] == "主角：@小猫生图\n具体画面：编辑后的提示词"
     assert edited.json()["version"] == 2
 
     monkeypatch.setattr(
@@ -2328,8 +2331,8 @@ def test_edit_and_regenerate_prompt_increment_version(api_client, auth_headers, 
         headers=auth_headers,
     )
     assert regenerated.status_code == 200
-    assert regenerated.json()["prompt"] == "再生成的提示词"
-    assert regenerated.json()["editable_prompt"] == "再生成的提示词"
+    assert regenerated.json()["prompt"] == "主角：@小猫生图\n具体画面：再生成的提示词"
+    assert regenerated.json()["editable_prompt"] == "主角：@小猫生图\n具体画面：再生成的提示词"
     assert regenerated.json()["version"] == 3
     assert client.get(
         f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers
@@ -3998,7 +4001,7 @@ def test_none_skill_allows_cover_but_still_uses_normalized_doubao_size(
     session = session_factory()
     try:
         article = session.get(WechatMpArticle, created_wechat_article.id)
-        article.illustration_skill = "none"
+        article.cover_brief = "主角：@小猫生图\n具体画面：小猫压住计划表"
         session.commit()
     finally:
         session.close()
@@ -4014,6 +4017,13 @@ def test_none_skill_allows_cover_but_still_uses_normalized_doubao_size(
         }
 
     monkeypatch.setattr(image_service, "_call_image_model", fake_generate)
+    switched = client.patch(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}",
+        json={"illustration_skill": "none"},
+        headers=auth_headers,
+    )
+    assert switched.status_code == 200
+    assert "主角：@" not in switched.json()["cover_brief"]
     response = client.post(
         f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/cover",
         json={"size": "16:9"},
@@ -4024,6 +4034,9 @@ def test_none_skill_allows_cover_but_still_uses_normalized_doubao_size(
     assert response.json()["role"] == "cover"
     assert captured["model_name"] == "doubao-seedream-4-0-250828"
     assert captured["size"] == "2732x1536"
+    assert "主角：@" not in captured["prompt"]
+    assert "主角必须是一只胖胖慵懒" not in captured["prompt"]
+    assert captured["reference_images"] is None
 
 
 def test_none_workflow_creates_editable_skipped_prompts_without_markers_and_syncs(
@@ -4033,16 +4046,19 @@ def test_none_workflow_creates_editable_skipped_prompts_without_markers_and_sync
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
     from backend.app.services import wechat_mp_image_service as image_service
 
-    monkeypatch.setattr(
-        prompt_service,
-        "_call_prompt_model",
-        lambda **kwargs: {
-            "prompt": f"可编辑提示词：{kwargs['section_summary']}",
-            "input_tokens": 12,
-            "output_tokens": 24,
-            "model_name": kwargs["model_name"],
-        },
-    )
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": "主角：@小猫生图\n可编辑提示词：先做最小动作"}}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 24},
+            }
+
+    monkeypatch.setenv("WECHAT_MP_PROMPT_BASE_URL", "https://prompt.example")
+    monkeypatch.setenv("WECHAT_MP_PROMPT_API_KEY", "test-key")
+    monkeypatch.setattr(prompt_service.requests, "post", lambda *args, **kwargs: FakeResponse())
     client, _ = api_client
     updated = client.patch(
         f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}",
@@ -4059,6 +4075,7 @@ def test_none_workflow_creates_editable_skipped_prompts_without_markers_and_sync
     assert prompts.json()
     assert all(prompt["skill_name"] == "none" for prompt in prompts.json())
     assert all(prompt["status"] == "skipped" for prompt in prompts.json())
+    assert all("主角：@" not in prompt["editable_prompt"] for prompt in prompts.json())
     assert "{{image:" not in client.get(
         f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers,
     ).json()["html_body"]
@@ -4066,11 +4083,11 @@ def test_none_workflow_creates_editable_skipped_prompts_without_markers_and_sync
     prompt_id = prompts.json()[0]["id"]
     edited = client.patch(
         f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts/{prompt_id}",
-        json={"editable_prompt": "编辑后的 none 提示词"},
+        json={"editable_prompt": "主角：@小猫生图\n编辑后的 none 提示词"},
         headers=auth_headers,
     )
     assert edited.status_code == 200
-    assert edited.json()["editable_prompt"] == "编辑后的 none 提示词"
+    assert "主角：@" not in edited.json()["editable_prompt"]
     assert edited.json()["status"] == "skipped"
     assert "{{image:" not in client.get(
         f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers,
@@ -4125,6 +4142,21 @@ def test_none_workflow_creates_editable_skipped_prompts_without_markers_and_sync
     )
     assert sync.status_code == 201
     assert sync.json()["wechat_media_id"] == "none-draft"
+
+
+def test_update_prompt_rejects_embedded_or_duplicate_character_mentions(
+    api_client, auth_headers, created_wechat_prompt,
+):
+    client, _ = api_client
+
+    response = client.patch(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_prompt.article_id}/prompts/{created_wechat_prompt.id}",
+        json={"editable_prompt": "主角：@小猫生图\n具体画面：小猫整理便签，主角：@护士兔"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert "mention" in response.json()["detail"].lower()
 
 
 def test_failed_inline_image_generation_can_retry_with_same_prompt(

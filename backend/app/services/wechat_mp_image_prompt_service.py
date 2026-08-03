@@ -13,8 +13,8 @@ from backend.app.models import WechatMpArticle, WechatMpArticleSection, WechatMp
 from backend.app.services.usage_recording_service import record_text_usage
 from backend.app.services.wechat_mp_character_service import (
     XIAOMAO_SKILL_NAME,
+    canonicalize_character_prompt,
     ensure_builtin_character,
-    format_character_prompt,
     resolve_character_by_skill,
     resolve_character_prompt,
 )
@@ -172,7 +172,11 @@ def _call_prompt_model(
     if not prompt:
         raise ValueError("WeChat MP prompt model returned an empty prompt")
     character = resolve_character_by_skill(db, user_id=user_id, skill_name=skill_name) if db is not None and user_id is not None else None
-    stored_prompt = format_character_prompt(character, prompt) if character is not None else prompt
+    stored_prompt = canonicalize_character_prompt(
+        character,
+        prompt,
+        include_character=character is not None,
+    )
     return {
         "prompt": stored_prompt,
         "input_tokens": input_tokens,
@@ -224,6 +228,11 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
                 api_key=model.api_key,
                 db=db,
                 user_id=user_id,
+            )
+            result["prompt"] = canonicalize_character_prompt(
+                selected_character,
+                result["prompt"],
+                include_character=selected_character is not None,
             )
             prompt_status = "skipped" if selected_skill == "none" else "prompt_ready"
             if prompt is None:
@@ -302,6 +311,16 @@ def regenerate_image_prompt(*, db: Session, prompt: WechatMpImagePrompt, article
         api_key=model.api_key,
         db=db,
         user_id=article.user_id,
+    )
+    character = resolve_character_by_skill(
+        db,
+        user_id=article.user_id,
+        skill_name=prompt.skill_name,
+    )
+    result["prompt"] = canonicalize_character_prompt(
+        character,
+        result["prompt"],
+        include_character=character is not None,
     )
     prompt.prompt = result["prompt"]
     prompt.editable_prompt = result["prompt"]

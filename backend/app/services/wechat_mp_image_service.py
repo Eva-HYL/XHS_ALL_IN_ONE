@@ -329,29 +329,39 @@ def generate_cover_asset(
         db=db, user_id=user_id, model_type="image", requested_model=image_model,
     )
     normalized_size = normalize_illustration_size(model.model_name, size)
-    from backend.app.services.wechat_mp_character_service import resolve_confirmed_character_anchor, resolve_prompt_character
+    from backend.app.services.wechat_mp_character_service import (
+        NONE_SKILL_NAME,
+        canonicalize_character_prompt,
+        resolve_confirmed_character_anchor,
+        resolve_prompt_character,
+    )
 
-    character, scene_prompt = resolve_prompt_character(
-        db,
-        user_id=user_id,
-        default_skill_name=article.illustration_skill,
-        text=article.cover_brief or article.title,
-    )
-    anchor = resolve_confirmed_character_anchor(
-        db,
-        user_id=user_id,
-        character_id=character.id if character else None,
-        skill_name=None if character else article.illustration_skill,
-    )
-    if anchor is not None:
-        _, reference_images = anchor
-    else:
+    if article.illustration_skill == NONE_SKILL_NAME:
+        prompt_text = canonicalize_character_prompt(
+            None,
+            article.cover_brief or article.title,
+            include_character=False,
+        )
         reference_images = None
-    if character is not None:
-        scene_prompt = scene_prompt.strip()
-        prompt_text = f"{character.prompt}\n{scene_prompt if scene_prompt.startswith('具体画面：') else f'具体画面：{scene_prompt}'}"
     else:
-        prompt_text = scene_prompt
+        character, scene_prompt = resolve_prompt_character(
+            db,
+            user_id=user_id,
+            default_skill_name=article.illustration_skill,
+            text=article.cover_brief or article.title,
+        )
+        anchor = resolve_confirmed_character_anchor(
+            db,
+            user_id=user_id,
+            character_id=character.id if character else None,
+            skill_name=None if character else article.illustration_skill,
+        )
+        reference_images = anchor[1] if anchor is not None else None
+        if character is not None:
+            scene_prompt = scene_prompt.strip()
+            prompt_text = f"{character.prompt}\n{scene_prompt if scene_prompt.startswith('具体画面：') else f'具体画面：{scene_prompt}'}"
+        else:
+            prompt_text = scene_prompt
     result = _call_image_model(
         prompt=prompt_text, model_name=model.model_name, size=normalized_size,
         base_url=model.base_url, api_key=model.api_key, reference_images=reference_images,
