@@ -113,6 +113,31 @@ def test_wechat_mp_models_are_independent_from_xhs_assets(db_session, test_user)
     assert db_session.query(IllustrationAsset).count() == 0
 
 
+def test_character_mention_formats_and_parses_the_full_reference_line():
+    from backend.app.models import WechatMpIllustrationCharacter
+    from backend.app.services.wechat_mp_character_service import (
+        format_character_prompt,
+        parse_character_mention,
+    )
+
+    character = WechatMpIllustrationCharacter(
+        user_id=1,
+        name="小猫生图",
+        skill_name="xiaomao-illustrations",
+        prompt="完整形象介绍",
+    )
+    stored = format_character_prompt(character, "小猫压住流程图")
+    assert stored == "主角：@小猫生图\n具体画面：小猫压住流程图"
+    assert parse_character_mention(stored) == ("小猫生图", "具体画面：小猫压住流程图")
+
+
+def test_character_mention_rejects_multiple_primary_characters():
+    from backend.app.services.wechat_mp_character_service import parse_character_mention
+
+    with pytest.raises(ValueError, match="one primary"):
+        parse_character_mention("主角：@小猫生图\n主角：@护士兔")
+
+
 def test_image_prompt_section_index_matches_migration(monkeypatch):
     from backend.app.models.wechat_mp import WechatMpImagePrompt
 
@@ -1468,6 +1493,7 @@ def test_wechat_mp_illustration_characters_are_user_managed(api_client, auth_hea
     listed = client.get("/api/platforms/wechat-mp/illustration-characters", headers=auth_headers)
     assert listed.status_code == 200
     assert [item["skill_name"] for item in listed.json()][:2] == ["xiaomao-illustrations", "none"]
+    assert listed.json()[0]["name"] == "小猫生图"
     assert "少量浅橙、红、蓝批注" not in listed.json()[0]["prompt"]
 
     created = client.post(

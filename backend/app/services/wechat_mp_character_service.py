@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import re
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -16,7 +17,9 @@ from backend.app.services.illustration_size_service import normalize_illustratio
 
 
 XIAOMAO_SKILL_NAME = "xiaomao-illustrations"
+XIAOMAO_CHARACTER_NAME = "小猫生图"
 NONE_SKILL_NAME = "none"
+CHARACTER_MENTION_RE = re.compile(r"(?m)^[ \t]*主角[：:][ \t]*@([^\s@,，。；;：:（）()]+)[ \t]*$")
 VIEW_ORDER = ("front", "back", "left", "right")
 MAX_CHARACTER_IMAGE_BYTES = 10 * 1024 * 1024
 ALLOWED_CHARACTER_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
@@ -57,6 +60,27 @@ def _serialize_character(character: WechatMpIllustrationCharacter) -> dict:
     }
 
 
+def format_character_mention(character: WechatMpIllustrationCharacter) -> str:
+    return f"主角：@{character.name}"
+
+
+def format_character_prompt(character: WechatMpIllustrationCharacter, scene_prompt: str) -> str:
+    _, cleaned = parse_character_mention(scene_prompt)
+    cleaned = cleaned.strip()
+    if cleaned and not cleaned.startswith("具体画面："):
+        cleaned = f"具体画面：{cleaned}"
+    return "\n".join(part for part in (format_character_mention(character), cleaned) if part)
+
+
+def parse_character_mention(text: str) -> tuple[str | None, str]:
+    names = CHARACTER_MENTION_RE.findall(text)
+    if len(set(names)) > 1:
+        raise ValueError("Each prompt supports one primary @character mention")
+    name = names[0] if names else None
+    cleaned = CHARACTER_MENTION_RE.sub("", text).strip()
+    return name, cleaned
+
+
 def ensure_builtin_character(db: Session, user_id: int) -> WechatMpIllustrationCharacter:
     character = db.scalar(select(WechatMpIllustrationCharacter).where(
         WechatMpIllustrationCharacter.user_id == user_id,
@@ -64,10 +88,13 @@ def ensure_builtin_character(db: Session, user_id: int) -> WechatMpIllustrationC
     ))
     if character is None:
         character = WechatMpIllustrationCharacter(
-            user_id=user_id, name="小猫插画", skill_name=XIAOMAO_SKILL_NAME,
+            user_id=user_id, name=XIAOMAO_CHARACTER_NAME, skill_name=XIAOMAO_SKILL_NAME,
             prompt=XIAOMAO_PROMPT, status="draft", anchor_version=1,
         )
         db.add(character)
+        db.commit()
+    elif character.name != XIAOMAO_CHARACTER_NAME:
+        character.name = XIAOMAO_CHARACTER_NAME
         db.commit()
     return character
 
@@ -225,6 +252,23 @@ def resolve_character_prompt(db: Session | None, user_id: int | None, skill_name
     return character.prompt if character else None
 
 
+def resolve_character_by_skill(
+    db: Session,
+    *,
+    user_id: int,
+    skill_name: str,
+) -> WechatMpIllustrationCharacter | None:
+    if skill_name == NONE_SKILL_NAME:
+        return None
+    if skill_name == XIAOMAO_SKILL_NAME:
+        return ensure_builtin_character(db, user_id)
+    return db.scalar(select(WechatMpIllustrationCharacter).where(
+        WechatMpIllustrationCharacter.user_id == user_id,
+        WechatMpIllustrationCharacter.skill_name == skill_name,
+        WechatMpIllustrationCharacter.archived_at.is_(None),
+    ))
+
+
 def resolve_confirmed_character_anchor(db: Session, *, user_id: int, character_id: int | None = None, skill_name: str | None = None) -> tuple[WechatMpIllustrationCharacter, list[str]] | None:
     if skill_name == NONE_SKILL_NAME:
         return None
@@ -241,17 +285,14 @@ def resolve_confirmed_character_anchor(db: Session, *, user_id: int, character_i
 
 
 def resolve_prompt_character(db: Session, *, user_id: int, default_skill_name: str, text: str) -> tuple[WechatMpIllustrationCharacter | None, str]:
-    names = [match.group(1).strip() for match in __import__("re").finditer(r"@([^\s@,，。；;：:（）()]+)", text)]
-    unique_names = list(dict.fromkeys(names))
-    if len(unique_names) > 1:
-        raise ValueError("Each prompt supports one primary @character mention")
-    if not unique_names:
+    name, cleaned = parse_character_mention(text)
+    if name is None:
         anchor = resolve_confirmed_character_anchor(db, user_id=user_id, skill_name=default_skill_name)
-        return (anchor[0] if anchor else None), text
+        return (anchor[0] if anchor else None), cleaned
     character = db.scalar(select(WechatMpIllustrationCharacter).where(
-        WechatMpIllustrationCharacter.user_id == user_id, WechatMpIllustrationCharacter.name == unique_names[0],
+        WechatMpIllustrationCharacter.user_id == user_id, WechatMpIllustrationCharacter.name == name,
     ))
     if character is None:
         raise ValueError("Mentioned character was not found")
     resolve_confirmed_character_anchor(db, user_id=user_id, character_id=character.id)
-    return character, text.replace(f"@{unique_names[0]}", "").strip()
+    return character, cleaned
