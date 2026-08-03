@@ -1483,6 +1483,18 @@ def test_wechat_writer_shows_hoverable_character_mentions_for_cover_and_inline_p
     assert source.count("characterMentionBadge") >= 2
 
 
+def test_wechat_writer_hides_none_badges_and_persists_confirmed_character_selection():
+    source = Path("frontend/src/pages/platforms/wechat-mp/writer-page.tsx").read_text()
+
+    assert 'if (skillName === "none") return null;' in source
+    assert 'character_id: character.id' in source
+    assert 'skill_name: character.skill_name' in source
+    assert "updateWechatMpPrompt(prompt.article_id, prompt.id, {" in source
+    assert "character.skill_name !== \"none\"" in source
+    assert "四视图已确认" in source
+    assert "待确认四视图" in source
+
+
 def test_wechat_mp_character_page_exposes_custom_archive_action():
     source = Path("frontend/src/pages/platforms/wechat-mp/characters-page.tsx").read_text(encoding="utf-8")
     api_source = Path("frontend/src/lib/api.ts").read_text(encoding="utf-8")
@@ -4167,6 +4179,140 @@ def test_update_prompt_rejects_embedded_or_duplicate_character_mentions(
 
     assert response.status_code == 400
     assert "mention" in response.json()["detail"].lower()
+
+
+def test_update_prompt_switches_confirmed_character_and_image_keeps_selection(
+    api_client, auth_headers, created_wechat_prompt, monkeypatch,
+):
+    from backend.app.models import User, WechatMpCharacterView, WechatMpImagePrompt
+    from backend.app.services import wechat_mp_image_service as image_service
+    from backend.app.services.wechat_mp_character_service import ensure_builtin_character
+
+    client, session_factory = api_client
+    custom_response = client.post(
+        "/api/platforms/wechat-mp/illustration-characters",
+        json={"name": "确认白熊", "prompt": "白熊角色契约，蓝围巾，固定四视图。"},
+        headers=auth_headers,
+    )
+    assert custom_response.status_code == 201
+    custom = custom_response.json()
+
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        builtin = ensure_builtin_character(session, owner.id)
+        for character in (builtin, session.get(type(builtin), custom["id"])):
+            for view in ("front", "back", "left", "right"):
+                session.add(WechatMpCharacterView(
+                    character_id=character.id,
+                    user_id=owner.id,
+                    view=view,
+                    public_url=f"/api/platforms/wechat-mp/illustration-characters/files/{character.id}-{view}.png",
+                    status="confirmed",
+                ))
+        session.commit()
+        builtin_id = builtin.id
+    finally:
+        session.close()
+
+    prompt_url = f"/api/platforms/wechat-mp/articles/{created_wechat_prompt.article_id}/prompts/{created_wechat_prompt.id}"
+    builtin_update = client.patch(
+        prompt_url,
+        json={
+            "editable_prompt": "主角：@小猫生图\n具体画面：小猫整理便签",
+            "character_id": builtin_id,
+            "skill_name": "xiaomao-illustrations",
+        },
+        headers=auth_headers,
+    )
+    assert builtin_update.status_code == 200
+    assert builtin_update.json()["character_id"] == builtin_id
+    assert builtin_update.json()["skill_name"] == "xiaomao-illustrations"
+    assert builtin_update.json()["editable_prompt"].startswith("主角：@小猫生图\n")
+
+    custom_update = client.patch(
+        prompt_url,
+        json={
+            "editable_prompt": "主角：@确认白熊\n具体画面：白熊指向流程图",
+            "character_id": custom["id"],
+            "skill_name": custom["skill_name"],
+        },
+        headers=auth_headers,
+    )
+    assert custom_update.status_code == 200
+    assert custom_update.json()["character_id"] == custom["id"]
+    assert custom_update.json()["skill_name"] == custom["skill_name"]
+    assert custom_update.json()["editable_prompt"].startswith("主角：@确认白熊\n")
+
+    captured = {}
+
+    def fake_generate(**kwargs):
+        captured.update(kwargs)
+        return {
+            "file_path": "/tmp/confirmed-character.png",
+            "public_url": "/api/files/media/confirmed-character.png",
+            "provider_response": {"ok": True},
+        }
+
+    monkeypatch.setattr(image_service, "_call_image_model", fake_generate)
+    generated = client.post(
+        f"/api/platforms/wechat-mp/prompts/{created_wechat_prompt.id}/image",
+        json={"image_model": "doubao-seedream-4-0-250828", "size": "16:9"},
+        headers=auth_headers,
+    )
+
+    assert generated.status_code == 201
+    assert "主角：@确认白熊" not in captured["prompt"]
+    assert "白熊角色契约" in captured["prompt"]
+    assert len(captured["reference_images"]) == 4
+    session = session_factory()
+    try:
+        prompt = session.get(WechatMpImagePrompt, created_wechat_prompt.id)
+        assert prompt.character_id == custom["id"]
+        assert prompt.skill_name == custom["skill_name"]
+    finally:
+        session.close()
+
+
+def test_update_prompt_rejects_unconfirmed_or_foreign_character(
+    api_client, auth_headers, created_wechat_prompt,
+):
+    client, _ = api_client
+    unconfirmed = client.post(
+        "/api/platforms/wechat-mp/illustration-characters",
+        json={"name": "未确认角色", "prompt": "尚未确认四视图。"},
+        headers=auth_headers,
+    ).json()
+    prompt_url = f"/api/platforms/wechat-mp/articles/{created_wechat_prompt.article_id}/prompts/{created_wechat_prompt.id}"
+
+    unconfirmed_response = client.patch(
+        prompt_url,
+        json={
+            "editable_prompt": "主角：@未确认角色\n具体画面：测试",
+            "character_id": unconfirmed["id"],
+            "skill_name": unconfirmed["skill_name"],
+        },
+        headers=auth_headers,
+    )
+    assert unconfirmed_response.status_code == 400
+    assert "confirmed" in unconfirmed_response.json()["detail"].lower()
+
+    other = client.post("/api/auth/register", json={"username": "prompt-character-other", "password": "secret123"})
+    foreign = client.post(
+        "/api/platforms/wechat-mp/illustration-characters",
+        json={"name": "他人角色", "prompt": "他人的角色契约。"},
+        headers={"Authorization": f"Bearer {other.json()['access_token']}"},
+    ).json()
+    foreign_response = client.patch(
+        prompt_url,
+        json={
+            "editable_prompt": "主角：@他人角色\n具体画面：测试",
+            "character_id": foreign["id"],
+            "skill_name": foreign["skill_name"],
+        },
+        headers=auth_headers,
+    )
+    assert foreign_response.status_code == 400
 
 
 def test_failed_inline_image_generation_can_retry_with_same_prompt(

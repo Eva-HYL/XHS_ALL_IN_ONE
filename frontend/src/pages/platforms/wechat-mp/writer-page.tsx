@@ -72,6 +72,7 @@ function resolveCharacterMention(
   skillName: string | null | undefined,
   text: string | null | undefined,
 ): WechatMpIllustrationCharacter | null {
+  if (skillName === "none") return null;
   if (characterId !== null && characterId !== undefined) {
     const character = characters.find((item) => item.id === characterId);
     if (character) return character;
@@ -349,6 +350,31 @@ export function WechatMpWriterPage() {
     }
   }
 
+  async function selectCharacter(prompt: WechatMpImagePrompt, name: string) {
+    const character = characters.find((item) => item.name === name && item.is_available && item.skill_name !== "none");
+    if (!character || character.id === null) return;
+    const previousPrompt = prompt;
+    const editablePrompt = replaceCharacterMention(prompt.editable_prompt, character.name);
+    const nextPrompt = {
+      ...prompt,
+      editable_prompt: editablePrompt,
+      character_id: character.id,
+      skill_name: character.skill_name,
+    };
+    setPrompts((items) => items.map((item) => item.id === prompt.id ? nextPrompt : item));
+    try {
+      const savedPrompt = await updateWechatMpPrompt(prompt.article_id, prompt.id, {
+        editable_prompt: editablePrompt,
+        character_id: character.id,
+        skill_name: character.skill_name,
+      });
+      setPrompts((items) => items.map((item) => item.id === savedPrompt.id ? savedPrompt : item));
+    } catch (err) {
+      setPrompts((items) => items.map((item) => item.id === previousPrompt.id ? previousPrompt : item));
+      setError(errorMessage(err, "形象切换失败，请确认该形象的四视图已确认。"));
+    }
+  }
+
   async function runImageQueue() {
     if (imageWorkerRunningRef.current) return;
     imageWorkerRunningRef.current = true;
@@ -363,7 +389,7 @@ export function WechatMpWriterPage() {
           continue;
         }
         try {
-          const savedPrompt = await updateWechatMpPrompt(prompt.article_id, prompt.id, prompt.editable_prompt);
+          const savedPrompt = await updateWechatMpPrompt(prompt.article_id, prompt.id, { editable_prompt: prompt.editable_prompt });
           setPrompts((items) => items.map((item) => item.id === savedPrompt.id ? savedPrompt : item));
           const asset = await generateWechatMpImage(prompt.id, { image_model: imageModel, size: "16:9" });
           setAssets((items) => [asset, ...items.filter((item) => item.prompt_id !== prompt.id)]);
@@ -422,7 +448,7 @@ export function WechatMpWriterPage() {
   const stepItems = ["输入主题/素材", "生成文章", "编辑与预览", "生成提示词", "编辑提示词并生图", "同步草稿/发布"].map((stepTitle) => ({ title: stepTitle }));
   const coverCharacter = article ? resolveCharacterMention(characters, null, article.illustration_skill, article.cover_brief) : null;
   const characterMentionBadge = coverCharacter ? (
-    <Tooltip title={<div><strong>{coverCharacter.name}</strong><div>{coverCharacter.prompt}</div></div>}>
+    <Tooltip title={<div><strong>{coverCharacter.name}</strong><div>{coverCharacter.is_available ? "四视图已确认" : "待确认四视图"}</div><div>{coverCharacter.prompt}</div></div>}>
       <Tag color={coverCharacter.is_available ? "blue" : "gold"}>
         主角：@{coverCharacter.name}
       </Tag>
@@ -571,7 +597,7 @@ export function WechatMpWriterPage() {
                     : "生成正文图片";
               const character = resolveCharacterMention(characters, prompt.character_id, prompt.skill_name, prompt.editable_prompt);
               const characterMentionBadge = character ? (
-                <Tooltip title={<div><strong>{character.name}</strong><div>{character.prompt}</div></div>}>
+                <Tooltip title={<div><strong>{character.name}</strong><div>{character.is_available ? "四视图已确认" : "待确认四视图"}</div><div>{character.prompt}</div></div>}>
                   <Tag color={character.is_available ? "blue" : "gold"}>
                     主角：@{character.name}
                   </Tag>
@@ -595,8 +621,8 @@ export function WechatMpWriterPage() {
                       placeholder="@已确认形象"
                       style={{ minWidth: 150 }}
                       value={undefined}
-                      options={characters.filter((character) => character.is_available).map((character) => ({ value: character.name, label: `@${character.name}` }))}
-                      onChange={(name) => name && setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, editable_prompt: replaceCharacterMention(item.editable_prompt, name) } : item))}
+                      options={characters.filter((character) => character.is_available && character.skill_name !== "none").map((character) => ({ value: character.name, label: `@${character.name}` }))}
+                      onChange={(name) => name && void selectCharacter(prompt, name)}
                     />
                     <Button onClick={() => void regenerate(prompt)} loading={promptBusy}>重新生成提示词</Button>
                     <Button

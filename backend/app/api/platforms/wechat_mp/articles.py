@@ -29,6 +29,7 @@ from backend.app.services.wechat_mp_character_service import (
     NONE_SKILL_NAME,
     canonicalize_character_prompt,
     parse_character_mention,
+    resolve_confirmed_character_anchor,
     resolve_character_by_skill,
 )
 from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style, get_wechat_layout_styles, normalize_wechat_layout_style, render_wechat_html
@@ -53,6 +54,8 @@ class WechatMpPromptGenerateRequest(BaseModel):
 
 class WechatMpPromptUpdateRequest(BaseModel):
     editable_prompt: str = Field(min_length=1)
+    character_id: int | None = None
+    skill_name: str | None = Field(default=None, min_length=1, max_length=80)
 
 
 class WechatMpImageGenerateRequest(BaseModel):
@@ -238,19 +241,44 @@ def update_prompt(
         parse_character_mention(payload.editable_prompt)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    character = resolve_character_by_skill(
-        db,
-        user_id=current_user.id,
-        skill_name=prompt.skill_name,
-    )
+    identity_changed = payload.character_id is not None or payload.skill_name is not None
+    selected_skill = payload.skill_name or prompt.skill_name
+    try:
+        if identity_changed:
+            if selected_skill == NONE_SKILL_NAME:
+                if payload.character_id is not None:
+                    raise ValueError("none cannot reference a character")
+                character = None
+            else:
+                character, _ = resolve_confirmed_character_anchor(
+                    db,
+                    user_id=current_user.id,
+                    character_id=payload.character_id,
+                    skill_name=None if payload.character_id is not None else selected_skill,
+                )
+                if character.archived_at is not None:
+                    raise ValueError("Selected character is not available")
+                if payload.skill_name is not None and character.skill_name != payload.skill_name:
+                    raise ValueError("Character skill does not match character_id")
+                selected_skill = character.skill_name
+        else:
+            character = resolve_character_by_skill(
+                db,
+                user_id=current_user.id,
+                skill_name=selected_skill,
+            )
+    except (LookupError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     prompt.editable_prompt = canonicalize_character_prompt(
         character,
         payload.editable_prompt,
         include_character=character is not None,
     )
+    prompt.character_id = character.id if character is not None else None
+    prompt.skill_name = selected_skill
     prompt.version += 1
-    prompt.status = "skipped" if prompt.skill_name == "none" else "prompt_ready"
-    if prompt.skill_name != "none":
+    prompt.status = "skipped" if selected_skill == NONE_SKILL_NAME else "prompt_ready"
+    if selected_skill != NONE_SKILL_NAME:
         _restore_prompt_placeholder(db, article, section, prompt)
     from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
     invalidate_synced_drafts(db, article, next_status="prompts_ready")
