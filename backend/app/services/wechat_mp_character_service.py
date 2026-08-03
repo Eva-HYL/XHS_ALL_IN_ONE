@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import re
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -16,7 +17,10 @@ from backend.app.services.illustration_size_service import normalize_illustratio
 
 
 XIAOMAO_SKILL_NAME = "xiaomao-illustrations"
+XIAOMAO_CHARACTER_NAME = "小猫生图"
 NONE_SKILL_NAME = "none"
+CHARACTER_MENTION_RE = re.compile(r"(?m)^[ \t]*主角[：:][ \t]*@([^\s@,，。；;：:（）()]+)[ \t]*$")
+CHARACTER_MENTION_DIRECTIVE_RE = re.compile(r"主角[：:][ \t]*@([^\s@,，。；;：:（）()]+)")
 VIEW_ORDER = ("front", "back", "left", "right")
 MAX_CHARACTER_IMAGE_BYTES = 10 * 1024 * 1024
 ALLOWED_CHARACTER_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
@@ -28,6 +32,10 @@ XIAOMAO_PROMPT = (
     "画面留白充足，一图一个核心结构，不使用写实摄影、3D 渲染、复杂背景或大段文字；"
     "不得渲染标题、比例、尺寸、提示词、说明文字、水印、签名或图中文字。"
 )
+
+
+class WechatMpIllustrationSkillError(ValueError):
+    """Raised when a request references an unavailable illustration skill."""
 
 
 def _character_dir(user_id: int) -> Path:
@@ -57,6 +65,45 @@ def _serialize_character(character: WechatMpIllustrationCharacter) -> dict:
     }
 
 
+def format_character_mention(character: WechatMpIllustrationCharacter) -> str:
+    return f"主角：@{character.name}"
+
+
+def format_character_prompt(character: WechatMpIllustrationCharacter, scene_prompt: str) -> str:
+    _, cleaned = parse_character_mention(scene_prompt)
+    cleaned = cleaned.strip()
+    if cleaned and not cleaned.startswith("具体画面："):
+        cleaned = f"具体画面：{cleaned}"
+    return "\n".join(part for part in (format_character_mention(character), cleaned) if part)
+
+
+def canonicalize_character_prompt(
+    character: WechatMpIllustrationCharacter | None,
+    scene_prompt: str,
+    *,
+    include_character: bool,
+) -> str:
+    """Keep stored prompts in reference form, never with a full character contract."""
+    cleaned = scene_prompt.replace(character.prompt, "") if character is not None else scene_prompt
+    cleaned = CHARACTER_MENTION_DIRECTIVE_RE.sub("", cleaned)
+    cleaned = "\n".join(line.strip() for line in cleaned.splitlines() if line.strip())
+    if include_character and character is not None:
+        return format_character_prompt(character, cleaned)
+    return cleaned.strip()
+
+
+def parse_character_mention(text: str) -> tuple[str | None, str]:
+    directives = CHARACTER_MENTION_DIRECTIVE_RE.findall(text)
+    names = CHARACTER_MENTION_RE.findall(text)
+    if len(directives) > 1:
+        raise ValueError("Each prompt supports one primary @character mention")
+    if directives and len(names) != 1:
+        raise ValueError("Character mention must be on its own line")
+    name = names[0] if names else None
+    cleaned = CHARACTER_MENTION_RE.sub("", text).strip()
+    return name, cleaned
+
+
 def ensure_builtin_character(db: Session, user_id: int) -> WechatMpIllustrationCharacter:
     character = db.scalar(select(WechatMpIllustrationCharacter).where(
         WechatMpIllustrationCharacter.user_id == user_id,
@@ -64,10 +111,13 @@ def ensure_builtin_character(db: Session, user_id: int) -> WechatMpIllustrationC
     ))
     if character is None:
         character = WechatMpIllustrationCharacter(
-            user_id=user_id, name="小猫插画", skill_name=XIAOMAO_SKILL_NAME,
+            user_id=user_id, name=XIAOMAO_CHARACTER_NAME, skill_name=XIAOMAO_SKILL_NAME,
             prompt=XIAOMAO_PROMPT, status="draft", anchor_version=1,
         )
         db.add(character)
+        db.commit()
+    elif character.name != XIAOMAO_CHARACTER_NAME:
+        character.name = XIAOMAO_CHARACTER_NAME
         db.commit()
     return character
 
@@ -225,6 +275,35 @@ def resolve_character_prompt(db: Session | None, user_id: int | None, skill_name
     return character.prompt if character else None
 
 
+def resolve_character_by_skill(
+    db: Session,
+    *,
+    user_id: int,
+    skill_name: str,
+) -> WechatMpIllustrationCharacter | None:
+    if skill_name == NONE_SKILL_NAME:
+        return None
+    if skill_name == XIAOMAO_SKILL_NAME:
+        return ensure_builtin_character(db, user_id)
+    return db.scalar(select(WechatMpIllustrationCharacter).where(
+        WechatMpIllustrationCharacter.user_id == user_id,
+        WechatMpIllustrationCharacter.skill_name == skill_name,
+        WechatMpIllustrationCharacter.archived_at.is_(None),
+    ))
+
+
+def require_character_by_skill(
+    db: Session,
+    *,
+    user_id: int,
+    skill_name: str,
+) -> WechatMpIllustrationCharacter | None:
+    character = resolve_character_by_skill(db, user_id=user_id, skill_name=skill_name)
+    if skill_name != NONE_SKILL_NAME and character is None:
+        raise WechatMpIllustrationSkillError("Selected illustration skill is not available")
+    return character
+
+
 def resolve_confirmed_character_anchor(db: Session, *, user_id: int, character_id: int | None = None, skill_name: str | None = None) -> tuple[WechatMpIllustrationCharacter, list[str]] | None:
     if skill_name == NONE_SKILL_NAME:
         return None
@@ -240,18 +319,39 @@ def resolve_confirmed_character_anchor(db: Session, *, user_id: int, character_i
     return character, urls
 
 
-def resolve_prompt_character(db: Session, *, user_id: int, default_skill_name: str, text: str) -> tuple[WechatMpIllustrationCharacter | None, str]:
-    names = [match.group(1).strip() for match in __import__("re").finditer(r"@([^\s@,，。；;：:（）()]+)", text)]
-    unique_names = list(dict.fromkeys(names))
-    if len(unique_names) > 1:
-        raise ValueError("Each prompt supports one primary @character mention")
-    if not unique_names:
-        anchor = resolve_confirmed_character_anchor(db, user_id=user_id, skill_name=default_skill_name)
-        return (anchor[0] if anchor else None), text
-    character = db.scalar(select(WechatMpIllustrationCharacter).where(
-        WechatMpIllustrationCharacter.user_id == user_id, WechatMpIllustrationCharacter.name == unique_names[0],
-    ))
-    if character is None:
+def resolve_prompt_character(
+    db: Session,
+    *,
+    user_id: int,
+    default_skill_name: str,
+    text: str,
+    default_character_id: int | None = None,
+) -> tuple[WechatMpIllustrationCharacter | None, str]:
+    name, cleaned = parse_character_mention(text)
+    if name is None:
+        anchor = resolve_confirmed_character_anchor(
+            db,
+            user_id=user_id,
+            character_id=default_character_id,
+            skill_name=None if default_character_id else default_skill_name,
+        )
+        return (anchor[0] if anchor else None), cleaned
+    if default_character_id is not None:
+        default_character = get_owned_character(db, user_id, default_character_id)
+        if default_character.archived_at is not None:
+            raise ValueError("Selected character is not available")
+        if default_character.name == name:
+            resolve_confirmed_character_anchor(db, user_id=user_id, character_id=default_character.id)
+            return default_character, cleaned
+    matches = db.scalars(select(WechatMpIllustrationCharacter).where(
+        WechatMpIllustrationCharacter.user_id == user_id,
+        WechatMpIllustrationCharacter.name == name,
+        WechatMpIllustrationCharacter.archived_at.is_(None),
+    )).all()
+    if not matches:
         raise ValueError("Mentioned character was not found")
+    if len(matches) > 1:
+        raise ValueError("Ambiguous character mention; select a character from the confirmed character picker")
+    character = matches[0]
     resolve_confirmed_character_anchor(db, user_id=user_id, character_id=character.id)
-    return character, text.replace(f"@{unique_names[0]}", "").strip()
+    return character, cleaned

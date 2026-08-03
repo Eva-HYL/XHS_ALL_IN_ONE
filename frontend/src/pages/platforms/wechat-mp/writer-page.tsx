@@ -1,5 +1,5 @@
 import { ArrowLeftOutlined, ArrowRightOutlined, EditOutlined, PictureOutlined, SaveOutlined, SendOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, Col, Empty, Input, Row, Select, Space, Steps, Tag, Typography } from "antd";
+import { Alert, Button, Card, Col, Empty, Input, Row, Select, Space, Steps, Tag, Tooltip, Typography } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
@@ -59,6 +59,30 @@ function activeArticleAssets(
   return assets.filter((asset) =>
     asset.article_id === articleId && (asset.role === "cover" || (asset.prompt_id !== null && activePromptIds.has(asset.prompt_id)))
   );
+}
+
+function replaceCharacterMention(text: string, name: string): string {
+  const scene = text.replace(/^[ \t]*主角[：:][ \t]*@[^\s@,，。；;：:（）()]+[ \t]*$/gm, "").trim();
+  return `主角：@${name}${scene ? `\n${scene}` : ""}`;
+}
+
+function resolveCharacterMention(
+  characters: WechatMpIllustrationCharacter[],
+  characterId: number | null | undefined,
+  skillName: string | null | undefined,
+  text: string | null | undefined,
+): WechatMpIllustrationCharacter | null {
+  if (skillName === "none") return null;
+  if (characterId !== null && characterId !== undefined) {
+    const character = characters.find((item) => item.id === characterId);
+    if (character) return character;
+  }
+  if (skillName) {
+    const character = characters.find((item) => item.skill_name === skillName);
+    if (character) return character;
+  }
+  const mention = text?.match(/^[ \t]*主角[：:][ \t]*@([^\s@,，。；;：:（）()]+)[ \t]*$/m)?.[1];
+  return mention ? characters.find((item) => item.name === mention) ?? null : null;
 }
 
 export function WechatMpWriterPage() {
@@ -326,6 +350,31 @@ export function WechatMpWriterPage() {
     }
   }
 
+  async function selectCharacter(prompt: WechatMpImagePrompt, skillName: string) {
+    const character = characters.find((item) => item.skill_name === skillName && item.is_available && item.skill_name !== "none");
+    if (!character || character.id === null) return;
+    const previousPrompt = prompt;
+    const editablePrompt = replaceCharacterMention(prompt.editable_prompt, character.name);
+    const nextPrompt = {
+      ...prompt,
+      editable_prompt: editablePrompt,
+      character_id: character.id,
+      skill_name: character.skill_name,
+    };
+    setPrompts((items) => items.map((item) => item.id === prompt.id ? nextPrompt : item));
+    try {
+      const savedPrompt = await updateWechatMpPrompt(prompt.article_id, prompt.id, {
+        editable_prompt: editablePrompt,
+        character_id: character.id,
+        skill_name: character.skill_name,
+      });
+      setPrompts((items) => items.map((item) => item.id === savedPrompt.id ? savedPrompt : item));
+    } catch (err) {
+      setPrompts((items) => items.map((item) => item.id === previousPrompt.id ? previousPrompt : item));
+      setError(errorMessage(err, "形象切换失败，请确认该形象的四视图已确认。"));
+    }
+  }
+
   async function runImageQueue() {
     if (imageWorkerRunningRef.current) return;
     imageWorkerRunningRef.current = true;
@@ -340,7 +389,7 @@ export function WechatMpWriterPage() {
           continue;
         }
         try {
-          const savedPrompt = await updateWechatMpPrompt(prompt.article_id, prompt.id, prompt.editable_prompt);
+          const savedPrompt = await updateWechatMpPrompt(prompt.article_id, prompt.id, { editable_prompt: prompt.editable_prompt });
           setPrompts((items) => items.map((item) => item.id === savedPrompt.id ? savedPrompt : item));
           const asset = await generateWechatMpImage(prompt.id, { image_model: imageModel, size: "16:9" });
           setAssets((items) => [asset, ...items.filter((item) => item.prompt_id !== prompt.id)]);
@@ -350,8 +399,8 @@ export function WechatMpWriterPage() {
             ? `段落 #${prompt.section_id} 已复用相似提示词的历史图片，未重复扣除图片生成费用。`
             : `段落 #${prompt.section_id} 正文配图已生成并计入实际费用。`
           );
-        } catch {
-          setError(`段落 #${prompt.section_id} 图片生成失败，请确认图片模型配置。`);
+        } catch (err) {
+          setError(errorMessage(err, `段落 #${prompt.section_id} 图片生成失败，请确认图片模型配置。`));
           setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, status: "failed" } : item));
         } finally {
           imageQueueRef.current = imageQueueRef.current.slice(1);
@@ -397,6 +446,14 @@ export function WechatMpWriterPage() {
   const coverAsset = assets.find((asset) => asset.role === "cover");
   const inlineImageCount = assets.filter((asset) => asset.role !== "cover").length;
   const stepItems = ["输入主题/素材", "生成文章", "编辑与预览", "生成提示词", "编辑提示词并生图", "同步草稿/发布"].map((stepTitle) => ({ title: stepTitle }));
+  const coverCharacter = article ? resolveCharacterMention(characters, null, article.illustration_skill, article.cover_brief) : null;
+  const characterMentionBadge = coverCharacter ? (
+    <Tooltip title={<div><strong>{coverCharacter.name}</strong><div>{coverCharacter.is_available ? "四视图已确认" : "待确认四视图"}</div><div>{coverCharacter.prompt}</div></div>}>
+      <Tag color={coverCharacter.is_available ? "blue" : "gold"}>
+        主角：@{coverCharacter.name}
+      </Tag>
+    </Tooltip>
+  ) : null;
 
   return <WechatMpLayout>
     <PageHeader eyebrow="WeChat MP / Writer" title="文章写作" description="六步完成公众号文章、配图和草稿同步发布。默认插画技能为小猫。" />
@@ -506,6 +563,7 @@ export function WechatMpWriterPage() {
             <Row gutter={[16, 12]} align="stretch">
               <Col xs={24} lg={15}>
                 <Text strong>封面提示词</Text>
+                {characterMentionBadge && <div style={{ marginTop: 8 }}>{characterMentionBadge}</div>}
                 <TextArea value={article.cover_brief || "暂无封面提示词"} readOnly rows={5} style={{ marginTop: 8 }} />
                 <Space style={{ marginTop: 8 }} wrap>
                   <Button type="primary" icon={<PictureOutlined />} loading={coverBusy} onClick={() => void generateCover()}>
@@ -537,6 +595,14 @@ export function WechatMpWriterPage() {
                   : promptAsset || prompt.status === "generated"
                     ? "重新生成正文图片"
                     : "生成正文图片";
+              const character = resolveCharacterMention(characters, prompt.character_id, prompt.skill_name, prompt.editable_prompt);
+              const characterMentionBadge = character ? (
+                <Tooltip title={<div><strong>{character.name}</strong><div>{character.is_available ? "四视图已确认" : "待确认四视图"}</div><div>{character.prompt}</div></div>}>
+                  <Tag color={character.is_available ? "blue" : "gold"}>
+                    主角：@{character.name}
+                  </Tag>
+                </Tooltip>
+              ) : null;
               return <Card
                 id={`wechat-prompt-${prompt.id}`}
                 key={prompt.id}
@@ -547,6 +613,7 @@ export function WechatMpWriterPage() {
               >
               <Row gutter={[16, 12]}>
                 <Col xs={24} lg={15}>
+                  {characterMentionBadge && <div style={{ marginBottom: 8 }}>{characterMentionBadge}</div>}
                   <TextArea value={prompt.editable_prompt} onChange={(event) => setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, editable_prompt: event.target.value } : item))} rows={5} />
                   <Space style={{ marginTop: 8 }} wrap>
                     <Select
@@ -554,8 +621,8 @@ export function WechatMpWriterPage() {
                       placeholder="@已确认形象"
                       style={{ minWidth: 150 }}
                       value={undefined}
-                      options={characters.filter((character) => character.is_available).map((character) => ({ value: character.name, label: `@${character.name}` }))}
-                      onChange={(name) => setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, editable_prompt: `${item.editable_prompt.replace(/@[^\s@,，。；;：:（）()]+/g, "").trim()} @${name}`.trim() } : item))}
+                      options={characters.filter((character) => character.is_available && character.skill_name !== "none").map((character) => ({ value: character.skill_name, label: `@${character.name}` }))}
+                      onChange={(skillName) => skillName && void selectCharacter(prompt, skillName)}
                     />
                     <Button onClick={() => void regenerate(prompt)} loading={promptBusy}>重新生成提示词</Button>
                     <Button

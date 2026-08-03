@@ -91,6 +91,7 @@ import type {
   WechatMpDraftSync,
   WechatMpImageCostEstimate,
   WechatMpImagePrompt,
+  WechatMpPromptUpdate,
   WechatMpIllustrationCharacter,
   WechatMpCharacterView,
   WechatMpLayoutPreview,
@@ -1137,8 +1138,8 @@ export async function fetchWechatMpPrompts(articleId: number): Promise<WechatMpI
   return response.data;
 }
 
-export async function updateWechatMpPrompt(articleId: number, promptId: number, editablePrompt: string): Promise<WechatMpImagePrompt> {
-  const response = await http.patch<WechatMpImagePrompt>(`/platforms/wechat-mp/articles/${articleId}/prompts/${promptId}`, { editable_prompt: editablePrompt });
+export async function updateWechatMpPrompt(articleId: number, promptId: number, payload: WechatMpPromptUpdate): Promise<WechatMpImagePrompt> {
+  const response = await http.patch<WechatMpImagePrompt>(`/platforms/wechat-mp/articles/${articleId}/prompts/${promptId}`, payload);
   return response.data;
 }
 

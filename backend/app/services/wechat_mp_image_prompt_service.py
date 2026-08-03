@@ -11,7 +11,13 @@ from sqlalchemy.orm import Session
 
 from backend.app.models import WechatMpArticle, WechatMpArticleSection, WechatMpAsset, WechatMpImagePrompt
 from backend.app.services.usage_recording_service import record_text_usage
-from backend.app.services.wechat_mp_character_service import XIAOMAO_SKILL_NAME, ensure_builtin_character, resolve_character_prompt
+from backend.app.services.wechat_mp_character_service import (
+    XIAOMAO_SKILL_NAME,
+    canonicalize_character_prompt,
+    require_character_by_skill,
+    resolve_character_by_skill,
+    resolve_character_prompt,
+)
 from backend.app.services.wechat_mp_cost_service import add_article_cost
 from backend.app.services.wechat_mp_layout_service import render_wechat_html
 from backend.app.services.wechat_mp_shotlist_service import generate_article_shotlist
@@ -165,8 +171,14 @@ def _call_prompt_model(
         raise ValueError("WeChat MP prompt model returned malformed output") from exc
     if not prompt:
         raise ValueError("WeChat MP prompt model returned an empty prompt")
+    character = resolve_character_by_skill(db, user_id=user_id, skill_name=skill_name) if db is not None and user_id is not None else None
+    stored_prompt = canonicalize_character_prompt(
+        character,
+        prompt,
+        include_character=character is not None,
+    )
     return {
-        "prompt": f"{prompt_contract}\n具体画面：{prompt}",
+        "prompt": stored_prompt,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "model_name": model_name,
@@ -180,15 +192,7 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
     if article is None:
         raise LookupError("WeChat MP article not found")
     selected_skill = skill_name or article.illustration_skill or XIAOMAO_SKILL_NAME
-    if selected_skill == XIAOMAO_SKILL_NAME:
-        ensure_builtin_character(db, user_id)
-    selected_character = None
-    if selected_skill != "none":
-        from backend.app.models import WechatMpIllustrationCharacter
-        selected_character = db.scalar(select(WechatMpIllustrationCharacter).where(
-            WechatMpIllustrationCharacter.user_id == user_id,
-            WechatMpIllustrationCharacter.skill_name == selected_skill,
-        ))
+    selected_character = require_character_by_skill(db, user_id=user_id, skill_name=selected_skill)
     if selected_skill == "none" and article.illustration_skill != "none":
         has_inline_state = bool(db.scalar(
             select(WechatMpImagePrompt.id).where(WechatMpImagePrompt.article_id == article.id).limit(1)
@@ -216,6 +220,11 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
                 api_key=model.api_key,
                 db=db,
                 user_id=user_id,
+            )
+            result["prompt"] = canonicalize_character_prompt(
+                selected_character,
+                result["prompt"],
+                include_character=selected_character is not None,
             )
             prompt_status = "skipped" if selected_skill == "none" else "prompt_ready"
             if prompt is None:
@@ -284,6 +293,11 @@ def regenerate_image_prompt(*, db: Session, prompt: WechatMpImagePrompt, article
     section = db.get(WechatMpArticleSection, prompt.section_id)
     if section is None or section.article_id != article.id:
         raise LookupError("WeChat MP prompt not found")
+    character = require_character_by_skill(
+        db,
+        user_id=article.user_id,
+        skill_name=prompt.skill_name,
+    )
     model = resolve_wechat_mp_model(db=db, user_id=article.user_id, model_type="text")
     result = _call_prompt_model(
         article_title=article.title,
@@ -292,6 +306,13 @@ def regenerate_image_prompt(*, db: Session, prompt: WechatMpImagePrompt, article
         model_name=model.model_name,
         base_url=model.base_url,
         api_key=model.api_key,
+        db=db,
+        user_id=article.user_id,
+    )
+    result["prompt"] = canonicalize_character_prompt(
+        character,
+        result["prompt"],
+        include_character=character is not None,
     )
     prompt.prompt = result["prompt"]
     prompt.editable_prompt = result["prompt"]

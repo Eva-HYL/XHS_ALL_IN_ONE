@@ -11,6 +11,11 @@ from sqlalchemy.orm import Session
 from backend.app.models import WechatMpArticle, WechatMpArticleMaterial, WechatMpMaterial
 from backend.app.schemas.wechat_mp import WechatMpArticleCreateRequest
 from backend.app.services.usage_recording_service import record_text_usage
+from backend.app.services.wechat_mp_character_service import (
+    XIAOMAO_SKILL_NAME,
+    canonicalize_character_prompt,
+    require_character_by_skill,
+)
 from backend.app.services.wechat_mp_layout_service import render_wechat_html
 
 
@@ -111,6 +116,8 @@ def _call_writer_model(
 def generate_wechat_article(*, db: Session, user_id: int, request: WechatMpArticleCreateRequest) -> WechatMpArticle:
     from backend.app.services.wechat_mp_model_service import resolve_wechat_mp_model
 
+    illustration_skill = request.illustration_skill or XIAOMAO_SKILL_NAME
+    character = require_character_by_skill(db, user_id=user_id, skill_name=illustration_skill)
     model = resolve_wechat_mp_model(db=db, user_id=user_id, model_type="text")
     selected_materials = _load_selected_materials(db, user_id, request.material_ids)
     result = _call_writer_model(
@@ -122,6 +129,11 @@ def generate_wechat_article(*, db: Session, user_id: int, request: WechatMpArtic
         base_url=model.base_url,
         api_key=model.api_key,
     )
+    cover_brief = canonicalize_character_prompt(
+        character,
+        result["cover_brief"],
+        include_character=character is not None,
+    )
     try:
         article = WechatMpArticle(
             user_id=user_id,
@@ -129,9 +141,9 @@ def generate_wechat_article(*, db: Session, user_id: int, request: WechatMpArtic
             markdown_body=result["markdown_body"],
             html_body=render_wechat_html(result["markdown_body"], image_placeholders=[]),
             digest=result["digest"],
-            cover_brief=result["cover_brief"],
+            cover_brief=cover_brief,
             status="layout_ready",
-            illustration_skill=request.illustration_skill or "xiaomao-illustrations",
+            illustration_skill=illustration_skill,
         )
         db.add(article)
         db.flush()

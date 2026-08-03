@@ -896,6 +896,12 @@ export interface WechatMpImagePrompt {
   updated_at?: string;
 }
 
+export type WechatMpPromptUpdate = {
+  editable_prompt: string;
+  character_id?: number | null;
+  skill_name?: string;
+};
+
 export type WechatMpAccount = {
   id: number;
   user_id: number;
