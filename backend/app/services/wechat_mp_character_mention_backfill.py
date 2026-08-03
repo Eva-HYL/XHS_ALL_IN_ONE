@@ -74,10 +74,13 @@ def _resolve_prompt_character(
     prompt: WechatMpImagePrompt,
 ) -> WechatMpIllustrationCharacter | None:
     if prompt.character_id is not None:
-        return db.scalar(select(WechatMpIllustrationCharacter).where(
+        character = db.scalar(select(WechatMpIllustrationCharacter).where(
             WechatMpIllustrationCharacter.id == prompt.character_id,
             WechatMpIllustrationCharacter.user_id == prompt.user_id,
+            WechatMpIllustrationCharacter.archived_at.is_(None),
         ))
+        if character is not None:
+            return character
     return _resolve_character_by_skill(db, user_id=prompt.user_id, skill_name=prompt.skill_name)
 
 
@@ -101,9 +104,13 @@ def backfill_character_mentions(db: Session, *, user_id: int | None = None) -> d
                 article.cover_brief = cover_brief
                 articles_updated += 1
 
-        prompts = db.scalars(select(WechatMpImagePrompt).where(
+        prompts_query = select(WechatMpImagePrompt).where(
             WechatMpImagePrompt.article_id == article.id,
-        )).all()
+            WechatMpImagePrompt.user_id == article.user_id,
+        )
+        if user_id is not None:
+            prompts_query = prompts_query.where(WechatMpImagePrompt.user_id == user_id)
+        prompts = db.scalars(prompts_query).all()
         for prompt in prompts:
             prompt_character = _resolve_prompt_character(db, prompt)
             if prompt_character is None:

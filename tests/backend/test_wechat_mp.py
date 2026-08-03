@@ -172,10 +172,10 @@ def test_character_mention_backfill_is_idempotent_and_preserves_generated_data(
         article.html_body = "<p>已经插入的正文图片</p>"
         article.cost_estimate = {"currency": "CNY", "total_yuan": "1.2345", "calls": 2}
         prompt = session.get(WechatMpImagePrompt, created_wechat_prompt.id)
-        prompt.character_id = character.id
+        prompt.character_id = character.id + 10_000
         prompt.skill_name = character.skill_name
-        prompt.prompt = f"{legacy_builtin_prompt}\n小猫整理便签"
-        prompt.editable_prompt = prompt.prompt
+        prompt.prompt = f"{XIAOMAO_PROMPT}\n小猫整理便签"
+        prompt.editable_prompt = f"{legacy_builtin_prompt}\n小猫整理便签"
         prompt.cost_estimate = {"currency": "CNY", "total_yuan": "0.1234", "calls": 1}
         asset = WechatMpAsset(
             user_id=owner.id,
@@ -221,6 +221,50 @@ def test_character_mention_backfill_is_idempotent_and_preserves_generated_data(
         assert article.cost_estimate == original_article_cost
         assert prompt.cost_estimate == original_prompt_cost
         assert session.get(UsageRecord, original_usage_id) is not None
+    finally:
+        session.close()
+
+
+def test_character_mention_backfill_scoped_owner_skips_cross_owner_prompt(
+    api_client, auth_headers, created_wechat_prompt,
+):
+    from backend.app.models import User, WechatMpArticle, WechatMpImagePrompt
+    from backend.app.services.wechat_mp_character_service import XIAOMAO_PROMPT, ensure_builtin_character
+    from backend.app.services.wechat_mp_character_mention_backfill import backfill_character_mentions
+
+    _, session_factory = api_client
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        character = ensure_builtin_character(session, owner.id)
+        article = session.get(WechatMpArticle, created_wechat_prompt.article_id)
+        article.cover_brief = "主角：@小猫生图\n具体画面：小猫压住计划表"
+        owner_prompt = session.get(WechatMpImagePrompt, created_wechat_prompt.id)
+        owner_prompt.character_id = character.id
+        owner_prompt.skill_name = character.skill_name
+        owner_prompt.prompt = "主角：@小猫生图\n具体画面：小猫整理便签"
+        owner_prompt.editable_prompt = owner_prompt.prompt
+        foreign_user = User(username="wechat-backfill-foreign", password_hash="unused")
+        session.add(foreign_user)
+        session.flush()
+        foreign_prompt = WechatMpImagePrompt(
+            user_id=foreign_user.id,
+            article_id=article.id,
+            section_id=owner_prompt.section_id,
+            skill_name="xiaomao-illustrations",
+            prompt=f"{XIAOMAO_PROMPT}\n外部用户的提示词",
+            editable_prompt=f"{XIAOMAO_PROMPT}\n外部用户的提示词",
+            status="prompt_ready",
+        )
+        session.add(foreign_prompt)
+        session.commit()
+        original_foreign_prompt = foreign_prompt.editable_prompt
+
+        result = backfill_character_mentions(session, user_id=owner.id)
+
+        assert result == {"articles_updated": 0, "prompts_updated": 0}
+        assert session.get(WechatMpImagePrompt, foreign_prompt.id).prompt == original_foreign_prompt
+        assert session.get(WechatMpImagePrompt, foreign_prompt.id).editable_prompt == original_foreign_prompt
     finally:
         session.close()
 
