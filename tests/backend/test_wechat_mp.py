@@ -1953,6 +1953,7 @@ def test_create_wechat_mp_article_generates_markdown_html_and_usage(api_client, 
     assert data["title"] == "会偷懒的人，反而更稳定"
     assert "<h2>开头</h2>" in data["html_body"]
     assert data["illustration_skill"] == "xiaomao-illustrations"
+    assert data["cover_brief"] == "主角：@小猫生图\n具体画面：小猫压住一张计划表"
 
     session = session_factory()
     try:
@@ -2029,16 +2030,19 @@ def test_create_wechat_mp_article_can_use_material_library_items(api_client, aut
 def test_generate_prompts_defaults_to_xiaomao_skill(api_client, auth_headers, created_wechat_article, monkeypatch):
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
 
-    def fake_prompt_call(*, article_title, section_summary, skill_name, model_name, **kwargs):
-        assert skill_name == "xiaomao-illustrations"
-        return {
-            "prompt": "Generate one 16:9 Chinese article illustration. 小猫 lazily presses a messy note stack.",
-            "input_tokens": 50,
-            "output_tokens": 80,
-            "model_name": model_name,
-        }
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
 
-    monkeypatch.setattr(prompt_service, "_call_prompt_model", fake_prompt_call)
+        def json(self):
+            return {
+                "choices": [{"message": {"content": "小猫懒洋洋地压住便签堆。"}}],
+                "usage": {"prompt_tokens": 50, "completion_tokens": 80},
+            }
+
+    monkeypatch.setenv("WECHAT_MP_PROMPT_BASE_URL", "https://prompt.example")
+    monkeypatch.setenv("WECHAT_MP_PROMPT_API_KEY", "test-key")
+    monkeypatch.setattr(prompt_service.requests, "post", lambda *args, **kwargs: FakeResponse())
     client, _ = api_client
     response = client.post(
         f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts",
@@ -2048,7 +2052,8 @@ def test_generate_prompts_defaults_to_xiaomao_skill(api_client, auth_headers, cr
     assert response.status_code == 201
     data = response.json()
     assert data[0]["skill_name"] == "xiaomao-illustrations"
-    assert "小猫" in data[0]["prompt"]
+    assert data[0]["editable_prompt"].startswith("主角：@小猫生图\n具体画面：")
+    assert "主角必须是一只胖胖慵懒" not in data[0]["editable_prompt"]
     assert data[0]["status"] == "prompt_ready"
     assert data[0]["version"] == 1
     assert data[0]["editable_prompt"] == data[0]["prompt"]
@@ -2329,6 +2334,128 @@ def test_edit_and_regenerate_prompt_increment_version(api_client, auth_headers, 
     assert client.get(
         f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers
     ).json()["html_body"].count(marker) == 1
+
+
+def test_regenerate_prompt_passes_character_context_and_keeps_mention(api_client, auth_headers, created_wechat_article, monkeypatch):
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    client, _ = api_client
+    captured = {}
+
+    def fake_prompt_call(**kwargs):
+        captured.update(kwargs)
+        return {
+            "prompt": "主角：@小猫生图\n具体画面：小猫把计划表压在爪下",
+            "input_tokens": 15,
+            "output_tokens": 30,
+            "model_name": kwargs["model_name"],
+        }
+
+    monkeypatch.setattr(prompt_service, "_call_prompt_model", fake_prompt_call)
+    created = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts",
+        headers=auth_headers,
+    )
+    assert created.status_code == 201
+    prompt_id = created.json()[0]["id"]
+    captured.clear()
+    regenerated = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts/{prompt_id}/regenerate",
+        headers=auth_headers,
+    )
+
+    assert regenerated.status_code == 200
+    assert captured["db"] is not None
+    assert captured["user_id"] == created_wechat_article.user_id
+    assert regenerated.json()["editable_prompt"].startswith("主角：@小猫生图\n具体画面：")
+
+
+def test_cover_uses_character_anchor_and_expands_mentions_at_image_boundary(
+    api_client, auth_headers, created_wechat_prompt, monkeypatch,
+):
+    from backend.app.models import (
+        User,
+        WechatMpArticle,
+        WechatMpAsset,
+        WechatMpCharacterView,
+        WechatMpImagePrompt,
+    )
+    from backend.app.services import wechat_mp_image_service as image_service
+    from backend.app.services.wechat_mp_character_service import ensure_builtin_character
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        character = ensure_builtin_character(session, owner.id)
+        for view in ("front", "back", "left", "right"):
+            session.add(WechatMpCharacterView(
+                character_id=character.id,
+                user_id=owner.id,
+                view=view,
+                public_url=f"/api/platforms/wechat-mp/illustration-characters/files/{view}.png",
+                status="confirmed",
+            ))
+        article = session.get(WechatMpArticle, created_wechat_prompt.article_id)
+        article.cover_brief = "主角：@小猫生图\n具体画面：小猫压住一张计划表"
+        prompt = session.get(WechatMpImagePrompt, created_wechat_prompt.id)
+        prompt.prompt = "主角：@小猫生图\n具体画面：小猫整理便签"
+        prompt.editable_prompt = prompt.prompt
+        session.commit()
+    finally:
+        session.close()
+
+    captured = {}
+
+    def fake_generate(**kwargs):
+        captured.update(kwargs)
+        return {
+            "file_path": "/tmp/wechat-character-mention.png",
+            "public_url": "/api/files/media/wechat-character-mention.png",
+            "provider_response": {"ok": True},
+        }
+
+    monkeypatch.setattr(image_service, "_call_image_model", fake_generate)
+    inline = client.post(
+        f"/api/platforms/wechat-mp/prompts/{created_wechat_prompt.id}/image",
+        json={"image_model": "doubao-seedream-4-0-250828", "size": "16:9"},
+        headers=auth_headers,
+    )
+
+    assert inline.status_code == 201
+    assert "主角：@小猫生图" not in captured["prompt"]
+    assert "主角必须是一只胖胖慵懒" in captured["prompt"]
+    assert "具体画面：" in captured["prompt"]
+    assert len(captured["reference_images"]) == 4
+    session = session_factory()
+    try:
+        prompt = session.get(WechatMpImagePrompt, created_wechat_prompt.id)
+        asset = session.query(WechatMpAsset).filter_by(prompt_id=prompt.id).one()
+        assert prompt.editable_prompt.startswith("主角：@小猫生图\n具体画面：")
+        assert asset.prompt == captured["prompt"]
+    finally:
+        session.close()
+
+    captured.clear()
+    cover = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_prompt.article_id}/cover",
+        json={"image_model": "doubao-seedream-4-0-250828", "size": "16:9"},
+        headers=auth_headers,
+    )
+
+    assert cover.status_code == 201
+    assert "主角：@小猫生图" not in captured["prompt"]
+    assert "主角必须是一只胖胖慵懒" in captured["prompt"]
+    assert "具体画面：" in captured["prompt"]
+    assert len(captured["reference_images"]) == 4
+    session = session_factory()
+    try:
+        article = session.get(WechatMpArticle, created_wechat_prompt.article_id)
+        asset = session.query(WechatMpAsset).filter_by(article_id=article.id, role="cover").one()
+        assert article.cover_brief == "主角：@小猫生图\n具体画面：小猫压住一张计划表"
+        assert asset.prompt == captured["prompt"]
+    finally:
+        session.close()
 
 
 def test_prompt_endpoints_hide_foreign_article_and_prompt(api_client, auth_headers, created_wechat_article, monkeypatch):

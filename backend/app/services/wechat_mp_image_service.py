@@ -236,7 +236,11 @@ def generate_asset_for_prompt(
     reference_images = anchor[1] if anchor else None
     if character is not None:
         prompt.character_id = character.id
-    effective_prompt = f"{character.prompt}\n具体画面：{scene_prompt}" if character else scene_prompt
+    if character is not None:
+        scene_prompt = scene_prompt.strip()
+        effective_prompt = f"{character.prompt}\n{scene_prompt if scene_prompt.startswith('具体画面：') else f'具体画面：{scene_prompt}'}"
+    else:
+        effective_prompt = scene_prompt
     model = resolve_wechat_mp_model(
         db=db, user_id=user_id, model_type="image", requested_model=image_model,
     )
@@ -318,7 +322,6 @@ def generate_cover_asset(
     ))
     if article is None:
         raise LookupError("WeChat MP article not found")
-    from backend.app.services.wechat_mp_image_prompt_service import build_skill_prompt
     from backend.app.services.wechat_mp_model_service import resolve_wechat_mp_model
     from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
 
@@ -326,16 +329,29 @@ def generate_cover_asset(
         db=db, user_id=user_id, model_type="image", requested_model=image_model,
     )
     normalized_size = normalize_illustration_size(model.model_name, size)
-    prompt_text = build_skill_prompt(
-        article.illustration_skill, article.title, article.cover_brief or article.title,
+    from backend.app.services.wechat_mp_character_service import resolve_confirmed_character_anchor, resolve_prompt_character
+
+    character, scene_prompt = resolve_prompt_character(
+        db,
+        user_id=user_id,
+        default_skill_name=article.illustration_skill,
+        text=article.cover_brief or article.title,
     )
-    from backend.app.services.wechat_mp_character_service import resolve_confirmed_character_anchor
-    anchor = resolve_confirmed_character_anchor(db, user_id=user_id, skill_name=article.illustration_skill)
+    anchor = resolve_confirmed_character_anchor(
+        db,
+        user_id=user_id,
+        character_id=character.id if character else None,
+        skill_name=None if character else article.illustration_skill,
+    )
     if anchor is not None:
-        character, reference_images = anchor
-        prompt_text = f"{character.prompt}\n{prompt_text}"
+        _, reference_images = anchor
     else:
         reference_images = None
+    if character is not None:
+        scene_prompt = scene_prompt.strip()
+        prompt_text = f"{character.prompt}\n{scene_prompt if scene_prompt.startswith('具体画面：') else f'具体画面：{scene_prompt}'}"
+    else:
+        prompt_text = scene_prompt
     result = _call_image_model(
         prompt=prompt_text, model_name=model.model_name, size=normalized_size,
         base_url=model.base_url, api_key=model.api_key, reference_images=reference_images,
