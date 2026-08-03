@@ -2,6 +2,8 @@ import json
 
 import requests
 
+from backend.app.core.config import get_settings
+
 
 class WechatMpApiError(RuntimeError):
     def __init__(self, message: str, *, errcode: int | None = None, payload: dict | None = None):
@@ -17,6 +19,15 @@ class WechatMpApiError(RuntimeError):
 
 class WechatMpApiAdapter:
     base_url = "https://api.weixin.qq.com"
+
+    def __init__(self, proxy_url: str | None = None):
+        configured_url = get_settings().wechat_mp_proxy_url if proxy_url is None else proxy_url
+        self.proxy_url = configured_url.strip()
+
+    def _proxy_kwargs(self) -> dict:
+        if not self.proxy_url:
+            return {}
+        return {"proxies": {"http": self.proxy_url, "https": self.proxy_url}}
 
     def _checked_json(self, response: requests.Response, message: str) -> dict:
         try:
@@ -35,6 +46,7 @@ class WechatMpApiAdapter:
                 f"{self.base_url}/cgi-bin/token",
                 params={"grant_type": "client_credential", "appid": app_id, "secret": app_secret},
                 timeout=20,
+                **self._proxy_kwargs(),
             )
         except (requests.RequestException, ValueError) as exc:
             raise WechatMpApiError("wechat access_token request failed") from exc
@@ -48,6 +60,7 @@ class WechatMpApiAdapter:
                     params={"access_token": access_token, "type": "image"},
                     files={"media": image_file},
                     timeout=60,
+                    **self._proxy_kwargs(),
                 )
         except (OSError, requests.RequestException) as exc:
             raise WechatMpApiError("wechat permanent image upload failed") from exc
@@ -61,6 +74,7 @@ class WechatMpApiAdapter:
                     params={"access_token": access_token},
                     files={"media": image_file},
                     timeout=60,
+                    **self._proxy_kwargs(),
                 )
         except (OSError, requests.RequestException) as exc:
             raise WechatMpApiError("wechat content image upload failed") from exc
@@ -74,6 +88,7 @@ class WechatMpApiAdapter:
                 data=json.dumps({"articles": [article]}, ensure_ascii=False).encode("utf-8"),
                 headers={"Content-Type": "application/json; charset=utf-8"},
                 timeout=30,
+                **self._proxy_kwargs(),
             )
         except requests.RequestException as exc:
             raise WechatMpApiError("wechat draft add failed") from exc
@@ -86,6 +101,7 @@ class WechatMpApiAdapter:
                 params={"access_token": access_token},
                 json={"media_id": media_id},
                 timeout=30,
+                **self._proxy_kwargs(),
             )
         except requests.RequestException as exc:
             raise WechatMpApiError("wechat publish submit failed") from exc
@@ -98,6 +114,7 @@ class WechatMpApiAdapter:
                 params={"access_token": access_token},
                 json={"publish_id": publish_id},
                 timeout=30,
+                **self._proxy_kwargs(),
             )
         except requests.RequestException as exc:
             raise WechatMpApiError("wechat publish status failed") from exc

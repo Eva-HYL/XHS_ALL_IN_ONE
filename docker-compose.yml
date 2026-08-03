@@ -24,6 +24,7 @@ services:
       - LARK_APP_SECRET=${LARK_APP_SECRET:-}
       - VOLC_ACCESS_KEY=${VOLC_ACCESS_KEY:-}
       - VOLC_SECRET_KEY=${VOLC_SECRET_KEY:-}
+      - WECHAT_MP_PROXY_URL=${WECHAT_MP_PROXY_URL:-}
       # Override sensitive values via env vars in production:
       # - SECRET_KEY=your-production-secret-key
       # - FERNET_KEY=your-fernet-key

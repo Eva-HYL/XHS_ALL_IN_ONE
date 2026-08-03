@@ -111,6 +111,9 @@ class Settings(BaseSettings):
     # Asset storage
     asset_storage_type: str = "local"
 
+    # Dedicated fixed-egress proxy for WeChat MP API calls only.
+    wechat_mp_proxy_url: str = ""
+
     # Frontend static serving
     frontend_serve_static: bool = False
     frontend_build_dir: str = "./frontend/dist"
