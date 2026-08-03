@@ -14,7 +14,7 @@ from backend.app.services.usage_recording_service import record_text_usage
 from backend.app.services.wechat_mp_character_service import (
     XIAOMAO_SKILL_NAME,
     canonicalize_character_prompt,
-    ensure_builtin_character,
+    require_character_by_skill,
     resolve_character_by_skill,
     resolve_character_prompt,
 )
@@ -192,15 +192,7 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
     if article is None:
         raise LookupError("WeChat MP article not found")
     selected_skill = skill_name or article.illustration_skill or XIAOMAO_SKILL_NAME
-    if selected_skill == XIAOMAO_SKILL_NAME:
-        ensure_builtin_character(db, user_id)
-    selected_character = None
-    if selected_skill != "none":
-        from backend.app.models import WechatMpIllustrationCharacter
-        selected_character = db.scalar(select(WechatMpIllustrationCharacter).where(
-            WechatMpIllustrationCharacter.user_id == user_id,
-            WechatMpIllustrationCharacter.skill_name == selected_skill,
-        ))
+    selected_character = require_character_by_skill(db, user_id=user_id, skill_name=selected_skill)
     if selected_skill == "none" and article.illustration_skill != "none":
         has_inline_state = bool(db.scalar(
             select(WechatMpImagePrompt.id).where(WechatMpImagePrompt.article_id == article.id).limit(1)
@@ -301,6 +293,11 @@ def regenerate_image_prompt(*, db: Session, prompt: WechatMpImagePrompt, article
     section = db.get(WechatMpArticleSection, prompt.section_id)
     if section is None or section.article_id != article.id:
         raise LookupError("WeChat MP prompt not found")
+    character = require_character_by_skill(
+        db,
+        user_id=article.user_id,
+        skill_name=prompt.skill_name,
+    )
     model = resolve_wechat_mp_model(db=db, user_id=article.user_id, model_type="text")
     result = _call_prompt_model(
         article_title=article.title,
@@ -311,11 +308,6 @@ def regenerate_image_prompt(*, db: Session, prompt: WechatMpImagePrompt, article
         api_key=model.api_key,
         db=db,
         user_id=article.user_id,
-    )
-    character = resolve_character_by_skill(
-        db,
-        user_id=article.user_id,
-        skill_name=prompt.skill_name,
     )
     result["prompt"] = canonicalize_character_prompt(
         character,

@@ -4534,6 +4534,150 @@ def test_same_name_characters_keep_selected_identity_and_reject_ambiguous_mentio
         session.close()
 
 
+def test_cover_generation_uses_article_skill_to_disambiguate_same_name_characters(
+    api_client, auth_headers, created_wechat_prompt, monkeypatch,
+):
+    from backend.app.models import WechatMpArticle, WechatMpCharacterView
+    from backend.app.services import wechat_mp_image_service as image_service
+
+    client, session_factory = api_client
+    characters = []
+    for prompt in ("封面同名角色一号契约。", "封面同名角色二号契约。"):
+        response = client.post(
+            "/api/platforms/wechat-mp/illustration-characters",
+            json={"name": "封面同名角色", "prompt": prompt},
+            headers=auth_headers,
+        )
+        assert response.status_code == 201
+        characters.append(response.json())
+
+    selected = characters[1]
+    session = session_factory()
+    try:
+        for character in characters:
+            for view in ("front", "back", "left", "right"):
+                session.add(WechatMpCharacterView(
+                    character_id=character["id"],
+                    user_id=created_wechat_prompt.user_id,
+                    view=view,
+                    public_url=f"/api/platforms/wechat-mp/illustration-characters/files/{character['id']}-{view}.png",
+                    status="confirmed",
+                ))
+        article = session.get(WechatMpArticle, created_wechat_prompt.article_id)
+        article.illustration_skill = selected["skill_name"]
+        article.cover_brief = "主角：@封面同名角色\n具体画面：角色压住文章标题"
+        session.commit()
+    finally:
+        session.close()
+
+    captured = {}
+
+    def fake_generate(**kwargs):
+        captured.update(kwargs)
+        return {
+            "file_path": "/tmp/same-name-cover.png",
+            "public_url": "/api/files/media/same-name-cover.png",
+            "provider_response": {"ok": True},
+        }
+
+    monkeypatch.setattr(image_service, "_call_image_model", fake_generate)
+    generated = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_prompt.article_id}/cover",
+        json={"image_model": "doubao-seedream-4-0-250828", "size": "16:9"},
+        headers=auth_headers,
+    )
+
+    assert generated.status_code == 201
+    assert "封面同名角色二号契约" in captured["prompt"]
+    assert "封面同名角色一号契约" not in captured["prompt"]
+    assert len(captured["reference_images"]) == 4
+
+
+def test_unknown_illustration_skill_is_rejected_before_creating_article(api_client, auth_headers, monkeypatch):
+    from backend.app.models import WechatMpArticle
+    from backend.app.services import wechat_mp_writer_service as writer
+
+    calls = []
+
+    def fake_writer(**kwargs):
+        calls.append(kwargs)
+        return {
+            "title": "不应创建",
+            "markdown_body": "正文",
+            "digest": "摘要",
+            "cover_brief": "封面",
+            "input_tokens": 1,
+            "output_tokens": 1,
+            "model_name": kwargs["model_name"],
+        }
+
+    monkeypatch.setattr(writer, "_call_writer_model", fake_writer)
+    client, session_factory = api_client
+    response = client.post(
+        "/api/platforms/wechat-mp/articles",
+        json={"title": "非法技能", "topic": "非法技能", "illustration_skill": "missing-skill"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert "illustration skill" in response.json()["detail"].lower()
+    assert calls == []
+    session = session_factory()
+    try:
+        assert session.query(WechatMpArticle).filter_by(title="不应创建").count() == 0
+    finally:
+        session.close()
+
+
+def test_unknown_illustration_skill_is_rejected_before_generating_prompts(
+    api_client, auth_headers, created_wechat_article, monkeypatch,
+):
+    from backend.app.models import WechatMpArticle, WechatMpImagePrompt
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    calls = []
+    monkeypatch.setattr(
+        prompt_service,
+        "generate_article_shotlist",
+        lambda **kwargs: calls.append(kwargs) or [],
+    )
+    client, session_factory = api_client
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts",
+        json={"skill_name": "missing-skill"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert "illustration skill" in response.json()["detail"].lower()
+    assert calls == []
+    session = session_factory()
+    try:
+        article = session.get(WechatMpArticle, created_wechat_article.id)
+        assert article.illustration_skill == "xiaomao-illustrations"
+        assert session.query(WechatMpImagePrompt).filter_by(article_id=article.id).count() == 0
+    finally:
+        session.close()
+
+
+def test_article_update_rejects_unknown_illustration_skill(api_client, auth_headers, created_wechat_article):
+    client, _ = api_client
+    response = client.patch(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}",
+        json={"illustration_skill": "missing-skill"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+    assert "illustration skill" in response.json()["detail"].lower()
+    current = client.get(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}",
+        headers=auth_headers,
+    )
+    assert current.status_code == 200
+    assert current.json()["illustration_skill"] == "xiaomao-illustrations"
+
+
 def test_failed_inline_image_generation_can_retry_with_same_prompt(
     api_client, auth_headers, created_wechat_prompt, monkeypatch
 ):

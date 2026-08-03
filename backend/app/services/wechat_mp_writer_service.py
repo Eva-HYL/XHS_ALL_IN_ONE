@@ -14,7 +14,7 @@ from backend.app.services.usage_recording_service import record_text_usage
 from backend.app.services.wechat_mp_character_service import (
     XIAOMAO_SKILL_NAME,
     canonicalize_character_prompt,
-    resolve_character_by_skill,
+    require_character_by_skill,
 )
 from backend.app.services.wechat_mp_layout_service import render_wechat_html
 
@@ -116,6 +116,8 @@ def _call_writer_model(
 def generate_wechat_article(*, db: Session, user_id: int, request: WechatMpArticleCreateRequest) -> WechatMpArticle:
     from backend.app.services.wechat_mp_model_service import resolve_wechat_mp_model
 
+    illustration_skill = request.illustration_skill or XIAOMAO_SKILL_NAME
+    character = require_character_by_skill(db, user_id=user_id, skill_name=illustration_skill)
     model = resolve_wechat_mp_model(db=db, user_id=user_id, model_type="text")
     selected_materials = _load_selected_materials(db, user_id, request.material_ids)
     result = _call_writer_model(
@@ -127,8 +129,6 @@ def generate_wechat_article(*, db: Session, user_id: int, request: WechatMpArtic
         base_url=model.base_url,
         api_key=model.api_key,
     )
-    illustration_skill = request.illustration_skill or XIAOMAO_SKILL_NAME
-    character = resolve_character_by_skill(db, user_id=user_id, skill_name=illustration_skill)
     cover_brief = canonicalize_character_prompt(
         character,
         result["cover_brief"],

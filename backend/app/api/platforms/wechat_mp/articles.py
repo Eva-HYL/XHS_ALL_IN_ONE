@@ -27,8 +27,10 @@ from backend.app.services.wechat_mp_image_prompt_service import (
 )
 from backend.app.services.wechat_mp_character_service import (
     NONE_SKILL_NAME,
+    WechatMpIllustrationSkillError,
     canonicalize_character_prompt,
     parse_character_mention,
+    require_character_by_skill,
     resolve_confirmed_character_anchor,
     resolve_character_by_skill,
 )
@@ -104,6 +106,8 @@ def create_article(payload: WechatMpArticleCreateRequest, current_user: User = D
         return generate_wechat_article(db=db, user_id=current_user.id, request=payload)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except WechatMpIllustrationSkillError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
@@ -165,6 +169,14 @@ def update_article(article_id: int, payload: WechatMpArticleUpdateRequest, curre
     if markdown_changed:
         article.markdown_body = payload.markdown_body or ""
     if skill_changed:
+        try:
+            require_character_by_skill(
+                db,
+                user_id=current_user.id,
+                skill_name=payload.illustration_skill or article.illustration_skill,
+            )
+        except WechatMpIllustrationSkillError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         previous_character = db.scalar(select(WechatMpIllustrationCharacter).where(
             WechatMpIllustrationCharacter.user_id == current_user.id,
             WechatMpIllustrationCharacter.skill_name == article.illustration_skill,
@@ -206,6 +218,8 @@ def create_prompts(
             article_id=article.id,
             skill_name=payload.skill_name if payload else None,
         )
+    except WechatMpIllustrationSkillError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
@@ -360,5 +374,7 @@ def regenerate_prompt(
     prompt = _get_owned_prompt(db, article, prompt_id)
     try:
         return regenerate_image_prompt(db=db, prompt=prompt, article=article)
+    except WechatMpIllustrationSkillError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc

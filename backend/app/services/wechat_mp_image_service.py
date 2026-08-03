@@ -336,6 +336,7 @@ def generate_cover_asset(
     from backend.app.services.wechat_mp_character_service import (
         NONE_SKILL_NAME,
         canonicalize_character_prompt,
+        resolve_character_by_skill,
         resolve_confirmed_character_anchor,
         resolve_prompt_character,
     )
@@ -348,11 +349,17 @@ def generate_cover_asset(
         )
         reference_images = None
     else:
+        selected_character = resolve_character_by_skill(
+            db,
+            user_id=user_id,
+            skill_name=article.illustration_skill,
+        )
         character, scene_prompt = resolve_prompt_character(
             db,
             user_id=user_id,
             default_skill_name=article.illustration_skill,
             text=article.cover_brief or article.title,
+            default_character_id=selected_character.id if selected_character is not None else None,
         )
         anchor = resolve_confirmed_character_anchor(
             db,

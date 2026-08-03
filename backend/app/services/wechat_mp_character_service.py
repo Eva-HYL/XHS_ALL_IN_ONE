@@ -34,6 +34,10 @@ XIAOMAO_PROMPT = (
 )
 
 
+class WechatMpIllustrationSkillError(ValueError):
+    """Raised when a request references an unavailable illustration skill."""
+
+
 def _character_dir(user_id: int) -> Path:
     path = Path(get_settings().storage_dir) / "character-images" / f"u{user_id}"
     path.mkdir(parents=True, exist_ok=True)
@@ -286,6 +290,18 @@ def resolve_character_by_skill(
         WechatMpIllustrationCharacter.skill_name == skill_name,
         WechatMpIllustrationCharacter.archived_at.is_(None),
     ))
+
+
+def require_character_by_skill(
+    db: Session,
+    *,
+    user_id: int,
+    skill_name: str,
+) -> WechatMpIllustrationCharacter | None:
+    character = resolve_character_by_skill(db, user_id=user_id, skill_name=skill_name)
+    if skill_name != NONE_SKILL_NAME and character is None:
+        raise WechatMpIllustrationSkillError("Selected illustration skill is not available")
+    return character
 
 
 def resolve_confirmed_character_anchor(db: Session, *, user_id: int, character_id: int | None = None, skill_name: str | None = None) -> tuple[WechatMpIllustrationCharacter, list[str]] | None:
