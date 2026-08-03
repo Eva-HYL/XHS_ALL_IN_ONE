@@ -1473,6 +1473,16 @@ def test_wechat_mp_writer_cover_generation_is_independent_and_inline_previewed()
     assert "loading={promptBusy}" in source
 
 
+def test_wechat_writer_shows_hoverable_character_mentions_for_cover_and_inline_prompts():
+    source = Path("frontend/src/pages/platforms/wechat-mp/writer-page.tsx").read_text()
+
+    assert "Tooltip" in source
+    assert "character.prompt" in source
+    assert "主角：@" in source
+    assert "replaceCharacterMention" in source
+    assert source.count("characterMentionBadge") >= 2
+
+
 def test_wechat_mp_character_page_exposes_custom_archive_action():
     source = Path("frontend/src/pages/platforms/wechat-mp/characters-page.tsx").read_text(encoding="utf-8")
     api_source = Path("frontend/src/lib/api.ts").read_text(encoding="utf-8")
