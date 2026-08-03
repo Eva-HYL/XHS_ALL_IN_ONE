@@ -3206,6 +3206,35 @@ def test_wechat_mp_adapter_requests_access_token(monkeypatch):
     ]
 
 
+def test_wechat_mp_adapter_routes_only_wechat_requests_through_configured_proxy(monkeypatch):
+    from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiAdapter
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {"access_token": "token-value", "expires_in": 7200}
+
+    def fake_get(url, **kwargs):
+        captured.update({"url": url, **kwargs})
+        return FakeResponse()
+
+    monkeypatch.setattr("requests.get", fake_get)
+
+    WechatMpApiAdapter(proxy_url="http://proxy-user:proxy-pass@203.0.113.10:3128").get_access_token(
+        app_id="wx123",
+        app_secret="secret-value",
+    )
+
+    assert captured["url"].startswith("https://api.weixin.qq.com/")
+    assert captured["proxies"] == {
+        "http": "http://proxy-user:proxy-pass@203.0.113.10:3128",
+        "https": "http://proxy-user:proxy-pass@203.0.113.10:3128",
+    }
+
+
 def test_wechat_mp_adapter_raises_for_wechat_error(monkeypatch):
     from backend.app.adapters.wechat_mp.api_adapter import WechatMpApiAdapter, WechatMpApiError
 
