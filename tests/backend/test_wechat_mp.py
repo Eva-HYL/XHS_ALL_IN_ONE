@@ -138,6 +138,13 @@ def test_character_mention_rejects_multiple_primary_characters():
         parse_character_mention("主角：@小猫生图\n主角：@护士兔")
 
 
+def test_character_mention_rejects_duplicate_primary_character_lines():
+    from backend.app.services.wechat_mp_character_service import parse_character_mention
+
+    with pytest.raises(ValueError, match="one primary"):
+        parse_character_mention("主角：@小猫生图\n主角：@小猫生图")
+
+
 def test_image_prompt_section_index_matches_migration(monkeypatch):
     from backend.app.models.wechat_mp import WechatMpImagePrompt
 

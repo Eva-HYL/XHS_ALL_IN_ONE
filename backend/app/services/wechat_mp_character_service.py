@@ -74,7 +74,7 @@ def format_character_prompt(character: WechatMpIllustrationCharacter, scene_prom
 
 def parse_character_mention(text: str) -> tuple[str | None, str]:
     names = CHARACTER_MENTION_RE.findall(text)
-    if len(set(names)) > 1:
+    if len(names) > 1:
         raise ValueError("Each prompt supports one primary @character mention")
     name = names[0] if names else None
     cleaned = CHARACTER_MENTION_RE.sub("", text).strip()
