@@ -303,15 +303,39 @@ def resolve_confirmed_character_anchor(db: Session, *, user_id: int, character_i
     return character, urls
 
 
-def resolve_prompt_character(db: Session, *, user_id: int, default_skill_name: str, text: str) -> tuple[WechatMpIllustrationCharacter | None, str]:
+def resolve_prompt_character(
+    db: Session,
+    *,
+    user_id: int,
+    default_skill_name: str,
+    text: str,
+    default_character_id: int | None = None,
+) -> tuple[WechatMpIllustrationCharacter | None, str]:
     name, cleaned = parse_character_mention(text)
     if name is None:
-        anchor = resolve_confirmed_character_anchor(db, user_id=user_id, skill_name=default_skill_name)
+        anchor = resolve_confirmed_character_anchor(
+            db,
+            user_id=user_id,
+            character_id=default_character_id,
+            skill_name=None if default_character_id else default_skill_name,
+        )
         return (anchor[0] if anchor else None), cleaned
-    character = db.scalar(select(WechatMpIllustrationCharacter).where(
-        WechatMpIllustrationCharacter.user_id == user_id, WechatMpIllustrationCharacter.name == name,
-    ))
-    if character is None:
+    if default_character_id is not None:
+        default_character = get_owned_character(db, user_id, default_character_id)
+        if default_character.archived_at is not None:
+            raise ValueError("Selected character is not available")
+        if default_character.name == name:
+            resolve_confirmed_character_anchor(db, user_id=user_id, character_id=default_character.id)
+            return default_character, cleaned
+    matches = db.scalars(select(WechatMpIllustrationCharacter).where(
+        WechatMpIllustrationCharacter.user_id == user_id,
+        WechatMpIllustrationCharacter.name == name,
+        WechatMpIllustrationCharacter.archived_at.is_(None),
+    )).all()
+    if not matches:
         raise ValueError("Mentioned character was not found")
+    if len(matches) > 1:
+        raise ValueError("Ambiguous character mention; select a character from the confirmed character picker")
+    character = matches[0]
     resolve_confirmed_character_anchor(db, user_id=user_id, character_id=character.id)
     return character, cleaned

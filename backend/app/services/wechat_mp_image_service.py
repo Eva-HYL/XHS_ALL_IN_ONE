@@ -228,7 +228,11 @@ def generate_asset_for_prompt(
     from backend.app.services.wechat_mp_character_service import resolve_confirmed_character_anchor, resolve_prompt_character
 
     character, scene_prompt = resolve_prompt_character(
-        db, user_id=user_id, default_skill_name=prompt.skill_name, text=prompt.editable_prompt,
+        db,
+        user_id=user_id,
+        default_skill_name=prompt.skill_name,
+        text=prompt.editable_prompt,
+        default_character_id=prompt.character_id,
     )
     anchor = resolve_confirmed_character_anchor(
         db, user_id=user_id, character_id=character.id if character else None, skill_name=None if character else prompt.skill_name,

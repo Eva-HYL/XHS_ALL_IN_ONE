@@ -1491,6 +1491,9 @@ def test_wechat_writer_hides_none_badges_and_persists_confirmed_character_select
     assert 'skill_name: character.skill_name' in source
     assert "updateWechatMpPrompt(prompt.article_id, prompt.id, {" in source
     assert "character.skill_name !== \"none\"" in source
+    assert "value: character.skill_name" in source
+    assert "item.skill_name === skillName" in source
+    assert "setError(errorMessage(err, `段落 #${prompt.section_id} 图片生成失败，请确认图片模型配置。`))" in source
     assert "四视图已确认" in source
     assert "待确认四视图" in source
 
@@ -4313,6 +4316,98 @@ def test_update_prompt_rejects_unconfirmed_or_foreign_character(
         headers=auth_headers,
     )
     assert foreign_response.status_code == 400
+
+
+def test_same_name_characters_keep_selected_identity_and_reject_ambiguous_mentions(
+    api_client, auth_headers, created_wechat_prompt, monkeypatch,
+):
+    from backend.app.models import User, WechatMpCharacterView, WechatMpImagePrompt
+    from backend.app.services import wechat_mp_image_service as image_service
+    from backend.app.services.wechat_mp_character_service import resolve_prompt_character
+
+    client, session_factory = api_client
+    characters = []
+    for prompt in ("同名角色一号契约。", "同名角色二号契约。"):
+        response = client.post(
+            "/api/platforms/wechat-mp/illustration-characters",
+            json={"name": "同名角色", "prompt": prompt},
+            headers=auth_headers,
+        )
+        assert response.status_code == 201
+        characters.append(response.json())
+
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        for character in characters:
+            for view in ("front", "back", "left", "right"):
+                session.add(WechatMpCharacterView(
+                    character_id=character["id"],
+                    user_id=owner.id,
+                    view=view,
+                    public_url=f"/api/platforms/wechat-mp/illustration-characters/files/{character['id']}-{view}.png",
+                    status="confirmed",
+                ))
+        prompt = session.get(WechatMpImagePrompt, created_wechat_prompt.id)
+        prompt.editable_prompt = "主角：@同名角色\n具体画面：自由输入的同名角色"
+        prompt.character_id = None
+        session.commit()
+    finally:
+        session.close()
+
+    session = session_factory()
+    try:
+        with pytest.raises(ValueError, match="Ambiguous character mention"):
+            resolve_prompt_character(
+                session,
+                user_id=created_wechat_prompt.user_id,
+                default_skill_name="xiaomao-illustrations",
+                text="主角：@同名角色\n具体画面：自由输入的同名角色",
+            )
+    finally:
+        session.close()
+
+    selected = characters[1]
+    prompt_url = f"/api/platforms/wechat-mp/articles/{created_wechat_prompt.article_id}/prompts/{created_wechat_prompt.id}"
+    patched = client.patch(
+        prompt_url,
+        json={
+            "editable_prompt": "主角：@同名角色\n具体画面：明确选择第二个角色",
+            "character_id": selected["id"],
+            "skill_name": selected["skill_name"],
+        },
+        headers=auth_headers,
+    )
+    assert patched.status_code == 200
+    assert patched.json()["character_id"] == selected["id"]
+    assert patched.json()["skill_name"] == selected["skill_name"]
+
+    captured = {}
+
+    def fake_generate(**kwargs):
+        captured.update(kwargs)
+        return {
+            "file_path": "/tmp/same-name-character.png",
+            "public_url": "/api/files/media/same-name-character.png",
+            "provider_response": {"ok": True},
+        }
+
+    monkeypatch.setattr(image_service, "_call_image_model", fake_generate)
+    generated = client.post(
+        f"/api/platforms/wechat-mp/prompts/{created_wechat_prompt.id}/image",
+        json={"image_model": "doubao-seedream-4-0-250828", "size": "16:9"},
+        headers=auth_headers,
+    )
+    assert generated.status_code == 201
+    assert "同名角色二号契约" in captured["prompt"]
+    assert "同名角色一号契约" not in captured["prompt"]
+    session = session_factory()
+    try:
+        prompt = session.get(WechatMpImagePrompt, created_wechat_prompt.id)
+        assert prompt.character_id == selected["id"]
+        assert prompt.skill_name == selected["skill_name"]
+    finally:
+        session.close()
 
 
 def test_failed_inline_image_generation_can_retry_with_same_prompt(

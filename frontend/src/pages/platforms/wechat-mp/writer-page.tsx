@@ -350,8 +350,8 @@ export function WechatMpWriterPage() {
     }
   }
 
-  async function selectCharacter(prompt: WechatMpImagePrompt, name: string) {
-    const character = characters.find((item) => item.name === name && item.is_available && item.skill_name !== "none");
+  async function selectCharacter(prompt: WechatMpImagePrompt, skillName: string) {
+    const character = characters.find((item) => item.skill_name === skillName && item.is_available && item.skill_name !== "none");
     if (!character || character.id === null) return;
     const previousPrompt = prompt;
     const editablePrompt = replaceCharacterMention(prompt.editable_prompt, character.name);
@@ -399,8 +399,8 @@ export function WechatMpWriterPage() {
             ? `段落 #${prompt.section_id} 已复用相似提示词的历史图片，未重复扣除图片生成费用。`
             : `段落 #${prompt.section_id} 正文配图已生成并计入实际费用。`
           );
-        } catch {
-          setError(`段落 #${prompt.section_id} 图片生成失败，请确认图片模型配置。`);
+        } catch (err) {
+          setError(errorMessage(err, `段落 #${prompt.section_id} 图片生成失败，请确认图片模型配置。`));
           setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, status: "failed" } : item));
         } finally {
           imageQueueRef.current = imageQueueRef.current.slice(1);
@@ -621,8 +621,8 @@ export function WechatMpWriterPage() {
                       placeholder="@已确认形象"
                       style={{ minWidth: 150 }}
                       value={undefined}
-                      options={characters.filter((character) => character.is_available && character.skill_name !== "none").map((character) => ({ value: character.name, label: `@${character.name}` }))}
-                      onChange={(name) => name && void selectCharacter(prompt, name)}
+                      options={characters.filter((character) => character.is_available && character.skill_name !== "none").map((character) => ({ value: character.skill_name, label: `@${character.name}` }))}
+                      onChange={(skillName) => skillName && void selectCharacter(prompt, skillName)}
                     />
                     <Button onClick={() => void regenerate(prompt)} loading={promptBusy}>重新生成提示词</Button>
                     <Button
