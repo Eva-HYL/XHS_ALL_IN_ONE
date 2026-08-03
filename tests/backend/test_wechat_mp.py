@@ -145,6 +145,86 @@ def test_character_mention_rejects_duplicate_primary_character_lines():
         parse_character_mention("主角：@小猫生图\n主角：@小猫生图")
 
 
+def test_character_mention_backfill_is_idempotent_and_preserves_generated_data(
+    api_client, auth_headers, created_wechat_prompt,
+):
+    from backend.app.models import (
+        UsageRecord,
+        User,
+        WechatMpArticle,
+        WechatMpAsset,
+        WechatMpImagePrompt,
+    )
+    from backend.app.services.wechat_mp_character_service import XIAOMAO_PROMPT, ensure_builtin_character
+    from backend.app.services.wechat_mp_character_mention_backfill import backfill_character_mentions
+
+    legacy_builtin_prompt = XIAOMAO_PROMPT.replace(
+        "轻微抖动的手绘线稿；",
+        "轻微抖动的手绘线稿，少量浅橙、红、蓝批注；",
+    )
+    _, session_factory = api_client
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        character = ensure_builtin_character(session, owner.id)
+        article = session.get(WechatMpArticle, created_wechat_prompt.article_id)
+        article.cover_brief = f"{XIAOMAO_PROMPT}\n小猫压住计划表"
+        article.html_body = "<p>已经插入的正文图片</p>"
+        article.cost_estimate = {"currency": "CNY", "total_yuan": "1.2345", "calls": 2}
+        prompt = session.get(WechatMpImagePrompt, created_wechat_prompt.id)
+        prompt.character_id = character.id
+        prompt.skill_name = character.skill_name
+        prompt.prompt = f"{legacy_builtin_prompt}\n小猫整理便签"
+        prompt.editable_prompt = prompt.prompt
+        prompt.cost_estimate = {"currency": "CNY", "total_yuan": "0.1234", "calls": 1}
+        asset = WechatMpAsset(
+            user_id=owner.id,
+            article_id=article.id,
+            prompt_id=prompt.id,
+            role="inline_illustration",
+            file_path="/tmp/generated-before-backfill.png",
+            public_url="/api/files/media/generated-before-backfill.png",
+            prompt="生成时的完整提示词",
+            skill_name=character.skill_name,
+            model_name="test-model",
+            status="generated",
+        )
+        usage = UsageRecord(
+            user_id=owner.id,
+            platform="wechat_mp",
+            resource_type="wechat_mp_article",
+            resource_id=article.id,
+            step="generate_image_prompt",
+            model="test-model",
+            input_tokens=10,
+            output_tokens=20,
+        )
+        session.add_all((asset, usage))
+        session.commit()
+        original_public_url = asset.public_url
+        original_html = article.html_body
+        original_article_cost = article.cost_estimate.copy()
+        original_prompt_cost = prompt.cost_estimate.copy()
+        original_usage_id = usage.id
+
+        first = backfill_character_mentions(session, user_id=owner.id)
+        second = backfill_character_mentions(session, user_id=owner.id)
+
+        assert first == {"articles_updated": 1, "prompts_updated": 1}
+        assert second == {"articles_updated": 0, "prompts_updated": 0}
+        assert article.cover_brief.startswith("主角：@小猫生图")
+        assert prompt.editable_prompt.startswith("主角：@小猫生图")
+        assert "主角必须是一只胖胖慵懒" not in prompt.editable_prompt
+        assert prompt.prompt == prompt.editable_prompt
+        assert session.get(WechatMpAsset, asset.id).public_url == original_public_url
+        assert article.html_body == original_html
+        assert article.cost_estimate == original_article_cost
+        assert prompt.cost_estimate == original_prompt_cost
+        assert session.get(UsageRecord, original_usage_id) is not None
+    finally:
+        session.close()
+
+
 def test_image_prompt_section_index_matches_migration(monkeypatch):
     from backend.app.models.wechat_mp import WechatMpImagePrompt
 
