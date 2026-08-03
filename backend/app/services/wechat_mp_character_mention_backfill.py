@@ -10,6 +10,7 @@ from backend.app.services.wechat_mp_character_service import (
     XIAOMAO_PROMPT,
     XIAOMAO_SKILL_NAME,
     format_character_prompt,
+    parse_character_mention,
     resolve_character_by_skill,
 )
 
@@ -30,13 +31,31 @@ _LEGACY_XIAOMAO_PROMPT_PREFIXES = (
 
 
 def _strip_expanded_character_prefix(character: WechatMpIllustrationCharacter, text: str) -> str:
+    _, cleaned = parse_character_mention(text)
+    cleaned = cleaned.strip()
+    candidate = cleaned.removeprefix("具体画面：").lstrip()
     prefixes = [character.prompt]
     if character.skill_name == XIAOMAO_SKILL_NAME:
         prefixes.extend((XIAOMAO_PROMPT, *_LEGACY_XIAOMAO_PROMPT_PREFIXES))
-    cleaned = text.strip()
     for prefix in sorted(set(prefixes), key=len, reverse=True):
-        if cleaned.startswith(prefix):
-            return cleaned[len(prefix):].lstrip()
+        if candidate.startswith(prefix):
+            return candidate[len(prefix):].lstrip()
+
+    # Early generated prompts wrapped older built-in contracts in 具体画面： and
+    # used several wording variants. Keep the scene payload from the first
+    # stable structural marker instead of relying on an exact legacy sentence.
+    if (
+        character.skill_name == XIAOMAO_SKILL_NAME
+        and candidate.startswith("白色背景")
+        and "主角必须是一只胖胖慵懒" in candidate
+    ):
+        marker_positions = [
+            candidate.find(marker)
+            for marker in ("\n图解硬约束：", "\n文章：", "\n场景：")
+            if candidate.find(marker) >= 0
+        ]
+        if marker_positions:
+            return candidate[min(marker_positions):].lstrip()
     return cleaned
 
 

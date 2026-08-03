@@ -174,8 +174,15 @@ def test_character_mention_backfill_is_idempotent_and_preserves_generated_data(
         prompt = session.get(WechatMpImagePrompt, created_wechat_prompt.id)
         prompt.character_id = character.id + 10_000
         prompt.skill_name = character.skill_name
-        prompt.prompt = f"{XIAOMAO_PROMPT}\n小猫整理便签"
-        prompt.editable_prompt = f"{legacy_builtin_prompt}\n小猫整理便签"
+        wrapped_legacy_prompt = (
+            "主角：@小猫生图\n"
+            f"具体画面：{legacy_builtin_prompt}\n"
+            "图解硬约束：保留流程节点\n"
+            "文章：项目管理\n"
+            "场景：小猫整理便签"
+        )
+        prompt.prompt = wrapped_legacy_prompt
+        prompt.editable_prompt = wrapped_legacy_prompt
         prompt.cost_estimate = {"currency": "CNY", "total_yuan": "0.1234", "calls": 1}
         asset = WechatMpAsset(
             user_id=owner.id,
@@ -215,6 +222,7 @@ def test_character_mention_backfill_is_idempotent_and_preserves_generated_data(
         assert article.cover_brief.startswith("主角：@小猫生图")
         assert prompt.editable_prompt.startswith("主角：@小猫生图")
         assert "主角必须是一只胖胖慵懒" not in prompt.editable_prompt
+        assert "图解硬约束：保留流程节点" in prompt.editable_prompt
         assert prompt.prompt == prompt.editable_prompt
         assert session.get(WechatMpAsset, asset.id).public_url == original_public_url
         assert article.html_body == original_html
