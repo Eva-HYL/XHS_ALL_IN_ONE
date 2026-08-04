@@ -453,8 +453,14 @@ def created_wechat_article(api_client, auth_headers):
         article = WechatMpArticle(
             user_id=owner.id,
             title="稳定输出",
-            markdown_body="## 问题\n总在计划开始时消耗精力。\n\n## 方法\n先做最小动作。",
-            html_body="<h2>问题</h2><p>总在计划开始时消耗精力。</p><h2>方法</h2><p>先做最小动作。</p>",
+            markdown_body=(
+                "## 问题\n计划开始时消耗精力的核心问题，是任务入口太多而无法选择。\n\n"
+                "## 方法\n解决方法是先做最小动作，再根据结果决定下一步。"
+            ),
+            html_body=(
+                "<h2>问题</h2><p>计划开始时消耗精力的核心问题，是任务入口太多而无法选择。</p>"
+                "<h2>方法</h2><p>解决方法是先做最小动作，再根据结果决定下一步。</p>"
+            ),
             digest="稳定输出的方法",
             cover_brief="小猫压住计划表",
             status="layout_ready",
@@ -466,6 +472,21 @@ def created_wechat_article(api_client, auth_headers):
         return article
     finally:
         session.close()
+
+
+def _successful_prompt_batch(candidates, *, prompt="一只小猫整理便签", input_tokens=12, output_tokens=24):
+    from backend.app.services.wechat_mp_prompt_batch_service import BatchPromptItem, BatchPromptResult
+
+    return BatchPromptResult(
+        items=tuple(
+            BatchPromptItem(candidate_id=str(candidate.source_index), prompt=prompt)
+            for candidate in candidates
+        ),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        model_name="qwen3.7-max",
+        model_calls=1,
+    )
 
 
 @pytest.fixture
@@ -1144,8 +1165,8 @@ def test_generate_wechat_mp_image_saves_only_wechat_asset_and_backfills_article(
 
     monkeypatch.setattr(
         prompt_service,
-        "_call_prompt_model",
-        lambda **kwargs: {"prompt": "一只小猫开始最小动作", "input_tokens": 12, "output_tokens": 24, "model_name": kwargs["model_name"]},
+        "generate_semantic_prompts",
+        lambda **kwargs: _successful_prompt_batch(kwargs["candidates"], prompt="一只小猫开始最小动作"),
     )
 
     def fake_generate(*, prompt, model_name, size, **kwargs):
@@ -1165,7 +1186,7 @@ def test_generate_wechat_mp_image_saves_only_wechat_asset_and_backfills_article(
         headers=auth_headers,
     )
     assert prompts_response.status_code == 201
-    prompts = prompts_response.json()
+    prompts = prompts_response.json()["items"]
     prompt_id = prompts[0]["id"]
     html_body = client.get(
         f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers
@@ -1804,11 +1825,11 @@ def test_custom_wechat_mp_character_prompt_is_used_for_image_prompt(api_client, 
     skill_name = created.json()["skill_name"]
     captured = {}
 
-    def fake_prompt_call(*, article_title, section_summary, skill_name, model_name, **kwargs):
-        captured["prompt_contract"] = prompt_service.build_skill_prompt(skill_name, article_title, section_summary, db=kwargs["db"], user_id=kwargs["user_id"])
-        return {"prompt": "画面：小护士指向流程图", "input_tokens": 12, "output_tokens": 24, "model_name": model_name}
+    def fake_prompt_batch(**kwargs):
+        captured["character_prompt"] = kwargs["character"].prompt
+        return _successful_prompt_batch(kwargs["candidates"], prompt="画面：小护士指向流程图")
 
-    monkeypatch.setattr(prompt_service, "_call_prompt_model", fake_prompt_call)
+    monkeypatch.setattr(prompt_service, "generate_semantic_prompts", fake_prompt_batch)
     response = client.post(
         f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts",
         json={"skill_name": skill_name},
@@ -1816,8 +1837,8 @@ def test_custom_wechat_mp_character_prompt_is_used_for_image_prompt(api_client, 
     )
 
     assert response.status_code == 201
-    assert response.json()[0]["skill_name"] == skill_name
-    assert "主角是一名小护士" in captured["prompt_contract"]
+    assert response.json()["items"][0]["skill_name"] == skill_name
+    assert "主角是一名小护士" in captured["character_prompt"]
 
 
 def test_wechat_mp_writer_can_select_materials_from_library():
@@ -2080,16 +2101,16 @@ def test_create_wechat_mp_article_can_use_material_library_items(api_client, aut
 def test_generate_prompts_defaults_to_xiaomao_skill(api_client, auth_headers, created_wechat_article, monkeypatch):
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
 
-    def fake_prompt_call(*, article_title, section_summary, skill_name, model_name, **kwargs):
-        assert skill_name == "xiaomao-illustrations"
-        return {
-            "prompt": "Generate one 16:9 Chinese article illustration. 小猫 lazily presses a messy note stack.",
-            "input_tokens": 50,
-            "output_tokens": 80,
-            "model_name": model_name,
-        }
+    def fake_prompt_batch(**kwargs):
+        assert kwargs["character"].skill_name == "xiaomao-illustrations"
+        return _successful_prompt_batch(
+            kwargs["candidates"],
+            prompt="Generate one 16:9 Chinese article illustration. 小猫 lazily presses a messy note stack.",
+            input_tokens=50,
+            output_tokens=80,
+        )
 
-    monkeypatch.setattr(prompt_service, "_call_prompt_model", fake_prompt_call)
+    monkeypatch.setattr(prompt_service, "generate_semantic_prompts", fake_prompt_batch)
     client, _ = api_client
     response = client.post(
         f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts",
@@ -2097,7 +2118,7 @@ def test_generate_prompts_defaults_to_xiaomao_skill(api_client, auth_headers, cr
     )
 
     assert response.status_code == 201
-    data = response.json()
+    data = response.json()["items"]
     assert data[0]["skill_name"] == "xiaomao-illustrations"
     assert "小猫" in data[0]["prompt"]
     assert data[0]["status"] == "prompt_ready"
@@ -2127,19 +2148,20 @@ def test_generate_prompts_creates_shotlist_and_records_article_usage(api_client,
 
     monkeypatch.setattr(
         prompt_service,
-        "_call_prompt_model",
-        lambda **kwargs: {"prompt": "一只小猫整理便签", "input_tokens": 12, "output_tokens": 24, "model_name": kwargs["model_name"]},
+        "generate_semantic_prompts",
+        lambda **kwargs: _successful_prompt_batch(kwargs["candidates"]),
     )
     client, session_factory = api_client
     response = client.post(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts", headers=auth_headers)
 
     assert response.status_code == 201
-    assert 1 <= len(response.json()) <= 8
-    assert all(prompt["cost_estimate"]["total_yuan"] != "" for prompt in response.json())
+    items = response.json()["items"]
+    assert 1 <= len(items) <= 8
+    assert all(prompt["cost_estimate"]["total_yuan"] != "" for prompt in items)
     session = session_factory()
     try:
-        usages = session.query(UsageRecord).filter_by(step="generate_image_prompt").all()
-        assert len(usages) == len(response.json())
+        usages = session.query(UsageRecord).filter_by(step="generate_image_prompts_batch").all()
+        assert len(usages) == 1
         assert all(usage.platform == "wechat_mp" for usage in usages)
         assert all(usage.resource_type == "wechat_mp_article" for usage in usages)
         assert all(usage.resource_id == created_wechat_article.id for usage in usages)
@@ -2238,7 +2260,7 @@ def test_deterministic_prompts_use_no_model_calls_or_text_usage(api_client, auth
     response = client.post(f"/api/platforms/wechat-mp/articles/{article_id}/prompts", headers=auth_headers)
 
     assert response.status_code == 201
-    assert [item["cost_estimate"] for item in response.json()] == [
+    assert [item["cost_estimate"] for item in response.json()["items"]] == [
         {"currency": "CNY", "total_yuan": "0.0000", "calls": 0},
         {"currency": "CNY", "total_yuan": "0.0000", "calls": 0},
     ]
@@ -2308,8 +2330,8 @@ def test_article_patch_preserves_moved_deterministic_prompt_ids_and_cleans_stale
 
     first = client.post(f"/api/platforms/wechat-mp/articles/{article_id}/prompts", headers=auth_headers)
     assert first.status_code == 201
-    retained_prompt_id = first.json()[1]["id"]
-    stale_prompt_id = first.json()[0]["id"]
+    retained_prompt_id = first.json()["items"][1]["id"]
+    stale_prompt_id = first.json()["items"][0]["id"]
     updated = client.patch(
         f"/api/platforms/wechat-mp/articles/{article_id}",
         json={"markdown_body": "收集乙 → 分析乙 → 确认乙"},
@@ -2319,7 +2341,7 @@ def test_article_patch_preserves_moved_deterministic_prompt_ids_and_cleans_stale
 
     regenerated = client.post(f"/api/platforms/wechat-mp/articles/{article_id}/prompts", headers=auth_headers)
     assert regenerated.status_code == 201
-    assert [item["id"] for item in regenerated.json()] == [retained_prompt_id]
+    assert [item["id"] for item in regenerated.json()["items"]] == [retained_prompt_id]
     assert [item["id"] for item in client.get(
         f"/api/platforms/wechat-mp/articles/{article_id}/prompts", headers=auth_headers,
     ).json()] == [retained_prompt_id]
@@ -2357,8 +2379,8 @@ def test_duplicate_deterministic_blocks_keep_distinct_prompt_ids_across_reruns(
 
     assert first.status_code == 201
     assert second.status_code == 201
-    assert len({item["id"] for item in first.json()}) == 2
-    assert [item["id"] for item in second.json()] == [item["id"] for item in first.json()]
+    assert len({item["id"] for item in first.json()["items"]}) == 2
+    assert [item["id"] for item in second.json()["items"]] == [item["id"] for item in first.json()["items"]]
     session = session_factory()
     try:
         assert session.query(WechatMpArticleSection).filter_by(article_id=article_id).count() == 2
@@ -2393,7 +2415,7 @@ def test_article_patch_blocks_stale_prompt_image_generation_until_reconciliation
 
     generated = client.post(f"/api/platforms/wechat-mp/articles/{article_id}/prompts", headers=auth_headers)
     assert generated.status_code == 201
-    prompt_id = generated.json()[0]["id"]
+    prompt_id = generated.json()["items"][0]["id"]
     updated = client.patch(
         f"/api/platforms/wechat-mp/articles/{article_id}",
         json={"markdown_body": "收集新需求 → 分析新需求 → 确认新需求"},
@@ -2436,14 +2458,7 @@ def test_none_generation_and_regeneration_never_call_models_or_write_usage(api_c
         headers=auth_headers,
     )
     assert generated.status_code == 201
-    assert all(item["status"] == "skipped" and item["cost_estimate"]["calls"] == 0 for item in generated.json())
-    regenerated = client.post(
-        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts/{generated.json()[0]['id']}/regenerate",
-        headers=auth_headers,
-    )
-    assert regenerated.status_code == 200
-    assert regenerated.json()["status"] == "skipped"
-    assert regenerated.json()["cost_estimate"]["calls"] == 0
+    assert generated.json()["items"] == []
     session = session_factory()
     try:
         assert session.query(UsageRecord).filter_by(step="generate_image_prompt").count() == 0
@@ -2478,7 +2493,7 @@ def test_regenerate_deterministic_prompt_never_calls_a_text_model(api_client, au
     monkeypatch.setattr(model_service, "resolve_wechat_mp_model", lambda **kwargs: pytest.fail("deterministic prompts must not resolve a model"))
 
     regenerated = client.post(
-        f"/api/platforms/wechat-mp/articles/{article_id}/prompts/{generated.json()[0]['id']}/regenerate",
+        f"/api/platforms/wechat-mp/articles/{article_id}/prompts/{generated.json()['items'][0]['id']}/regenerate",
         headers=auth_headers,
     )
     assert regenerated.status_code == 200
@@ -2504,13 +2519,13 @@ def test_generation_fingerprint_separates_missing_character_skills_and_updates_a
     db_session.add(article)
     db_session.commit()
     calls = []
-    monkeypatch.setattr(
-        prompt_service,
-        "_call_prompt_model",
-        lambda **kwargs: calls.append(kwargs["skill_name"]) or {
-            "prompt": kwargs["skill_name"], "input_tokens": 1, "output_tokens": 1, "model_name": kwargs["model_name"],
-        },
-    )
+
+    def fake_batch(**kwargs):
+        skill = f"missing-skill-{'a' if not calls else 'b'}"
+        calls.append(skill)
+        return _successful_prompt_batch(kwargs["candidates"], prompt=skill, input_tokens=1, output_tokens=1)
+
+    monkeypatch.setattr(prompt_service, "generate_semantic_prompts", fake_batch)
 
     first = prompt_service.generate_image_prompts(
         db=db_session, user_id=test_user.id, article_id=article.id, skill_name="missing-skill-a",
@@ -2532,8 +2547,8 @@ def test_generating_prompts_twice_reuses_prompts_and_placeholders(api_client, au
 
     monkeypatch.setattr(
         prompt_service,
-        "_call_prompt_model",
-        lambda **kwargs: {"prompt": f"提示词：{kwargs['section_summary']}", "input_tokens": 12, "output_tokens": 24, "model_name": kwargs["model_name"]},
+        "generate_semantic_prompts",
+        lambda **kwargs: _successful_prompt_batch(kwargs["candidates"], prompt="提示词：稳定输出"),
     )
     client, session_factory = api_client
 
@@ -2542,12 +2557,14 @@ def test_generating_prompts_twice_reuses_prompts_and_placeholders(api_client, au
 
     assert first.status_code == 201
     assert second.status_code == 201
-    assert [prompt["id"] for prompt in second.json()] == [prompt["id"] for prompt in first.json()]
+    first_items = first.json()["items"]
+    second_items = second.json()["items"]
+    assert [prompt["id"] for prompt in second_items] == [prompt["id"] for prompt in first_items]
     html_body = client.get(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers).json()["html_body"]
-    assert all(html_body.count(f"{{{{image:prompt-{prompt['id']}}}}}") == 1 for prompt in second.json())
+    assert all(html_body.count(f"{{{{image:prompt-{prompt['id']}}}}}") == 1 for prompt in second_items)
     session = session_factory()
     try:
-        assert session.query(WechatMpImagePrompt).filter_by(article_id=created_wechat_article.id).count() == len(first.json())
+        assert session.query(WechatMpImagePrompt).filter_by(article_id=created_wechat_article.id).count() == len(first_items)
     finally:
         session.close()
 
@@ -2559,8 +2576,8 @@ def test_regenerating_embedded_prompt_restores_marker_for_next_image(api_client,
 
     monkeypatch.setattr(
         prompt_service,
-        "_call_prompt_model",
-        lambda **kwargs: {"prompt": "第一版提示词", "input_tokens": 12, "output_tokens": 24, "model_name": kwargs["model_name"]},
+        "generate_semantic_prompts",
+        lambda **kwargs: _successful_prompt_batch(kwargs["candidates"], prompt="第一版提示词"),
     )
     generated_urls = iter(("/api/files/media/wechat-mp-first.png", "/api/files/media/wechat-mp-second.png"))
     monkeypatch.setattr(
@@ -2571,7 +2588,7 @@ def test_regenerating_embedded_prompt_restores_marker_for_next_image(api_client,
     client, session_factory = api_client
     created = client.post(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts", headers=auth_headers)
     assert created.status_code == 201
-    prompt_id = created.json()[0]["id"]
+    prompt_id = created.json()["items"][0]["id"]
 
     first_image = client.post(
         f"/api/platforms/wechat-mp/prompts/{prompt_id}/image",
@@ -2610,28 +2627,22 @@ def test_regenerating_embedded_prompt_restores_marker_for_next_image(api_client,
         session.close()
 
 
-def test_generate_prompts_records_completed_calls_when_a_later_model_call_fails(api_client, auth_headers, created_wechat_article, monkeypatch):
+def test_generate_prompts_rolls_back_when_the_semantic_batch_fails(api_client, auth_headers, created_wechat_article, monkeypatch):
     from backend.app.models import UsageRecord, WechatMpArticle, WechatMpArticleSection, WechatMpImagePrompt
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
 
-    calls = 0
+    from backend.app.services.wechat_mp_prompt_batch_service import BatchPromptResult
 
-    def fake_prompt_call(**kwargs):
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            raise ValueError("prompt provider failed")
-        return {"prompt": "一只小猫整理便签", "input_tokens": 12, "output_tokens": 24, "model_name": kwargs["model_name"]}
-
-    monkeypatch.setattr(prompt_service, "_call_prompt_model", fake_prompt_call)
+    monkeypatch.setattr(
+        prompt_service,
+        "generate_semantic_prompts",
+        lambda **kwargs: BatchPromptResult((), 0, 0, "qwen3.7-max", 1),
+    )
     client, session_factory = api_client
     session = session_factory()
     try:
         article = session.get(WechatMpArticle, created_wechat_article.id)
-        article.markdown_body = (
-            "问题：总在计划开始时消耗精力。\n\n"
-            "方法：先做最小动作，让任务可以立刻进入下一步。"
-        )
+        article.markdown_body = "核心问题是计划入口太多，解决方法是先做最小动作并根据结果选择下一步。"
         session.commit()
     finally:
         session.close()
@@ -2640,39 +2651,33 @@ def test_generate_prompts_records_completed_calls_when_a_later_model_call_fails(
     assert response.status_code == 502
     session = session_factory()
     try:
-        assert session.query(WechatMpArticleSection).filter_by(article_id=created_wechat_article.id).count() >= 2
-        assert session.query(WechatMpImagePrompt).filter_by(article_id=created_wechat_article.id).count() == 1
-        assert session.query(UsageRecord).filter_by(resource_id=created_wechat_article.id, step="generate_image_prompt").count() == 1
+        assert session.query(WechatMpArticleSection).filter_by(article_id=created_wechat_article.id).count() == 0
+        assert session.query(WechatMpImagePrompt).filter_by(article_id=created_wechat_article.id).count() == 0
+        assert session.query(UsageRecord).filter_by(resource_id=created_wechat_article.id).count() == 0
     finally:
         session.close()
 
 
-@pytest.mark.parametrize(
-    "payload",
-    [
-        {"choices": [{"message": {"content": None}}], "usage": {"prompt_tokens": 1, "completion_tokens": 1}},
-        {"choices": [{"message": {"content": "一只小猫整理便签"}}], "usage": {"prompt_tokens": None, "completion_tokens": 1}},
-        {"choices": [{"message": {"content": "一只小猫整理便签"}}], "usage": {"prompt_tokens": 1.75, "completion_tokens": 1}},
-    ],
-)
-def test_generate_prompts_returns_502_for_malformed_prompt_model_output(api_client, auth_headers, created_wechat_article, monkeypatch, payload):
+def test_generate_prompts_returns_empty_for_semantic_candidates_without_user_model_config(
+    api_client, auth_headers, created_wechat_article, monkeypatch,
+):
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
-
-    class FakeResponse:
-        def raise_for_status(self):
-            return None
-
-        def json(self):
-            return payload
+    from backend.app.services.wechat_mp_prompt_batch_service import BatchPromptResult
 
     monkeypatch.setenv("WECHAT_MP_PROMPT_BASE_URL", "https://prompt.example")
     monkeypatch.setenv("WECHAT_MP_PROMPT_API_KEY", "test-key")
-    monkeypatch.setattr(prompt_service.requests, "post", lambda *args, **kwargs: FakeResponse())
+    monkeypatch.setattr(
+        prompt_service,
+        "generate_semantic_prompts",
+        lambda **kwargs: BatchPromptResult((), 0, 0, None, 0),
+    )
     client, _ = api_client
 
     response = client.post(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts", headers=auth_headers)
 
-    assert response.status_code == 502
+    assert response.status_code == 201
+    assert response.json()["items"] == []
+    assert response.json()["analysis"]["model_calls"] == 0
 
 
 def test_edit_and_regenerate_prompt_increment_version(api_client, auth_headers, created_wechat_article, monkeypatch):
@@ -2680,12 +2685,12 @@ def test_edit_and_regenerate_prompt_increment_version(api_client, auth_headers, 
 
     monkeypatch.setattr(
         prompt_service,
-        "_call_prompt_model",
-        lambda **kwargs: {"prompt": "第一版提示词", "input_tokens": 12, "output_tokens": 24, "model_name": kwargs["model_name"]},
+        "generate_semantic_prompts",
+        lambda **kwargs: _successful_prompt_batch(kwargs["candidates"], prompt="第一版提示词"),
     )
     client, _ = api_client
     created = client.post(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts", headers=auth_headers)
-    prompt_id = created.json()[0]["id"]
+    prompt_id = created.json()["items"][0]["id"]
     marker = f"{{{{image:prompt-{prompt_id}}}}}"
     assert client.get(
         f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers
@@ -2723,12 +2728,12 @@ def test_prompt_endpoints_hide_foreign_article_and_prompt(api_client, auth_heade
 
     monkeypatch.setattr(
         prompt_service,
-        "_call_prompt_model",
-        lambda **kwargs: {"prompt": "提示词", "input_tokens": 1, "output_tokens": 1, "model_name": kwargs["model_name"]},
+        "generate_semantic_prompts",
+        lambda **kwargs: _successful_prompt_batch(kwargs["candidates"], prompt="提示词", input_tokens=1, output_tokens=1),
     )
     client, _ = api_client
     created = client.post(f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts", headers=auth_headers)
-    prompt_id = created.json()[0]["id"]
+    prompt_id = created.json()["items"][0]["id"]
     other = client.post("/api/auth/register", json={"username": "wechat-prompt-other", "password": "secret123"})
     other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
 
@@ -3461,11 +3466,8 @@ def test_prompt_generation_invalidates_synced_article_revision(api_client, auth_
 
     monkeypatch.setattr(
         prompt_service,
-        "_call_prompt_model",
-        lambda **kwargs: {
-            "prompt": "小猫处理新结构", "input_tokens": 12, "output_tokens": 24,
-            "model_name": kwargs["model_name"],
-        },
+        "generate_semantic_prompts",
+        lambda **kwargs: _successful_prompt_batch(kwargs["candidates"], prompt="小猫处理新结构"),
     )
     client, session_factory = api_client
     response = client.post(
@@ -4287,7 +4289,7 @@ def test_none_skill_allows_cover_but_still_uses_normalized_doubao_size(
     assert captured["size"] == "2732x1536"
 
 
-def test_none_workflow_creates_editable_skipped_prompts_without_markers_and_syncs(
+def test_none_workflow_returns_no_prompts_without_markers_and_syncs(
     api_client, auth_headers, created_wechat_article, created_wechat_account, monkeypatch, tmp_path
 ):
     from backend.app.services import wechat_mp_draft_service as draft_service
@@ -4296,13 +4298,8 @@ def test_none_workflow_creates_editable_skipped_prompts_without_markers_and_sync
 
     monkeypatch.setattr(
         prompt_service,
-        "_call_prompt_model",
-        lambda **kwargs: {
-            "prompt": f"可编辑提示词：{kwargs['section_summary']}",
-            "input_tokens": 12,
-            "output_tokens": 24,
-            "model_name": kwargs["model_name"],
-        },
+        "generate_semantic_prompts",
+        lambda **kwargs: pytest.fail("none must not call the semantic batch"),
     )
     client, _ = api_client
     updated = client.patch(
@@ -4317,43 +4314,10 @@ def test_none_workflow_creates_editable_skipped_prompts_without_markers_and_sync
         headers=auth_headers,
     )
     assert prompts.status_code == 201
-    assert prompts.json()
-    assert all(prompt["skill_name"] == "none" for prompt in prompts.json())
-    assert all(prompt["status"] == "skipped" for prompt in prompts.json())
+    assert prompts.json()["items"] == []
     assert "{{image:" not in client.get(
         f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers,
     ).json()["html_body"]
-
-    prompt_id = prompts.json()[0]["id"]
-    edited = client.patch(
-        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts/{prompt_id}",
-        json={"editable_prompt": "编辑后的 none 提示词"},
-        headers=auth_headers,
-    )
-    assert edited.status_code == 200
-    assert edited.json()["editable_prompt"] == "编辑后的 none 提示词"
-    assert edited.json()["status"] == "skipped"
-    assert "{{image:" not in client.get(
-        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers,
-    ).json()["html_body"]
-
-    regenerated = client.post(
-        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts/{prompt_id}/regenerate",
-        headers=auth_headers,
-    )
-    assert regenerated.status_code == 200
-    assert regenerated.json()["status"] == "skipped"
-    assert "{{image:" not in client.get(
-        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers,
-    ).json()["html_body"]
-
-    image = client.post(
-        f"/api/platforms/wechat-mp/prompts/{prompt_id}/image",
-        json={"image_model": "doubao-seedream-4-0-250828"},
-        headers=auth_headers,
-    )
-    assert image.status_code == 400
-    assert "none" in str(image.json()["detail"]).lower()
 
     cover_path = tmp_path / "none-cover.png"
     cover_path.write_bytes(b"cover")
@@ -4905,3 +4869,367 @@ def test_wechat_shotlist_model_prefers_configured_qwen_max_and_uses_selector_whe
     assert preferred.api_key == "max-key"
     assert excluded.model_name == "qwen3.7-plus"
     assert selector_calls == [{"qwen3.7-max"}]
+
+
+def _orchestration_semantic_paragraphs():
+    return [
+        "交付延误的核心问题是跨团队等待，方法是合并审批节点并追踪结果。",
+        "用户流失的关键原因是首次体验复杂，策略是缩短注册路径并对比转化。",
+        "库存风险来自销量波动，解决原则是分层补货与每日预警。",
+        "数据质量下降会影响结论，实践方法是溯源异常字段并校验修复结果。",
+        "远程协作的冲突集中在信息不对称，关键选择是公开决策记录。",
+        "营销投放结果低于目标，调整策略是分组实验创意与人群。",
+        "客诉处理的方法是先识别情绪风险，再根据责任范围给出解决结果。",
+    ]
+
+
+def test_prompt_orchestration_mixes_deterministic_and_one_capped_semantic_batch_with_exact_cost(
+    db_session, test_user, monkeypatch,
+):
+    from decimal import Decimal
+
+    from backend.app.models import UsageRecord, WechatMpArticle
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+    from backend.app.services.wechat_mp_prompt_batch_service import BatchPromptItem, BatchPromptResult
+
+    article = WechatMpArticle(
+        user_id=test_user.id,
+        title="混合候选",
+        markdown_body=(
+            "收集需求 → 分析需求 → 确认需求\n\n"
+            "| 阶段 | 产物 |\n| --- | --- |\n| 收集 | 清单 |\n\n"
+            "输入：原始数据\n输出：标准数据\n\n"
+            + "\n\n".join(_orchestration_semantic_paragraphs())
+        ),
+        html_body="<p>混合候选</p>",
+        status="layout_ready",
+    )
+    db_session.add(article)
+    db_session.commit()
+    batch_calls = []
+    commits = []
+    real_commit = db_session.commit
+
+    def tracked_commit():
+        commits.append(True)
+        real_commit()
+
+    monkeypatch.setattr(db_session, "commit", tracked_commit)
+
+    def fake_batch(**kwargs):
+        batch_calls.append(kwargs["candidates"])
+        assert len(kwargs["candidates"]) == 5
+        return BatchPromptResult(
+            items=tuple(
+                BatchPromptItem(candidate_id=str(candidate.source_index), prompt=f"语义提示词 {candidate.source_index}")
+                for candidate in kwargs["candidates"]
+            ),
+            input_tokens=1,
+            output_tokens=20,
+            model_name="qwen3.7-max",
+            model_calls=1,
+        )
+
+    monkeypatch.setattr(prompt_service, "generate_semantic_prompts", fake_batch)
+
+    result = prompt_service.generate_image_prompts(
+        db=db_session, user_id=test_user.id, article_id=article.id, skill_name=None,
+    )
+
+    assert len(batch_calls) == 1
+    assert len(commits) == 1
+    assert len(result.items) == 8
+    assert result.analysis.deterministic_prompts == 3
+    assert result.analysis.semantic_candidates == 5
+    assert result.analysis.model_calls == 1
+    usage = db_session.query(UsageRecord).filter_by(
+        resource_id=article.id, step="generate_image_prompts_batch",
+    ).one()
+    semantic_costs = [
+        Decimal(prompt.cost_estimate["total_yuan"])
+        for prompt in result.items
+        if prompt.prompt.startswith("语义提示词")
+    ]
+    assert sum(semantic_costs, Decimal("0.0000")) == usage.cost_yuan
+    assert db_session.query(UsageRecord).filter_by(resource_id=article.id).count() == 1
+
+
+def test_prompt_orchestration_caps_pure_semantic_batch_at_six(db_session, test_user, monkeypatch):
+    from backend.app.models import UsageRecord, WechatMpArticle
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+    from backend.app.services.wechat_mp_prompt_batch_service import BatchPromptItem, BatchPromptResult
+
+    article = WechatMpArticle(
+        user_id=test_user.id,
+        title="纯语义候选",
+        markdown_body="\n\n".join(_orchestration_semantic_paragraphs()),
+        html_body="<p>纯语义候选</p>",
+        status="layout_ready",
+    )
+    db_session.add(article)
+    db_session.commit()
+    batch_sizes = []
+
+    def fake_batch(**kwargs):
+        batch_sizes.append(len(kwargs["candidates"]))
+        return BatchPromptResult(
+            items=tuple(
+                BatchPromptItem(candidate_id=str(candidate.source_index), prompt=f"语义提示词 {candidate.source_index}")
+                for candidate in kwargs["candidates"]
+            ),
+            input_tokens=10,
+            output_tokens=30,
+            model_name="qwen3.7-max",
+            model_calls=1,
+        )
+
+    monkeypatch.setattr(prompt_service, "generate_semantic_prompts", fake_batch)
+
+    result = prompt_service.generate_image_prompts(
+        db=db_session, user_id=test_user.id, article_id=article.id, skill_name=None,
+    )
+
+    assert batch_sizes == [6]
+    assert len(result.items) == 6
+    assert len(result.items) <= 8
+    assert result.analysis.deterministic_prompts == 0
+    assert result.analysis.semantic_candidates == 6
+    assert db_session.query(UsageRecord).filter_by(
+        resource_id=article.id, step="generate_image_prompts_batch",
+    ).count() == 1
+
+
+@pytest.mark.parametrize(
+    ("markdown_body", "skill_name"),
+    [
+        ("# 结尾\n\n欢迎关注，下一篇再见。", None),
+        ("核心问题、解决方法、执行风险和最终结果都需要展示。", "none"),
+    ],
+)
+def test_prompt_api_returns_201_empty_response_and_zero_usage_for_no_candidate_or_none(
+    api_client, auth_headers, monkeypatch, markdown_body, skill_name,
+):
+    from decimal import Decimal
+
+    from backend.app.models import UsageRecord, User, WechatMpArticle
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        article = WechatMpArticle(
+            user_id=owner.id,
+            title="空结果",
+            markdown_body=markdown_body,
+            html_body="<p>空结果</p>",
+            status="layout_ready",
+            illustration_skill=skill_name or "xiaomao-illustrations",
+        )
+        session.add(article)
+        session.commit()
+        article_id = article.id
+    finally:
+        session.close()
+    monkeypatch.setattr(
+        prompt_service,
+        "generate_semantic_prompts",
+        lambda **kwargs: pytest.fail("empty and none flows must not call a semantic batch"),
+    )
+
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{article_id}/prompts",
+        json={"skill_name": skill_name} if skill_name else None,
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    assert set(response.json()) == {"items", "analysis"}
+    assert response.json()["items"] == []
+    assert response.json()["analysis"]["model_calls"] == 0
+    session = session_factory()
+    try:
+        assert session.query(UsageRecord).filter_by(resource_id=article_id).count() == 0
+        cost_estimate = session.get(WechatMpArticle, article_id).cost_estimate
+        assert Decimal(str(cost_estimate.get("total_yuan", "0"))) == Decimal("0.0000")
+    finally:
+        session.close()
+
+
+def test_prompt_api_returns_400_for_article_without_rendered_layout(api_client, auth_headers, monkeypatch):
+    from backend.app.models import User, WechatMpArticle
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        article = WechatMpArticle(
+            user_id=owner.id,
+            title="未排版文章",
+            markdown_body="核心问题需要解决。",
+            html_body="",
+            status="draft_local",
+        )
+        session.add(article)
+        session.commit()
+        article_id = article.id
+    finally:
+        session.close()
+    monkeypatch.setattr(
+        prompt_service,
+        "generate_semantic_prompts",
+        lambda **kwargs: pytest.fail("invalid article state must not call a semantic batch"),
+    )
+
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{article_id}/prompts", headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+
+
+def test_prompt_orchestration_cleans_obsolete_prompts_but_retains_asset_row_and_file(
+    db_session, test_user, tmp_path, monkeypatch,
+):
+    from backend.app.models import WechatMpArticle, WechatMpArticleSection, WechatMpAsset, WechatMpImagePrompt
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    retained_file = tmp_path / "historical-inline.png"
+    retained_file.write_bytes(b"historical")
+    article = WechatMpArticle(
+        user_id=test_user.id,
+        title="已删除的候选",
+        markdown_body="收集新需求 → 分析新需求 → 确认新需求",
+        html_body="<p>收集新需求 → 分析新需求 → 确认新需求</p>",
+        status="layout_ready",
+    )
+    db_session.add(article)
+    db_session.flush()
+    section = WechatMpArticleSection(
+        user_id=test_user.id, article_id=article.id, section_index=0, summary="旧段落",
+        source_excerpt="旧段落", source_fingerprint="obsolete", analysis_version="v2", needs_image=True,
+    )
+    db_session.add(section)
+    db_session.flush()
+    prompt = WechatMpImagePrompt(
+        user_id=test_user.id, article_id=article.id, section_id=section.id, skill_name="xiaomao-illustrations",
+        prompt="旧提示词", editable_prompt="旧提示词", generation_fingerprint="obsolete",
+        status="prompt_ready", cost_estimate={"currency": "CNY", "total_yuan": "0.1000", "calls": 1},
+    )
+    db_session.add(prompt)
+    db_session.flush()
+    asset = WechatMpAsset(
+        user_id=test_user.id, article_id=article.id, prompt_id=prompt.id, role="inline_illustration",
+        file_path=str(retained_file), public_url="/api/files/media/historical-inline.png", prompt="旧提示词",
+        skill_name="xiaomao-illustrations", model_name="image-model", status="generated",
+    )
+    db_session.add(asset)
+    independent_asset = WechatMpAsset(
+        user_id=test_user.id, article_id=article.id, prompt_id=None, role="inline_illustration",
+        file_path=str(tmp_path / "independent.png"), public_url="/api/files/media/independent.png",
+        prompt="独立配图", skill_name="xiaomao-illustrations", model_name="image-model", status="generated",
+    )
+    db_session.add(independent_asset)
+    article.html_body = (
+        '<p>收集新需求 → 分析新需求 → 确认新需求</p>\n'
+        f'<p>旧段落</p>\n{{{{image:prompt-{prompt.id}}}}}\n'
+        '<img src="/api/files/media/historical-inline.png" alt="旧配图" />\n'
+        '<img src="/api/files/media/independent.png" alt="独立配图" />'
+    )
+    db_session.commit()
+    asset_id = asset.id
+    obsolete_prompt_id = prompt.id
+    monkeypatch.setattr(
+        prompt_service, "generate_semantic_prompts", lambda **kwargs: pytest.fail("no candidates must not call a batch"),
+    )
+
+    result = prompt_service.generate_image_prompts(
+        db=db_session, user_id=test_user.id, article_id=article.id, skill_name=None,
+    )
+
+    assert len(result.items) == 1
+    assert db_session.query(WechatMpImagePrompt).filter_by(article_id=article.id).count() == 1
+    assert db_session.query(WechatMpArticleSection).filter_by(article_id=article.id).count() == 1
+    retained_asset = db_session.get(WechatMpAsset, asset_id)
+    assert retained_asset is not None
+    assert retained_asset.prompt_id is None
+    assert retained_file.exists()
+    current_marker = f"{{{{image:prompt-{result.items[0].id}}}}}"
+    assert f"<p>旧段落</p>\n{{{{image:prompt-{obsolete_prompt_id}}}}}" not in article.html_body
+    assert article.html_body.count(current_marker) == 1
+    assert retained_asset.public_url not in article.html_body
+    assert independent_asset.public_url in article.html_body
+
+
+def test_unchanged_prompt_rerun_preserves_article_revision(db_session, test_user, monkeypatch):
+    from backend.app.models import WechatMpArticle
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    article = WechatMpArticle(
+        user_id=test_user.id,
+        title="稳定流程",
+        markdown_body="收集需求 → 分析需求 → 确认需求",
+        html_body="<p>收集需求 → 分析需求 → 确认需求</p>",
+        status="layout_ready",
+    )
+    db_session.add(article)
+    db_session.commit()
+    monkeypatch.setattr(
+        prompt_service, "generate_semantic_prompts", lambda **kwargs: pytest.fail("deterministic flow must not call a batch"),
+    )
+
+    first = prompt_service.generate_image_prompts(
+        db=db_session, user_id=test_user.id, article_id=article.id, skill_name=None,
+    )
+    first_revision = article.revision
+    second = prompt_service.generate_image_prompts(
+        db=db_session, user_id=test_user.id, article_id=article.id, skill_name=None,
+    )
+
+    assert [prompt.id for prompt in second.items] == [prompt.id for prompt in first.items]
+    assert second.analysis.reused_prompts == 1
+    assert article.revision == first_revision
+
+
+def test_prompt_api_rolls_back_pure_semantic_provider_failure(api_client, auth_headers, monkeypatch):
+    from backend.app.models import UsageRecord, User, WechatMpArticle, WechatMpArticleSection, WechatMpImagePrompt
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+    from backend.app.services.wechat_mp_prompt_batch_service import BatchPromptResult
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        article = WechatMpArticle(
+            user_id=owner.id,
+            title="供应商失败",
+            markdown_body="核心问题、解决方法、执行风险和最终结果都需要展示。",
+            html_body="<p>核心问题、解决方法、执行风险和最终结果都需要展示。</p>",
+            status="layout_ready",
+        )
+        session.add(article)
+        session.commit()
+        article_id = article.id
+        original_revision = article.revision
+    finally:
+        session.close()
+    monkeypatch.setattr(
+        prompt_service,
+        "generate_semantic_prompts",
+        lambda **kwargs: BatchPromptResult((), 0, 0, "qwen3.7-max", 1),
+    )
+
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{article_id}/prompts", headers=auth_headers,
+    )
+
+    assert response.status_code == 502
+    session = session_factory()
+    try:
+        assert session.query(WechatMpArticleSection).filter_by(article_id=article_id).count() == 0
+        assert session.query(WechatMpImagePrompt).filter_by(article_id=article_id).count() == 0
+        assert session.query(UsageRecord).filter_by(resource_id=article_id).count() == 0
+        assert session.get(WechatMpArticle, article_id).revision == original_revision
+    finally:
+        session.close()

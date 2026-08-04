@@ -6,13 +6,20 @@ from sqlalchemy.orm import Session
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
 from backend.app.models import User, WechatMpArticle, WechatMpArticleSection, WechatMpAsset, WechatMpImagePrompt
-from backend.app.schemas.wechat_mp import WechatMpArticleCreateRequest, WechatMpArticleResponse, WechatMpAssetResponse, WechatMpImagePromptResponse
+from backend.app.schemas.wechat_mp import (
+    WechatMpArticleCreateRequest,
+    WechatMpArticleResponse,
+    WechatMpAssetResponse,
+    WechatMpImagePromptResponse,
+    WechatMpPromptGenerationResponse,
+)
 from backend.app.services.wechat_mp_image_service import (
     WechatMpImageValidationError,
     generate_asset_for_prompt,
     generate_cover_asset,
 )
 from backend.app.services.wechat_mp_image_prompt_service import (
+    WechatMpPromptProviderError,
     _restore_prompt_placeholder,
     generate_image_prompts,
     regenerate_image_prompt,
@@ -170,7 +177,7 @@ def update_article(article_id: int, payload: WechatMpArticleUpdateRequest, curre
     return article
 
 
-@router.post("/{article_id}/prompts", response_model=list[WechatMpImagePromptResponse], status_code=status.HTTP_201_CREATED)
+@router.post("/{article_id}/prompts", response_model=WechatMpPromptGenerationResponse, status_code=status.HTTP_201_CREATED)
 def create_prompts(
     article_id: int,
     payload: WechatMpPromptGenerateRequest | None = None,
@@ -179,14 +186,17 @@ def create_prompts(
 ):
     article = _get_owned_article(db, current_user, article_id)
     try:
-        return generate_image_prompts(
+        result = generate_image_prompts(
             db=db,
             user_id=current_user.id,
             article_id=article.id,
             skill_name=payload.skill_name if payload else None,
         )
-    except ValueError as exc:
+        return {"items": result.items, "analysis": result.analysis}
+    except WechatMpPromptProviderError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get("/{article_id}/prompts", response_model=list[WechatMpImagePromptResponse])
