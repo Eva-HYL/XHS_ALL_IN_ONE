@@ -28,7 +28,7 @@
 - Modify: `backend/app/schemas/wechat_mp.py`
 - Test: `tests/backend/test_wechat_mp.py`
 
-**Interfaces:** Add non-null string fields `WechatMpArticleSection.source_fingerprint`, `analysis_version`, and `WechatMpImagePrompt.generation_fingerprint`. Add `WechatMpPromptAnalysisResponse` and `WechatMpPromptGenerationResponse`. Migration revision is `b7e2c4d6a8f0`, down revision `a4c7e9d2f1b0`.
+**Interfaces:** Add non-null string fields `WechatMpArticleSection.source_fingerprint`, `analysis_version`, and `WechatMpImagePrompt.generation_fingerprint`. Add `WechatMpPromptAnalysisResponse` and `WechatMpPromptGenerationResponse`. Migration revision is `b7e2c4d6a8f0`, down revision `df9e7f5d9f3a`, the sole head verified on this branch before implementation.
 
 - [ ] Write failing schema/model tests, including defaults of `""`.
 - [ ] Run targeted tests and confirm RED.
