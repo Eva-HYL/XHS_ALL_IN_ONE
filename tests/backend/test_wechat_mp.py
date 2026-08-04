@@ -181,6 +181,20 @@ def test_content_analysis_filters_nonvisual_html_and_metadata_before_flow_detect
     assert analysis.candidates == ()
 
 
+def test_content_analysis_filters_indented_code_comments_and_nonvisual_html_before_flows():
+    from backend.app.services.wechat_mp_content_analysis_service import analyze_content
+
+    analysis = analyze_content(
+        "    需求获取 -> 需求分析 -> 需求确认\n\n"
+        "<!-- 需求获取 -> 需求分析 -> 需求确认 -->\n\n"
+        "<pre>需求获取 -> 需求分析 -> 需求确认</pre>\n\n"
+        "<code>需求获取 -> 需求分析 -> 需求确认</code>"
+    )
+
+    assert analysis.filtered_blocks == 4
+    assert analysis.candidates == ()
+
+
 def test_content_analysis_extracts_exact_flow_with_heading_context():
     from backend.app.services.wechat_mp_content_analysis_service import analyze_content
 
@@ -196,6 +210,27 @@ def test_content_analysis_extracts_exact_flow_with_heading_context():
     assert candidate.structure == (("需求获取", "需求分析", "需求确认"),)
 
 
+def test_content_analysis_preserves_link_labels_and_link_stable_fingerprints():
+    from backend.app.services.wechat_mp_content_analysis_service import analyze_content
+
+    plain = analyze_content("需求获取 -> 需求分析 -> 需求确认")
+    linked = analyze_content(
+        "[需求获取](https://example.test/acquire) -> "
+        "[需求分析](https://example.test/analyze) -> "
+        "[需求确认](https://example.test/confirm)"
+    )
+    with_image = analyze_content(
+        "需求获取 -> 需求分析 -> 需求确认 "
+        "![流程示意](https://example.test/flow.png)"
+    )
+
+    assert linked.candidates[0].kind == "flow"
+    assert linked.candidates[0].structure == (("需求获取", "需求分析", "需求确认"),)
+    assert linked.blocks[0].fingerprint == plain.blocks[0].fingerprint
+    assert with_image.candidates[0].structure == (("需求获取", "需求分析", "需求确认"),)
+    assert with_image.blocks[0].fingerprint == plain.blocks[0].fingerprint
+
+
 def test_content_analysis_accepts_only_valid_markdown_tables():
     from backend.app.services.wechat_mp_content_analysis_service import analyze_content
 
@@ -206,6 +241,11 @@ def test_content_analysis_accepts_only_valid_markdown_tables():
         "| 仓库风格 | 数据库系统、黑板系统 |"
     )
     invalid = analyze_content("| 风格 | 包含类型 |\n| 数据流风格 | 批处理序列 |")
+    no_outer_pipes = analyze_content(
+        "[风格](https://example.test/style) | 包含类型\n"
+        "--- | ---\n"
+        "数据流风格 | [批处理序列](https://example.test/dataflow)"
+    )
 
     assert valid.candidates[0].kind == "table"
     assert valid.candidates[0].structure == (
@@ -214,6 +254,11 @@ def test_content_analysis_accepts_only_valid_markdown_tables():
         ("仓库风格", "数据库系统、黑板系统"),
     )
     assert invalid.candidates == ()
+    assert no_outer_pipes.candidates[0].kind == "table"
+    assert no_outer_pipes.candidates[0].structure == (
+        ("风格", "包含类型"),
+        ("数据流风格", "批处理序列"),
+    )
 
 
 def test_content_analysis_extracts_explicit_classification_mappings():
@@ -231,6 +276,31 @@ def test_content_analysis_extracts_explicit_classification_mappings():
         ("数据流风格", "批处理序列、管道/过滤器"),
         ("调用/返回风格", "主程序/子程序、层次结构"),
     )
+
+
+def test_content_analysis_extracts_adjacent_non_bullet_classification_mappings():
+    from backend.app.services.wechat_mp_content_analysis_service import analyze_content
+
+    analysis = analyze_content(
+        "数据流风格：批处理序列、管道/过滤器\n"
+        "调用/返回风格：主程序/子程序、层次结构"
+    )
+
+    assert analysis.candidates[0].kind == "classification"
+    assert analysis.candidates[0].structure == (
+        ("数据流风格", "批处理序列、管道/过滤器"),
+        ("调用/返回风格", "主程序/子程序、层次结构"),
+    )
+
+
+def test_content_analysis_keeps_all_nodes_in_long_exact_flow():
+    from backend.app.services.wechat_mp_content_analysis_service import analyze_content
+
+    nodes = [f"步骤{index}" for index in range(1, 14)]
+    analysis = analyze_content(" -> ".join(nodes))
+
+    assert analysis.candidates[0].kind == "flow"
+    assert analysis.candidates[0].structure == (tuple(nodes),)
 
 
 def test_content_analysis_returns_no_candidate_for_low_information_copy():

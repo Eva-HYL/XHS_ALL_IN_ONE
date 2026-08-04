@@ -13,9 +13,11 @@ MAX_TOTAL_INPUT_CHARS = 12000
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _TABLE_DIVIDER_CELL_RE = re.compile(r"^:?-{3,}:?$")
 _FLOW_SPLIT_RE = re.compile(r"\s*(?:→|->|⇒|=>|＞)\s*")
-_MAPPING_RE = re.compile(r"^\s*[-*+]\s+(.+?)\s*[：:]\s*(.+?)\s*$")
+_MAPPING_RE = re.compile(r"^\s*(?:[-*+]\s+)?(.+?)\s*[：:]\s*(.+?)\s*$")
 _DIMENSION_RE = re.compile(r"\b\d{2,4}\s*(?:x|×)\s*\d{2,4}\b", re.IGNORECASE)
 _MARKDOWN_DECORATION_RE = re.compile(r"[`*_]")
+_MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[([^\]]+)\]\([^)]*\)")
 
 
 @dataclass(frozen=True)
@@ -64,13 +66,14 @@ class ContentAnalysis:
 
 
 def _clean_text(text: str) -> str:
-    text = re.sub(r"!?(?:\[[^\]]*\])\([^)]*\)", "", text)
+    text = _MARKDOWN_IMAGE_RE.sub("", text)
+    text = _MARKDOWN_LINK_RE.sub(r"\1", text)
     text = _MARKDOWN_DECORATION_RE.sub("", text)
     return re.sub(r"\s+", " ", text).strip()
 
 
 def _new_block(source_index: int, heading_path: tuple[str, ...], lines: list[str]) -> ContentBlock:
-    raw_text = "\n".join(lines).strip()
+    raw_text = "\n".join(lines).strip("\n")
     full_cleaned_text = _clean_text(raw_text)
     fingerprint = hashlib.sha256(full_cleaned_text.encode("utf-8")).hexdigest()
     return ContentBlock(
@@ -84,7 +87,11 @@ def _new_block(source_index: int, heading_path: tuple[str, ...], lines: list[str
 
 def _is_table_line(line: str) -> bool:
     stripped = line.strip()
-    return stripped.startswith("|") and stripped.endswith("|") and stripped.count("|") >= 3
+    return bool(stripped) and stripped.count("|") >= 1
+
+
+def _is_indented_code_line(line: str) -> bool:
+    return line.startswith("    ") or line.startswith("\t")
 
 
 def _parse_blocks(markdown_body: str) -> tuple[ContentBlock, ...]:
@@ -128,6 +135,15 @@ def _parse_blocks(markdown_body: str) -> tuple[ContentBlock, ...]:
             append_block(block_lines, path)
             continue
 
+        if _is_indented_code_line(line):
+            block_lines = [line]
+            index += 1
+            while index < len(lines) and _is_indented_code_line(lines[index]):
+                block_lines.append(lines[index])
+                index += 1
+            append_block(block_lines, path)
+            continue
+
         if _is_table_line(line):
             block_lines = [line]
             index += 1
@@ -163,9 +179,9 @@ def _filter_reason(block: ContentBlock) -> str | None:
     lowered = text.lower()
     if not text:
         return "empty"
-    if "```" in text:
+    if "```" in text or all(_is_indented_code_line(line) for line in block.raw_text.splitlines() if line.strip()):
         return "code"
-    if re.search(r"</?(?:details|summary|script|style|meta)\b", lowered):
+    if "<!--" in lowered or re.search(r"</?(?:details|summary|script|style|meta|pre|code)\b", lowered):
         return "html"
     if _DIMENSION_RE.search(text) or any(word in text for word in ("提示词", "水印", "封面尺寸", "生成参数")):
         return "metadata"
@@ -177,7 +193,12 @@ def _table_rows(text: str) -> tuple[tuple[str, ...], ...] | None:
     for line in text.splitlines():
         if not _is_table_line(line):
             return None
-        cells = tuple(_clean_text(cell) for cell in line.strip()[1:-1].split("|"))
+        table_line = line.strip()
+        if table_line.startswith("|"):
+            table_line = table_line[1:]
+        if table_line.endswith("|"):
+            table_line = table_line[:-1]
+        cells = tuple(_clean_text(cell) for cell in table_line.split("|"))
         if not cells or any(not cell for cell in cells):
             return None
         rows.append(cells)
@@ -201,20 +222,27 @@ def _extract_structure(block: ContentBlock) -> tuple[str, tuple[tuple[str, ...],
         for node in _FLOW_SPLIT_RE.split(block.raw_text)
         if _clean_text(node).strip("。；;，,：:")
     ]
-    if len(flow_nodes) >= 3 and len(flow_nodes) <= 12 and _FLOW_SPLIT_RE.search(block.raw_text):
+    if len(flow_nodes) >= 3 and _FLOW_SPLIT_RE.search(block.raw_text):
         return "flow", (tuple(flow_nodes),)
 
+    mapping_runs: list[list[tuple[str, ...]]] = []
     mappings: list[tuple[str, ...]] = []
     for line in block.raw_text.splitlines():
         match = _MAPPING_RE.match(line)
         if match is None:
+            if mappings:
+                mapping_runs.append(mappings)
+                mappings = []
             continue
         key = _clean_text(match.group(1))
         value = _clean_text(match.group(2))
         if key and value:
             mappings.append((key, value))
-    if len(mappings) >= 2 and len({mapping[0] for mapping in mappings}) == len(mappings):
-        return "classification", tuple(mappings)
+    if mappings:
+        mapping_runs.append(mappings)
+    for mappings in mapping_runs:
+        if len(mappings) >= 2 and len({mapping[0] for mapping in mappings}) == len(mappings):
+            return "classification", tuple(mappings)
     return None
 
 
