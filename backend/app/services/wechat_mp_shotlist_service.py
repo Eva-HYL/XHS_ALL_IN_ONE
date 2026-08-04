@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from collections import defaultdict, deque
 import re
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.app.models import WechatMpArticle, WechatMpArticleSection
+from backend.app.models import WechatMpArticle, WechatMpArticleSection, WechatMpAsset, WechatMpImagePrompt
+from backend.app.services.wechat_mp_content_analysis_service import VisualCandidate, analyze_content
 
 
 _ANCHOR_WORDS = ("关键", "转折", "方法", "问题", "结果", "口诀", "必考", "高频")
@@ -114,40 +116,79 @@ def choose_candidate_sections(markdown_body: str) -> list[dict]:
 
 
 def generate_article_shotlist(*, db: Session, user_id: int, article_id: int, text_model: str) -> list[WechatMpArticleSection]:
-    del text_model  # Shot selection is deterministic; retained for the shared service interface.
+    del text_model  # Retained for the shared service interface.
     article = db.scalar(select(WechatMpArticle).where(WechatMpArticle.id == article_id, WechatMpArticle.user_id == user_id))
     if article is None:
         raise LookupError("WeChat MP article not found")
     if article.status not in {"layout_ready", "prompts_ready", "images_partial", "images_ready"}:
         raise ValueError("WeChat MP article must have a rendered layout before generating prompts")
 
-    candidates = choose_candidate_sections(article.markdown_body)
+    analysis = analyze_content(article.markdown_body)
+    candidates = list(analysis.candidates)
+    if not candidates:
+        # Keep legacy short-form articles usable while retaining analyzer-owned blocks/fingerprints.
+        blocks_by_text = {block.raw_text: block for block in analysis.blocks}
+        for item in choose_candidate_sections(article.markdown_body):
+            block = blocks_by_text.get(item["source_excerpt"])
+            if block is None:
+                block = next(
+                    (record for record in analysis.blocks if record.raw_text and record.raw_text in item["source_excerpt"]),
+                    None,
+                )
+            if block is not None:
+                candidates.append(VisualCandidate(block=block, kind="semantic", structure=(), score=0.0))
     if not candidates:
         raise ValueError("WeChat MP article has no content for illustration prompts")
 
-    existing_sections = {
+    existing_sections = db.scalars(
+        select(WechatMpArticleSection).where(WechatMpArticleSection.article_id == article.id)
+    ).all()
+    existing_by_fingerprint: dict[str, deque[WechatMpArticleSection]] = defaultdict(deque)
+    for section in sorted(existing_sections, key=lambda item: (item.section_index, item.id)):
+        if section.source_fingerprint:
+            existing_by_fingerprint[section.source_fingerprint].append(section)
+    legacy_by_index = {
         section.section_index: section
-        for section in db.scalars(
-            select(WechatMpArticleSection).where(WechatMpArticleSection.article_id == article.id)
-        )
+        for section in existing_sections
+        if not section.source_fingerprint
     }
     sections = []
     for candidate in candidates:
-        section = existing_sections.get(candidate["section_index"])
+        matching_sections = existing_by_fingerprint.get(candidate.fingerprint)
+        section = matching_sections.popleft() if matching_sections else legacy_by_index.get(candidate.source_index)
         if section is None:
             section = WechatMpArticleSection(
                 user_id=user_id,
                 article_id=article.id,
-                section_index=candidate["section_index"],
-                summary=candidate["summary"],
-                source_excerpt=candidate.get("source_excerpt", candidate["summary"]),
-                needs_image=candidate["needs_image"],
+                section_index=candidate.source_index,
+                summary=candidate.block.cleaned_text,
+                source_excerpt=candidate.block.raw_text,
+                source_fingerprint=candidate.fingerprint,
+                analysis_version=analysis.analysis_version,
+                needs_image=True,
             )
             db.add(section)
         else:
-            section.summary = candidate["summary"]
-            section.source_excerpt = candidate.get("source_excerpt", candidate["summary"])
-            section.needs_image = candidate["needs_image"]
+            section.section_index = candidate.source_index
+            section.summary = candidate.block.cleaned_text
+            section.source_excerpt = candidate.block.raw_text
+            section.source_fingerprint = candidate.fingerprint
+            section.analysis_version = analysis.analysis_version
+            section.needs_image = True
+        # This transient link keeps prompt rendering tied to the analyzed structure.
+        section._visual_candidate = candidate
         sections.append(section)
+
+    matched_section_ids = {section.id for section in sections if section.id is not None}
+    for section in existing_sections:
+        if section.id in matched_section_ids:
+            continue
+        for prompt in db.scalars(
+            select(WechatMpImagePrompt).where(WechatMpImagePrompt.section_id == section.id)
+        ):
+            for asset in db.scalars(select(WechatMpAsset).where(WechatMpAsset.prompt_id == prompt.id)):
+                asset.prompt_id = None
+            db.delete(prompt)
+        db.delete(section)
     db.flush()
     return sections

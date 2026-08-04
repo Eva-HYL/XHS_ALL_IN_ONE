@@ -91,6 +91,7 @@ import type {
   WechatMpDraftSync,
   WechatMpImageCostEstimate,
   WechatMpImagePrompt,
+  WechatMpPromptGenerationResult,
   WechatMpPromptUpdate,
   WechatMpIllustrationCharacter,
   WechatMpCharacterView,
@@ -1124,8 +1125,8 @@ export async function fetchWechatMpLayoutPreview(articleId: number, layoutStyle:
   return response.data;
 }
 
-export async function generateWechatMpPrompts(articleId: number, skillName?: string): Promise<WechatMpImagePrompt[]> {
-  const response = await http.post<WechatMpImagePrompt[]>(
+export async function generateWechatMpPrompts(articleId: number, skillName?: string): Promise<WechatMpPromptGenerationResult> {
+  const response = await http.post<WechatMpPromptGenerationResult>(
     `/platforms/wechat-mp/articles/${articleId}/prompts`,
     skillName ? { skill_name: skillName } : undefined,
     { timeout: 420000 },

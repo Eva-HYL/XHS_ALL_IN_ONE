@@ -115,6 +115,22 @@ class WechatMpImagePromptResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class WechatMpPromptAnalysisResponse(BaseModel):
+    source_blocks: int = 0
+    filtered_blocks: int = 0
+    deterministic_prompts: int = 0
+    semantic_candidates: int = 0
+    reused_prompts: int = 0
+    model_calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+class WechatMpPromptGenerationResponse(BaseModel):
+    items: list[WechatMpImagePromptResponse] = Field(default_factory=list)
+    analysis: WechatMpPromptAnalysisResponse = Field(default_factory=WechatMpPromptAnalysisResponse)
+
+
 class WechatMpAssetResponse(BaseModel):
     id: int
     user_id: int

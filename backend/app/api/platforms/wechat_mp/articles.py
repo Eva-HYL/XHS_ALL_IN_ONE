@@ -13,13 +13,20 @@ from backend.app.models import (
     WechatMpIllustrationCharacter,
     WechatMpImagePrompt,
 )
-from backend.app.schemas.wechat_mp import WechatMpArticleCreateRequest, WechatMpArticleResponse, WechatMpAssetResponse, WechatMpImagePromptResponse
+from backend.app.schemas.wechat_mp import (
+    WechatMpArticleCreateRequest,
+    WechatMpArticleResponse,
+    WechatMpAssetResponse,
+    WechatMpImagePromptResponse,
+    WechatMpPromptGenerationResponse,
+)
 from backend.app.services.wechat_mp_image_service import (
     WechatMpImageValidationError,
     generate_asset_for_prompt,
     generate_cover_asset,
 )
 from backend.app.services.wechat_mp_image_prompt_service import (
+    WechatMpPromptProviderError,
     _restore_prompt_placeholder,
     generate_image_prompts,
     regenerate_image_prompt,
@@ -195,7 +202,12 @@ def update_article(article_id: int, payload: WechatMpArticleUpdateRequest, curre
             next_html = render_wechat_html(article.markdown_body, image_placeholders=[])
         else:
             next_html = article.html_body
-        reset_inline_illustrations(db, article, html_body=next_html)
+        reset_inline_illustrations(
+            db,
+            article,
+            html_body=next_html,
+            preserve_prompt_identity=body_changed,
+        )
     if changed:
         invalidate_synced_drafts(db, article, next_status="layout_ready")
     db.commit()
@@ -203,7 +215,7 @@ def update_article(article_id: int, payload: WechatMpArticleUpdateRequest, curre
     return article
 
 
-@router.post("/{article_id}/prompts", response_model=list[WechatMpImagePromptResponse], status_code=status.HTTP_201_CREATED)
+@router.post("/{article_id}/prompts", response_model=WechatMpPromptGenerationResponse, status_code=status.HTTP_201_CREATED)
 def create_prompts(
     article_id: int,
     payload: WechatMpPromptGenerateRequest | None = None,
@@ -212,16 +224,19 @@ def create_prompts(
 ):
     article = _get_owned_article(db, current_user, article_id)
     try:
-        return generate_image_prompts(
+        result = generate_image_prompts(
             db=db,
             user_id=current_user.id,
             article_id=article.id,
             skill_name=payload.skill_name if payload else None,
         )
+        return {"items": result.items, "analysis": result.analysis}
     except WechatMpIllustrationSkillError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    except ValueError as exc:
+    except WechatMpPromptProviderError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get("/{article_id}/prompts", response_model=list[WechatMpImagePromptResponse])
@@ -291,8 +306,8 @@ def update_prompt(
     prompt.character_id = character.id if character is not None else None
     prompt.skill_name = selected_skill
     prompt.version += 1
-    prompt.status = "skipped" if selected_skill == NONE_SKILL_NAME else "prompt_ready"
-    if selected_skill != NONE_SKILL_NAME:
+    prompt.status = "skipped" if prompt.skill_name == NONE_SKILL_NAME else "prompt_ready"
+    if prompt.skill_name != NONE_SKILL_NAME:
         _restore_prompt_placeholder(db, article, section, prompt)
     from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
     invalidate_synced_drafts(db, article, next_status="prompts_ready")
