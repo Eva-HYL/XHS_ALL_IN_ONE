@@ -4534,3 +4534,261 @@ def test_wechat_mp_writer_recovers_article_generation_after_slow_response():
     assert "recoverCreatedArticle" in writer_source
     assert "window.setInterval" in writer_source
     assert "文章已生成，已自动进入编辑步骤。" in writer_source
+
+
+def _semantic_batch_candidates(count=2):
+    from backend.app.services.wechat_mp_content_analysis_service import ContentBlock, VisualCandidate
+
+    return tuple(
+        VisualCandidate(
+            ContentBlock(
+                source_index=index,
+                heading_path=("方案复盘",),
+                raw_text=f"候选正文 {index}",
+                cleaned_text=f"第{index}个方案需要说明核心问题、实施方法、风险控制与预期结果。",
+                fingerprint=f"semantic-{index}",
+            ),
+            "semantic",
+            (),
+            0.8,
+        )
+        for index in range(count)
+    )
+
+
+def test_semantic_batch_sends_one_compact_request_and_prefers_configured_max(monkeypatch):
+    import json
+
+    from backend.app.services import wechat_mp_prompt_batch_service as batch_service
+    from backend.app.services.wechat_mp_model_service import WechatMpModelContext
+
+    candidates = _semantic_batch_candidates()
+    captured_requests = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": json.dumps({"items": [
+                    {"id": "0", "prompt": "画出方案实施的关键场景"},
+                    {"id": "1", "prompt": "画出风险控制的对比场景"},
+                ]}, ensure_ascii=False)}}],
+                "usage": {"prompt_tokens": 31, "completion_tokens": 17},
+            }
+
+    def fake_post(*args, **kwargs):
+        captured_requests.append((args, kwargs))
+        return FakeResponse()
+
+    monkeypatch.setattr(
+        batch_service,
+        "resolve_wechat_mp_shotlist_model",
+        lambda **kwargs: WechatMpModelContext("qwen3.7-max", "https://models.example/v1", "test-key"),
+    )
+    monkeypatch.setattr(batch_service.requests, "post", fake_post)
+
+    result = batch_service.generate_semantic_prompts(
+        db=Mock(), user_id=11, article_title="方案复盘", candidates=(candidates[0], candidates[1], candidates[0]), character=None,
+    )
+
+    assert result.model_calls == 1
+    assert result.model_name == "qwen3.7-max"
+    assert result.input_tokens == 31
+    assert result.output_tokens == 17
+    assert [(item.candidate_id, item.prompt) for item in result.items] == [
+        ("0", "画出方案实施的关键场景"),
+        ("1", "画出风险控制的对比场景"),
+    ]
+    assert len(captured_requests) == 1
+    request_body = captured_requests[0][1]["json"]
+    assert request_body["model"] == "qwen3.7-max"
+    assert "方案复盘" not in request_body["messages"][0]["content"]
+    payload = json.loads(request_body["messages"][1]["content"])
+    assert payload["article_title"] == "方案复盘"
+    assert payload["remaining_slots"] == 2
+    assert [candidate["id"] for candidate in payload["candidates"]] == ["0", "1"]
+    assert all(set(candidate) == {"id", "heading", "text"} for candidate in payload["candidates"])
+
+
+def test_semantic_batch_strict_json_ignores_invalid_duplicate_unknown_and_overflow_ids(monkeypatch):
+    import json
+
+    from backend.app.services import wechat_mp_prompt_batch_service as batch_service
+    from backend.app.services.wechat_mp_model_service import WechatMpModelContext
+
+    candidates = _semantic_batch_candidates(7)
+    calls = []
+    response_items = [
+        {"id": "0", "prompt": "保留的第一条"},
+        {"id": "0", "prompt": "重复条目"},
+        {"id": "unknown", "prompt": "未知条目"},
+        {"id": "6", "prompt": "超出六张上限"},
+        {"id": "1", "prompt": "保留的第二条"},
+    ]
+
+    monkeypatch.setattr(
+        batch_service,
+        "resolve_wechat_mp_shotlist_model",
+        lambda **kwargs: WechatMpModelContext("qwen3.7-max", "https://models.example/v1", "test-key"),
+    )
+    monkeypatch.setattr(
+        batch_service,
+        "_call_batch_prompt_model",
+        lambda **kwargs: calls.append(kwargs) or {
+            "content": json.dumps({"items": response_items}, ensure_ascii=False),
+            "input_tokens": 9,
+            "output_tokens": 5,
+        },
+    )
+
+    result = batch_service.generate_semantic_prompts(
+        db=Mock(), user_id=11, article_title="方案复盘", candidates=candidates, character=None,
+    )
+
+    assert len(calls) == 1
+    assert result.model_calls == 1
+    assert [(item.candidate_id, item.prompt) for item in result.items] == [
+        ("0", "保留的第一条"),
+        ("1", "保留的第二条"),
+    ]
+
+
+def test_semantic_batch_malformed_or_non_quota_failures_degrade_without_retry(monkeypatch):
+    from backend.app.services import wechat_mp_prompt_batch_service as batch_service
+    from backend.app.services.wechat_mp_model_service import WechatMpModelContext
+
+    candidates = _semantic_batch_candidates()
+    calls = []
+    monkeypatch.setattr(
+        batch_service,
+        "resolve_wechat_mp_shotlist_model",
+        lambda **kwargs: WechatMpModelContext("qwen3.7-max", "https://models.example/v1", "test-key"),
+    )
+    monkeypatch.setattr(
+        batch_service,
+        "_call_batch_prompt_model",
+        lambda **kwargs: calls.append(kwargs) or {"content": "```json\\n{}\\n```", "input_tokens": 8, "output_tokens": 2},
+    )
+
+    malformed = batch_service.generate_semantic_prompts(
+        db=Mock(), user_id=11, article_title="方案复盘", candidates=candidates, character=None,
+    )
+
+    assert malformed.items == ()
+    assert malformed.model_calls == 1
+    assert malformed.input_tokens == 8
+    assert len(calls) == 1
+    monkeypatch.setattr(batch_service, "_call_batch_prompt_model", lambda **kwargs: calls.append(kwargs) or (_ for _ in ()).throw(ValueError("connection reset")))
+
+    failed = batch_service.generate_semantic_prompts(
+        db=Mock(), user_id=11, article_title="方案复盘", candidates=candidates, character=None,
+    )
+
+    assert failed.items == ()
+    assert failed.model_calls == 1
+    assert len(calls) == 2
+
+
+def test_semantic_batch_retries_once_with_shotlist_fallback_only_for_quota_errors(monkeypatch):
+    import json
+
+    from backend.app.services import wechat_mp_prompt_batch_service as batch_service
+    from backend.app.services.wechat_mp_model_service import WechatMpModelContext
+
+    candidates = _semantic_batch_candidates()
+    resolved = []
+    calls = []
+
+    def resolve_model(**kwargs):
+        resolved.append(kwargs.get("excluded_model_names", set()))
+        return WechatMpModelContext(
+            "qwen3.7-max" if len(resolved) == 1 else "qwen3.7-plus",
+            "https://models.example/v1",
+            "test-key",
+        )
+
+    def call_model(**kwargs):
+        calls.append(kwargs["model"].model_name)
+        if len(calls) == 1:
+            raise ValueError("quota exhausted")
+        return {
+            "content": json.dumps({"items": [{"id": "0", "prompt": "降级模型生成的场景"}]}, ensure_ascii=False),
+            "input_tokens": 12,
+            "output_tokens": 7,
+        }
+
+    monkeypatch.setattr(batch_service, "resolve_wechat_mp_shotlist_model", resolve_model)
+    monkeypatch.setattr(batch_service, "_call_batch_prompt_model", call_model)
+
+    result = batch_service.generate_semantic_prompts(
+        db=Mock(), user_id=11, article_title="方案复盘", candidates=candidates, character=None,
+    )
+
+    assert calls == ["qwen3.7-max", "qwen3.7-plus"]
+    assert resolved == [set(), {"qwen3.7-max"}]
+    assert result.model_calls == 2
+    assert result.model_name == "qwen3.7-plus"
+    assert [(item.candidate_id, item.prompt) for item in result.items] == [("0", "降级模型生成的场景")]
+
+
+def test_semantic_batch_does_not_count_a_failed_fallback_selection_as_a_model_call(monkeypatch):
+    from backend.app.services import wechat_mp_prompt_batch_service as batch_service
+    from backend.app.services.wechat_mp_model_service import WechatMpModelContext
+
+    resolved = []
+
+    def resolve_model(**kwargs):
+        resolved.append(kwargs.get("excluded_model_names", set()))
+        if len(resolved) == 1:
+            return WechatMpModelContext("qwen3.7-max", "https://models.example/v1", "test-key")
+        raise ValueError("No configured text model supports shotlist")
+
+    monkeypatch.setattr(batch_service, "resolve_wechat_mp_shotlist_model", resolve_model)
+    monkeypatch.setattr(
+        batch_service,
+        "_call_batch_prompt_model",
+        lambda **kwargs: (_ for _ in ()).throw(ValueError("quota exhausted")),
+    )
+
+    result = batch_service.generate_semantic_prompts(
+        db=Mock(), user_id=11, article_title="方案复盘", candidates=_semantic_batch_candidates(), character=None,
+    )
+
+    assert resolved == [set(), {"qwen3.7-max"}]
+    assert result.items == ()
+    assert result.model_calls == 1
+
+
+def test_wechat_shotlist_model_prefers_configured_qwen_max_and_uses_selector_when_excluded(db_session, test_user, monkeypatch):
+    from backend.app.core.security import encrypt_text
+    from backend.app.models import ModelConfig
+    from backend.app.services import wechat_mp_model_service as model_service
+
+    qwen_max = ModelConfig(
+        user_id=test_user.id, name="Qwen Max", model_type="text", provider="openai-compatible",
+        model_name="qwen3.7-max", base_url="https://max.example/v1", encrypted_api_key=encrypt_text("max-key"), is_default=False,
+    )
+    fallback = ModelConfig(
+        user_id=test_user.id, name="Qwen Plus", model_type="text", provider="openai-compatible",
+        model_name="qwen3.7-plus", base_url="https://plus.example/v1", encrypted_api_key=encrypt_text("plus-key"), is_default=True,
+    )
+    db_session.add_all([qwen_max, fallback])
+    db_session.commit()
+    selector_calls = []
+    monkeypatch.setattr(
+        model_service,
+        "select_model_config",
+        lambda *args, **kwargs: selector_calls.append(kwargs.get("excluded_model_names", set())) or fallback,
+    )
+
+    preferred = model_service.resolve_wechat_mp_shotlist_model(db=db_session, user_id=test_user.id)
+    excluded = model_service.resolve_wechat_mp_shotlist_model(
+        db=db_session, user_id=test_user.id, excluded_model_names={"qwen3.7-max"},
+    )
+
+    assert preferred.model_name == "qwen3.7-max"
+    assert preferred.api_key == "max-key"
+    assert excluded.model_name == "qwen3.7-plus"
+    assert selector_calls == [{"qwen3.7-max"}]
