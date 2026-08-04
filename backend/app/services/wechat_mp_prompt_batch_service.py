@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 import requests
 from sqlalchemy.orm import Session
 
-from backend.app.services.model_selector_service import is_quota_error
+from backend.app.services.model_selector_service import ModelSelectionError, is_quota_error
 from backend.app.services.wechat_mp_model_service import WechatMpModelContext, resolve_wechat_mp_shotlist_model
 
 if TYPE_CHECKING:
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 
 MAX_SEMANTIC_PROMPTS = 6
+BatchPromptOutcome = Literal["success", "parse_degraded", "provider_failed", "no_config"]
 _SYSTEM_PROMPT = (
     "Return strict JSON only. The complete response must be {\"items\":[...]}. "
     "Each item must contain exactly an input candidate id and one concise Chinese image prompt: "
@@ -36,6 +37,7 @@ class BatchPromptResult:
     output_tokens: int
     model_name: str | None
     model_calls: int
+    outcome: BatchPromptOutcome
 
 
 def _parse_token_count(value: Any) -> int:
@@ -113,13 +115,13 @@ def _call_batch_prompt_model(
         raise ValueError("WeChat MP batch prompt model returned malformed output") from exc
 
 
-def _parse_items(content: str, allowed_ids: set[str]) -> tuple[BatchPromptItem, ...]:
+def _parse_items(content: str, allowed_ids: set[str]) -> tuple[tuple[BatchPromptItem, ...], bool]:
     try:
         payload = json.loads(content)
     except (TypeError, json.JSONDecodeError):
-        return ()
+        return (), False
     if not isinstance(payload, dict) or set(payload) != {"items"} or not isinstance(payload["items"], list):
-        return ()
+        return (), False
     items: list[BatchPromptItem] = []
     seen_ids: set[str] = set()
     for value in payload["items"]:
@@ -137,11 +139,14 @@ def _parse_items(content: str, allowed_ids: set[str]) -> tuple[BatchPromptItem, 
             continue
         seen_ids.add(candidate_id)
         items.append(BatchPromptItem(candidate_id=candidate_id, prompt=prompt.strip()))
-    return tuple(items)
+    return tuple(items), True
 
 
-def _empty_result(*, model_name: str | None, model_calls: int, input_tokens: int = 0, output_tokens: int = 0) -> BatchPromptResult:
-    return BatchPromptResult((), input_tokens, output_tokens, model_name, model_calls)
+def _empty_result(
+    *, outcome: BatchPromptOutcome, model_name: str | None, model_calls: int,
+    input_tokens: int = 0, output_tokens: int = 0,
+) -> BatchPromptResult:
+    return BatchPromptResult((), input_tokens, output_tokens, model_name, model_calls, outcome)
 
 
 def generate_semantic_prompts(
@@ -151,37 +156,39 @@ def generate_semantic_prompts(
     """Generate all semantic prompts in one request, with one quota-only fallback."""
     compact_candidates = _compact_candidates(candidates)
     if not compact_candidates:
-        return _empty_result(model_name=None, model_calls=0)
+        return _empty_result(outcome="success", model_name=None, model_calls=0)
     user_payload = _build_user_payload(
         article_title=article_title, candidates=compact_candidates, character=character,
     )
     try:
         model = resolve_wechat_mp_shotlist_model(db=db, user_id=user_id)
-    except Exception:
-        return _empty_result(model_name=None, model_calls=0)
+    except ModelSelectionError:
+        return _empty_result(outcome="no_config", model_name=None, model_calls=0)
     try:
         response = _call_batch_prompt_model(model=model, user_payload=user_payload)
-    except Exception as exc:
+    except (requests.RequestException, ValueError) as exc:
         if not is_quota_error(exc):
-            return _empty_result(model_name=model.model_name, model_calls=1)
+            return _empty_result(outcome="provider_failed", model_name=model.model_name, model_calls=1)
         try:
             fallback = resolve_wechat_mp_shotlist_model(
                 db=db, user_id=user_id, excluded_model_names={model.model_name},
             )
-        except Exception:
-            return _empty_result(model_name=model.model_name, model_calls=1)
+        except ModelSelectionError:
+            return _empty_result(outcome="provider_failed", model_name=model.model_name, model_calls=1)
         model = fallback
         try:
             response = _call_batch_prompt_model(model=model, user_payload=user_payload)
-        except Exception:
-            return _empty_result(model_name=model.model_name, model_calls=2)
+        except (requests.RequestException, ValueError):
+            return _empty_result(outcome="provider_failed", model_name=model.model_name, model_calls=2)
         model_calls = 2
     else:
         model_calls = 1
+    items, parsed = _parse_items(response["content"], {item["id"] for item in compact_candidates})
     return BatchPromptResult(
-        items=_parse_items(response["content"], {item["id"] for item in compact_candidates}),
+        items=items,
         input_tokens=response["input_tokens"],
         output_tokens=response["output_tokens"],
         model_name=model.model_name,
         model_calls=model_calls,
+        outcome="success" if parsed else "parse_degraded",
     )

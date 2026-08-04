@@ -309,16 +309,44 @@ def _remove_asset_image(html_body: str, public_url: str) -> str:
     return image_pattern.sub("", html_body)
 
 
+def _has_embedded_generated_asset(
+    db: Session, article: WechatMpArticle, prompt: WechatMpImagePrompt,
+) -> bool:
+    assets = db.scalars(select(WechatMpAsset).where(
+        WechatMpAsset.user_id == article.user_id,
+        WechatMpAsset.article_id == article.id,
+        WechatMpAsset.prompt_id == prompt.id,
+        WechatMpAsset.role == "inline_illustration",
+        WechatMpAsset.status == "generated",
+        WechatMpAsset.public_url != "",
+    )).all()
+    return any(
+        re.search(
+            r'<img\b[^>]*\bsrc=["\']' + re.escape(escape(asset.public_url, quote=True)) + r'["\'][^>]*>',
+            article.html_body,
+        )
+        for asset in assets
+    )
+
+
 def _delete_prompt_state(db: Session, article: WechatMpArticle, prompt: WechatMpImagePrompt) -> None:
     article.html_body = article.html_body.replace(f"{{{{image:prompt-{prompt.id}}}}}", "")
-    for asset in db.scalars(select(WechatMpAsset).where(WechatMpAsset.prompt_id == prompt.id)).all():
+    for asset in db.scalars(select(WechatMpAsset).where(
+        WechatMpAsset.user_id == article.user_id,
+        WechatMpAsset.article_id == article.id,
+        WechatMpAsset.prompt_id == prompt.id,
+    )).all():
         article.html_body = _remove_asset_image(article.html_body, asset.public_url)
         asset.prompt_id = None
     db.delete(prompt)
 
 
 def _delete_section_state(db: Session, article: WechatMpArticle, section: WechatMpArticleSection) -> None:
-    for prompt in db.scalars(select(WechatMpImagePrompt).where(WechatMpImagePrompt.section_id == section.id)).all():
+    for prompt in db.scalars(select(WechatMpImagePrompt).where(
+        WechatMpImagePrompt.user_id == article.user_id,
+        WechatMpImagePrompt.article_id == article.id,
+        WechatMpImagePrompt.section_id == section.id,
+    )).all():
         _delete_prompt_state(db, article, prompt)
     db.delete(section)
 
@@ -349,10 +377,9 @@ def _allocate_cost(total: Decimal, count: int) -> list[Decimal]:
     total = Decimal(total).quantize(_COST_QUANTUM)
     units = int(total / _COST_QUANTUM)
     base_units, remainder = divmod(units, count)
-    return [
-        _COST_QUANTUM * (base_units + (1 if index < remainder else 0))
-        for index in range(count)
-    ]
+    allocations = [_COST_QUANTUM * base_units for _ in range(count)]
+    allocations[-1] += _COST_QUANTUM * remainder
+    return allocations
 
 
 def generate_image_prompts(
@@ -472,11 +499,18 @@ def generate_image_prompts(
                 anchor_version=anchor_version,
                 skill_version=fingerprint_skill_version,
             )
-            prompt = db.scalar(
+            sibling_prompts = db.scalars(
                 select(WechatMpImagePrompt)
-                .where(WechatMpImagePrompt.article_id == article.id, WechatMpImagePrompt.section_id == section.id)
+                .where(
+                    WechatMpImagePrompt.user_id == user_id,
+                    WechatMpImagePrompt.article_id == article.id,
+                    WechatMpImagePrompt.section_id == section.id,
+                )
                 .order_by(WechatMpImagePrompt.id.desc())
-            )
+            ).all()
+            prompt = sibling_prompts[0] if sibling_prompts else None
+            for sibling in sibling_prompts[1:]:
+                _delete_prompt_state(db, article, sibling)
             reusable = (
                 prompt is not None
                 and prompt.generation_fingerprint == fingerprint
@@ -485,9 +519,15 @@ def generate_image_prompts(
                 and prompt.skill_version == _SKILL_VERSION
             )
             if reusable:
-                _insert_prompt_placeholder(article, section, prompt)
-                if prompt.status != "prompt_ready":
+                has_embedded_asset = _has_embedded_generated_asset(db, article, prompt)
+                if prompt.status == "generated" and has_embedded_asset:
+                    article.html_body = article.html_body.replace(
+                        f"{{{{image:prompt-{prompt.id}}}}}", "",
+                    )
+                else:
+                    _restore_prompt_placeholder(db, article, section, prompt)
                     prompt.status = "prompt_ready"
+                prompt.cost_estimate = {"currency": "CNY", "total_yuan": "0.0000", "calls": 0}
                 prompts_by_section[section.id] = prompt
                 analysis_values["reused_prompts"] += 1
                 continue
@@ -602,7 +642,11 @@ def generate_image_prompts(
                 candidate.kind != "semantic" and section.id in prompts_by_section
                 for section, candidate in active_sections
             )
-            if batch_result.model_calls and not semantic_prompts and not has_deterministic_result:
+            if (
+                batch_result.outcome == "provider_failed"
+                and not semantic_prompts
+                and not has_deterministic_result
+            ):
                 raise WechatMpPromptProviderError(
                     "WeChat MP prompt provider failed without a deterministic result"
                 )

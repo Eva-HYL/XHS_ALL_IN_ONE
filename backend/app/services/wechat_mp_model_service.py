@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.core.security import decrypt_text
 from backend.app.models import ModelConfig
-from backend.app.services.model_selector_service import select_model_config
+from backend.app.services.model_selector_service import ModelSelectionError, select_model_config
 from backend.app.services.pricing_service import get_pricing
 
 
@@ -72,7 +72,7 @@ def resolve_wechat_mp_shotlist_model(
         if context is not None and _is_shotlist_model(selected):
             return context
         if selected.model_name in excluded:
-            raise ValueError("No usable configured text model supports shotlist")
+            raise ModelSelectionError("No usable configured text model supports shotlist")
         excluded = {*(excluded), selected.model_name}
 
 

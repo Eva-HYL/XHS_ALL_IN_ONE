@@ -10,6 +10,10 @@ from backend.app.models import ModelConfig, UsageRecord
 from backend.app.services.pricing_service import get_pricing
 
 
+class ModelSelectionError(ValueError):
+    """No configured model can satisfy the requested capability."""
+
+
 @dataclass(frozen=True)
 class ModelQuotaStatus:
     config: ModelConfig
@@ -97,7 +101,7 @@ def select_model_config(
         )
         fallback = db.scalars(stmt).first()
         if fallback is None or fallback.model_name in excluded:
-            raise ValueError(f"No configured {model_type} model supports {capability}")
+            raise ModelSelectionError(f"No configured {model_type} model supports {capability}")
         return fallback
     candidates.sort(key=lambda item: (
         0 if item.free_remaining > 0 else 1,
