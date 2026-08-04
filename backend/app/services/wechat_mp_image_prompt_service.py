@@ -166,8 +166,7 @@ def reset_inline_illustrations(
 
     if preserve_prompt_identity:
         for prompt in prompts:
-            if prompt.status != "skipped":
-                prompt.status = "prompt_ready"
+            prompt.status = "stale"
         article.html_body = cleaned_html
         return cleaned_html
 

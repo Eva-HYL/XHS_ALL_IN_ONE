@@ -2328,6 +2328,93 @@ def test_article_patch_preserves_moved_deterministic_prompt_ids_and_cleans_stale
     assert f"{{{{image:prompt-{stale_prompt_id}}}}}" not in html_body
 
 
+def test_duplicate_deterministic_blocks_keep_distinct_prompt_ids_across_reruns(
+    api_client, auth_headers, monkeypatch,
+):
+    from backend.app.models import User, WechatMpArticle, WechatMpArticleSection, WechatMpImagePrompt
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        article = WechatMpArticle(
+            user_id=owner.id,
+            title="重复流程",
+            markdown_body="收集需求 → 分析需求 → 确认需求\n\n收集需求 → 分析需求 → 确认需求",
+            html_body="<p>收集需求 → 分析需求 → 确认需求</p><p>收集需求 → 分析需求 → 确认需求</p>",
+            status="layout_ready",
+        )
+        session.add(article)
+        session.commit()
+        article_id = article.id
+    finally:
+        session.close()
+    monkeypatch.setattr(prompt_service, "_call_prompt_model", lambda **kwargs: pytest.fail("exact flows must not call the prompt model"))
+
+    first = client.post(f"/api/platforms/wechat-mp/articles/{article_id}/prompts", headers=auth_headers)
+    second = client.post(f"/api/platforms/wechat-mp/articles/{article_id}/prompts", headers=auth_headers)
+
+    assert first.status_code == 201
+    assert second.status_code == 201
+    assert len({item["id"] for item in first.json()}) == 2
+    assert [item["id"] for item in second.json()] == [item["id"] for item in first.json()]
+    session = session_factory()
+    try:
+        assert session.query(WechatMpArticleSection).filter_by(article_id=article_id).count() == 2
+        assert session.query(WechatMpImagePrompt).filter_by(article_id=article_id).count() == 2
+    finally:
+        session.close()
+
+
+def test_article_patch_blocks_stale_prompt_image_generation_until_reconciliation(
+    api_client, auth_headers, monkeypatch,
+):
+    from backend.app.models import User, WechatMpArticle, WechatMpImagePrompt
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        article = WechatMpArticle(
+            user_id=owner.id,
+            title="流程",
+            markdown_body="收集需求 → 分析需求 → 确认需求",
+            html_body="<p>收集需求 → 分析需求 → 确认需求</p>",
+            status="layout_ready",
+        )
+        session.add(article)
+        session.commit()
+        article_id = article.id
+    finally:
+        session.close()
+    monkeypatch.setattr(prompt_service, "_call_prompt_model", lambda **kwargs: pytest.fail("exact flows must not call the prompt model"))
+
+    generated = client.post(f"/api/platforms/wechat-mp/articles/{article_id}/prompts", headers=auth_headers)
+    assert generated.status_code == 201
+    prompt_id = generated.json()[0]["id"]
+    updated = client.patch(
+        f"/api/platforms/wechat-mp/articles/{article_id}",
+        json={"markdown_body": "收集新需求 → 分析新需求 → 确认新需求"},
+        headers=auth_headers,
+    )
+    assert updated.status_code == 200
+
+    image = client.post(
+        f"/api/platforms/wechat-mp/prompts/{prompt_id}/image",
+        json={"size": "16:9"},
+        headers=auth_headers,
+    )
+    assert image.status_code == 502
+    assert "not ready" in image.json()["detail"]
+    session = session_factory()
+    try:
+        assert session.get(WechatMpImagePrompt, prompt_id).status == "stale"
+    finally:
+        session.close()
+
+
 def test_none_generation_and_regeneration_never_call_models_or_write_usage(api_client, auth_headers, created_wechat_article, monkeypatch):
     from backend.app.models import UsageRecord
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
@@ -3155,7 +3242,7 @@ def test_body_edit_resets_inline_state_and_stales_synced_draft(
     session = session_factory()
     try:
         retained_prompt = session.query(WechatMpImagePrompt).filter_by(article_id=created_wechat_prompt.article_id).one()
-        assert retained_prompt.status == "prompt_ready"
+        assert retained_prompt.status == "stale"
         assert session.query(WechatMpArticleSection).filter_by(article_id=created_wechat_prompt.article_id).count() == 1
         assert session.get(WechatMpAsset, asset_id).prompt_id is None
         assert session.query(WechatMpDraftSync).filter_by(article_id=created_wechat_prompt.article_id).one().status == "stale"

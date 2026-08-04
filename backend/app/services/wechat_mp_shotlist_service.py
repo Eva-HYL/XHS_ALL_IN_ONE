@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict, deque
 import re
 
 from sqlalchemy import select
@@ -122,11 +123,10 @@ def generate_article_shotlist(*, db: Session, user_id: int, article_id: int, tex
     existing_sections = db.scalars(
         select(WechatMpArticleSection).where(WechatMpArticleSection.article_id == article.id)
     ).all()
-    existing_by_fingerprint = {
-        section.source_fingerprint: section
-        for section in existing_sections
-        if section.source_fingerprint
-    }
+    existing_by_fingerprint: dict[str, deque[WechatMpArticleSection]] = defaultdict(deque)
+    for section in sorted(existing_sections, key=lambda item: (item.section_index, item.id)):
+        if section.source_fingerprint:
+            existing_by_fingerprint[section.source_fingerprint].append(section)
     legacy_by_index = {
         section.section_index: section
         for section in existing_sections
@@ -134,7 +134,8 @@ def generate_article_shotlist(*, db: Session, user_id: int, article_id: int, tex
     }
     sections = []
     for candidate in candidates:
-        section = existing_by_fingerprint.get(candidate.fingerprint) or legacy_by_index.get(candidate.source_index)
+        matching_sections = existing_by_fingerprint.get(candidate.fingerprint)
+        section = matching_sections.popleft() if matching_sections else legacy_by_index.get(candidate.source_index)
         if section is None:
             section = WechatMpArticleSection(
                 user_id=user_id,
