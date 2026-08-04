@@ -125,6 +125,48 @@ def reset_inline_illustrations(
     return cleaned_html
 
 
+def _remove_obsolete_prompt_sections(
+    db: Session,
+    article: WechatMpArticle,
+    active_sections: list[WechatMpArticleSection],
+) -> None:
+    """Drop stale planning rows and inline images while retaining asset history."""
+    active_section_ids = {section.id for section in active_sections}
+    obsolete_sections = db.scalars(
+        select(WechatMpArticleSection).where(
+            WechatMpArticleSection.article_id == article.id,
+            WechatMpArticleSection.id.not_in(active_section_ids),
+        )
+    ).all()
+    if not obsolete_sections:
+        return
+
+    obsolete_section_ids = {section.id for section in obsolete_sections}
+    obsolete_prompts = db.scalars(
+        select(WechatMpImagePrompt).where(
+            WechatMpImagePrompt.article_id == article.id,
+            WechatMpImagePrompt.section_id.in_(obsolete_section_ids),
+        )
+    ).all()
+    for prompt in obsolete_prompts:
+        article.html_body = article.html_body.replace(f"{{{{image:prompt-{prompt.id}}}}}", "")
+        assets = db.scalars(
+            select(WechatMpAsset).where(WechatMpAsset.prompt_id == prompt.id)
+        ).all()
+        for asset in assets:
+            for public_url in {asset.public_url, escape(asset.public_url, quote=True)}:
+                image_pattern = re.compile(
+                    r'<img\b[^>]*\bsrc=["\']' + re.escape(public_url) + r'["\'][^>]*>'
+                )
+                article.html_body = image_pattern.sub("", article.html_body)
+            asset.prompt_id = None
+        db.delete(prompt)
+    db.flush()
+    for section in obsolete_sections:
+        db.delete(section)
+    db.flush()
+
+
 def _parse_token_count(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError("token count must be an integer")
@@ -203,6 +245,7 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
     model = resolve_wechat_mp_model(db=db, user_id=user_id, model_type="text")
     try:
         sections = generate_article_shotlist(db=db, user_id=user_id, article_id=article_id, text_model=model.model_name)
+        _remove_obsolete_prompt_sections(db, article, sections)
         prompts = []
         revision_invalidated = False
         for section in sections:

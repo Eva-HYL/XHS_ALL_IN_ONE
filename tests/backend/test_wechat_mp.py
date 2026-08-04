@@ -2290,6 +2290,106 @@ def test_wechat_mp_shotlist_skips_plain_headings_when_diagram_sections_exist():
     assert candidates[0]["source_excerpt"] == "需求获取 → 需求分析 → 需求规格说明书编制 → 需求验证与确认"
 
 
+def test_wechat_mp_shotlist_skips_markup_and_click_instruction_flows():
+    from backend.app.services.wechat_mp_shotlist_service import choose_candidate_sections
+
+    candidates = choose_candidate_sections(
+        "## 章节练习\n\n"
+        "<details> → <summary> → 点击查看答案与解析\n\n"
+        "需求获取 → 需求分析 → 需求规格说明书编制 → 需求验证与确认"
+    )
+
+    assert all("<details>" not in item["source_excerpt"] for item in candidates)
+    assert candidates[0]["source_excerpt"] == "需求获取 → 需求分析 → 需求规格说明书编制 → 需求验证与确认"
+    assert choose_candidate_sections(
+        "<details> → <summary> → 点击查看答案与解析"
+    ) == []
+
+
+def test_regenerating_prompts_removes_obsolete_markup_prompt_from_article(
+    api_client, auth_headers, created_wechat_article, monkeypatch
+):
+    from backend.app.models import WechatMpArticleSection, WechatMpAsset, WechatMpImagePrompt
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        article = session.get(type(created_wechat_article), created_wechat_article.id)
+        stale_section = WechatMpArticleSection(
+            user_id=article.user_id,
+            article_id=article.id,
+            section_index=1,
+            summary="图解类型：流程图\n必须准确呈现节点：<details> -> <summary> -> 点击查看答案与解析",
+            source_excerpt="<details> → <summary> → 点击查看答案与解析",
+            needs_image=True,
+        )
+        session.add(stale_section)
+        session.flush()
+        stale_prompt = WechatMpImagePrompt(
+            user_id=article.user_id,
+            article_id=article.id,
+            section_id=stale_section.id,
+            skill_name="xiaomao-illustrations",
+            prompt="画出 details 和 summary",
+            editable_prompt="画出 details 和 summary",
+            status="generated",
+        )
+        session.add(stale_prompt)
+        session.flush()
+        stale_asset = WechatMpAsset(
+            user_id=article.user_id,
+            article_id=article.id,
+            prompt_id=stale_prompt.id,
+            role="inline_illustration",
+            file_path="/tmp/stale-markup.png",
+            public_url="/api/files/media/stale-markup.png",
+            prompt=stale_prompt.editable_prompt,
+            skill_name=stale_prompt.skill_name,
+            model_name="test-image-model",
+            status="generated",
+        )
+        session.add(stale_asset)
+        article.markdown_body = "需求获取 → 需求分析 → 需求规格说明书编制 → 需求验证与确认"
+        article.html_body = '<p>正文</p><img src="/api/files/media/stale-markup.png" alt="无效配图" />'
+        article.status = "prompts_ready"
+        session.commit()
+        stale_section_id = stale_section.id
+        stale_asset_id = stale_asset.id
+    finally:
+        session.close()
+
+    monkeypatch.setattr(
+        prompt_service,
+        "_call_prompt_model",
+        lambda **kwargs: {
+            "prompt": "画出真实需求流程",
+            "input_tokens": 12,
+            "output_tokens": 24,
+            "model_name": kwargs["model_name"],
+        },
+    )
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 201
+    assert len(response.json()) == 1
+    assert response.json()[0]["editable_prompt"] != "画出 details 和 summary"
+    article_data = client.get(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}", headers=auth_headers
+    ).json()
+    assert "/api/files/media/stale-markup.png" not in article_data["html_body"]
+    session = session_factory()
+    try:
+        assert session.get(WechatMpArticleSection, stale_section_id) is None
+        assert session.query(WechatMpImagePrompt).filter_by(article_id=created_wechat_article.id).count() == 1
+        assert session.get(WechatMpAsset, stale_asset_id).prompt_id is None
+    finally:
+        session.close()
+
+
 def test_xiaomao_prompt_contract_preserves_exact_diagram_nodes():
     from backend.app.services.wechat_mp_image_prompt_service import build_skill_prompt
 

@@ -10,6 +10,8 @@ from backend.app.models import WechatMpArticle, WechatMpArticleSection
 
 _ANCHOR_WORDS = ("关键", "转折", "方法", "问题", "结果", "口诀", "必考", "高频")
 _FLOW_SPLIT_RE = re.compile(r"\s*(?:→|->|⇒|=>|＞|>)\s*")
+_PRESENTATION_TAG_RE = re.compile(r"</?(?:details|summary)\b[^>]*>", flags=re.IGNORECASE)
+_INTERACTION_INSTRUCTION_RE = re.compile(r"(?:点击|展开|收起).{0,12}(?:查看|答案|解析|内容)")
 
 
 def _is_heading(paragraph: str) -> bool:
@@ -22,6 +24,12 @@ def _extract_flow_nodes(paragraph: str) -> list[str]:
     text = re.sub(r"^[\s\-*#\d.、：:]+", "", paragraph.strip())
     nodes = [node.strip(" 。；;，,：:") for node in _FLOW_SPLIT_RE.split(text) if node.strip(" 。；;，,：:")]
     return nodes if len(nodes) >= 3 else []
+
+
+def _is_presentation_artifact(paragraph: str) -> bool:
+    """Exclude layout controls and interaction copy that have no illustration value."""
+    tags = _PRESENTATION_TAG_RE.findall(paragraph)
+    return bool(tags) and (len(tags) >= 2 or bool(_INTERACTION_INSTRUCTION_RE.search(paragraph)))
 
 
 def _diagram_summary(paragraph: str) -> tuple[int, str] | None:
@@ -56,9 +64,17 @@ def choose_candidate_sections(markdown_body: str) -> list[dict]:
     if not paragraphs:
         return []
 
+    eligible_paragraphs = [
+        (index, paragraph)
+        for index, paragraph in enumerate(paragraphs)
+        if not _is_presentation_artifact(paragraph)
+    ]
+    if not eligible_paragraphs:
+        return []
+
     selected: list[tuple[int, int, dict]] = []
     fallback: list[tuple[int, int, dict]] = []
-    for index, paragraph in enumerate(paragraphs):
+    for index, paragraph in eligible_paragraphs:
         diagram = _diagram_summary(paragraph)
         if diagram is not None:
             priority, summary = diagram
@@ -85,10 +101,14 @@ def choose_candidate_sections(markdown_body: str) -> list[dict]:
                 },
             ))
     ranked = [item for _, _, item in sorted(selected + fallback, key=lambda item: (item[0], item[1]))]
+    fallback_index, fallback_paragraph = next(
+        ((index, paragraph) for index, paragraph in eligible_paragraphs if not _is_heading(paragraph)),
+        eligible_paragraphs[0],
+    )
     return ranked[:8] or [{
-        "section_index": 0,
-        "summary": paragraphs[0][:180],
-        "source_excerpt": paragraphs[0],
+        "section_index": fallback_index,
+        "summary": fallback_paragraph[:180],
+        "source_excerpt": fallback_paragraph,
         "needs_image": True,
     }]
 
