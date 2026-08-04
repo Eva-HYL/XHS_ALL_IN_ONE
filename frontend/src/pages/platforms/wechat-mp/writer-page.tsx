@@ -29,6 +29,7 @@ import type {
   WechatMpImagePrompt,
   WechatMpIllustrationCharacter,
   WechatMpMaterial,
+  WechatMpPromptAnalysis,
 } from "../../../types";
 import { WechatMpLayout } from "./wechat-mp-layout";
 
@@ -65,6 +66,7 @@ export function WechatMpWriterPage() {
   const [params, setParams] = useSearchParams();
   const [article, setArticle] = useState<WechatMpArticle | null>(null);
   const [prompts, setPrompts] = useState<WechatMpImagePrompt[]>([]);
+  const [promptAnalysis, setPromptAnalysis] = useState<WechatMpPromptAnalysis | null>(null);
   const [assets, setAssets] = useState<WechatMpAsset[]>([]);
   const [materials, setMaterials] = useState<WechatMpMaterial[]>([]);
   const [characters, setCharacters] = useState<WechatMpIllustrationCharacter[]>([]);
@@ -141,6 +143,7 @@ export function WechatMpWriterPage() {
         setEditMarkdown(loadedArticle.markdown_body);
         setSkill(loadedArticle.illustration_skill);
         setPrompts(loadedPrompts);
+        setPromptAnalysis(null);
         setAssets(activeArticleAssets(articleId, loadedPrompts, loadedAssets.items));
         setWorkflowStep(focusPromptId && loadedPrompts.some((prompt) => prompt.id === focusPromptId) ? 4 : loadedPrompts.length > 0 ? 4 : 2);
         if (focusPromptId && loadedPrompts.some((prompt) => prompt.id === focusPromptId)) {
@@ -166,6 +169,7 @@ export function WechatMpWriterPage() {
     setEditMarkdown(next.markdown_body);
     setParams({ article: String(next.id) });
     setPrompts([]);
+    setPromptAnalysis(null);
     setAssets([]);
     setSelectedMaterialIds([]);
     setWorkflowStep(2);
@@ -282,6 +286,7 @@ export function WechatMpWriterPage() {
           fetchWechatMpAssets(),
         ]);
         setPrompts(loadedPrompts);
+        setPromptAnalysis(null);
         setAssets(activeArticleAssets(article.id, loadedPrompts, loadedAssets.items));
       }
       setNotice(updated.revision === previousRevision
@@ -299,12 +304,19 @@ export function WechatMpWriterPage() {
     if (!article) return;
     setPromptBusy(true);
     setError(null);
-    setNotice("配图提示词生成中；长文会按段落串行调用模型，可能需要几分钟。");
+    setNotice("配图提示词生成中；正在分析正文内容。");
     try {
-      setPrompts(await generateWechatMpPrompts(article.id, skill));
+      const result = await generateWechatMpPrompts(article.id, skill);
+      setPrompts(result.items);
+      setPromptAnalysis(result.analysis);
       setArticle(await fetchWechatMpArticle(article.id));
       setWorkflowStep(4);
-      setNotice("配图提示词已生成。none 模式保留可编辑提示词，但不会嵌入正文或生成正文图片。");
+      setNotice(skill === "none"
+        ? "已跳过正文提示词和正文生图费用。"
+        : result.items.length === 0
+          ? "未发现值得配图的正文内容，本次未生成装饰性配图。"
+          : "配图提示词已生成。"
+      );
     } catch (err) {
       setError(errorMessage(err, "提示词生成失败。"));
     } finally {
@@ -489,9 +501,9 @@ export function WechatMpWriterPage() {
     </Card>}
 
     {article && workflowStep === 3 && <Card title="4. 生成配图提示词">
-        <Paragraph>文章已排版完成。现在按段落拆出配图提示词；长文会串行调用模型，可能需要几分钟。</Paragraph>
-        <Paragraph>当前技能：<Text code>{skill}</Text>。<Text code>none</Text> 仍生成可编辑提示词，但不嵌入正文、不生成正文图片；公众号封面仍可生成。</Paragraph>
-        <Paragraph type="secondary">提示词预估：所有技能均按文本模型 token 计费；<Text code>none</Text> 仅免去正文图片生成费用。</Paragraph>
+        <Paragraph>文章已排版完成。现在分析正文内容，生成值得配图的提示词。</Paragraph>
+        <Paragraph>当前技能：<Text code>{skill}</Text>。<Text code>none</Text> 会跳过正文提示词和正文图片；公众号封面仍可生成。</Paragraph>
+        <Paragraph type="secondary">提示词预估：非 <Text code>none</Text> 技能按文本模型 token 计费；<Text code>none</Text> 不产生正文提示词和正文生图费用。</Paragraph>
         <Space>
           <Button icon={<ArrowLeftOutlined />} onClick={() => setWorkflowStep(2)}>返回编辑文章</Button>
           <Button type="primary" icon={<PictureOutlined />} loading={promptBusy} onClick={() => void makePrompts()}>{prompts.length > 0 ? "重新生成提示词" : "生成提示词"}</Button>
@@ -500,6 +512,11 @@ export function WechatMpWriterPage() {
 
     {article && workflowStep === 4 && <Card title="5. 编辑提示词并生成图片">
         <Space direction="vertical" size={12} style={{ width: "100%" }}>
+          {promptAnalysis && <Alert
+            type="info"
+            showIcon
+            message={`本次分析：原文 ${promptAnalysis.source_blocks} 段，过滤 ${promptAnalysis.filtered_blocks} 段，复用 ${promptAnalysis.reused_prompts} 条，模型调用 ${promptAnalysis.model_calls} 次，Token ${promptAnalysis.input_tokens + promptAnalysis.output_tokens}。`}
+          />}
           <Select placeholder="使用后端默认图片模型" allowClear value={imageModel} onChange={setImageModel} options={imageModels.map((model) => ({ value: model.model_name, label: `${model.name}${model.is_default ? "（默认）" : ""}` }))} />
           <Text type="secondary">{estimatedCost}；执行后会写入上方累计实际费用。</Text>
           <Card size="small" title="公众号封面" extra={<Tag>{coverAsset ? "已生成" : "未生成"}</Tag>}>
@@ -525,7 +542,7 @@ export function WechatMpWriterPage() {
               </Col>
             </Row>
           </Card>
-          {prompts.length === 0 ? <Empty description="提示词生成后在此编辑；非 none 技能可继续生图" /> : prompts.map((prompt) =>
+          {prompts.length === 0 ? <Empty description={skill === "none" ? "已跳过正文提示词和正文生图费用。" : "未发现值得配图的正文内容，本次未生成装饰性配图。"} /> : prompts.map((prompt) =>
             {
               const isGenerating = activeImagePromptId === prompt.id;
               const isQueued = !isGenerating && imageQueue.includes(prompt.id);

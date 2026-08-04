@@ -896,6 +896,22 @@ export interface WechatMpImagePrompt {
   updated_at?: string;
 }
 
+export type WechatMpPromptAnalysis = {
+  source_blocks: number;
+  filtered_blocks: number;
+  deterministic_prompts: number;
+  semantic_candidates: number;
+  reused_prompts: number;
+  model_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+};
+
+export type WechatMpPromptGenerationResult = {
+  items: WechatMpImagePrompt[];
+  analysis: WechatMpPromptAnalysis;
+};
+
 export type WechatMpAccount = {
   id: number;
   user_id: number;

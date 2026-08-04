@@ -4501,6 +4501,24 @@ def test_wechat_mp_writer_recovers_article_generation_after_slow_response():
     assert "文章已生成，已自动进入编辑步骤。" in writer_source
 
 
+def test_wechat_mp_writer_surfaces_prompt_analysis_result():
+    types_source = Path("frontend/src/types/index.ts").read_text(encoding="utf-8")
+    api_source = Path("frontend/src/lib/api.ts").read_text(encoding="utf-8")
+    writer_source = Path("frontend/src/pages/platforms/wechat-mp/writer-page.tsx").read_text(encoding="utf-8")
+
+    assert "export type WechatMpPromptAnalysis" in types_source
+    assert "export type WechatMpPromptGenerationResult" in types_source
+    assert "Promise<WechatMpPromptGenerationResult>" in api_source
+    assert "http.post<WechatMpPromptGenerationResult>" in api_source
+    assert "http.get<WechatMpImagePrompt[]>(`/platforms/wechat-mp/articles/${articleId}/prompts`)" in api_source
+    assert "const [promptAnalysis, setPromptAnalysis]" in writer_source
+    assert "setPrompts(result.items)" in writer_source
+    assert "setPromptAnalysis(result.analysis)" in writer_source
+    assert "本次分析：原文 ${promptAnalysis.source_blocks} 段，过滤 ${promptAnalysis.filtered_blocks} 段，复用 ${promptAnalysis.reused_prompts} 条，模型调用 ${promptAnalysis.model_calls} 次，Token ${promptAnalysis.input_tokens + promptAnalysis.output_tokens}。" in writer_source
+    assert "未发现值得配图的正文内容，本次未生成装饰性配图。" in writer_source
+    assert "已跳过正文提示词和正文生图费用。" in writer_source
+
+
 def _semantic_batch_candidates(count=2):
     from backend.app.services.wechat_mp_content_analysis_service import ContentBlock, VisualCandidate
 
