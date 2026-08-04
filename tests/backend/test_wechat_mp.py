@@ -113,6 +113,58 @@ def test_wechat_mp_models_are_independent_from_xhs_assets(db_session, test_user)
     assert db_session.query(IllustrationAsset).count() == 0
 
 
+def test_prompt_fingerprints_and_analysis_response_defaults(db_session, test_user):
+    from backend.app.models.wechat_mp import (
+        WechatMpArticle,
+        WechatMpArticleSection,
+        WechatMpImagePrompt,
+    )
+    from backend.app.schemas.wechat_mp import (
+        WechatMpPromptAnalysisResponse,
+        WechatMpPromptGenerationResponse,
+    )
+
+    article = WechatMpArticle(user_id=test_user.id, title="公众号标题")
+    db_session.add(article)
+    db_session.flush()
+    section = WechatMpArticleSection(
+        user_id=test_user.id,
+        article_id=article.id,
+        section_index=0,
+    )
+    db_session.add(section)
+    db_session.flush()
+    prompt = WechatMpImagePrompt(
+        user_id=test_user.id,
+        article_id=article.id,
+        section_id=section.id,
+        prompt="小猫压住一个标题盒子",
+        editable_prompt="小猫压住一个标题盒子",
+    )
+    db_session.add(prompt)
+    db_session.flush()
+
+    assert section.source_fingerprint == ""
+    assert section.analysis_version == ""
+    assert prompt.generation_fingerprint == ""
+
+    analysis = WechatMpPromptAnalysisResponse()
+    assert analysis.model_dump() == {
+        "source_blocks": 0,
+        "filtered_blocks": 0,
+        "deterministic_prompts": 0,
+        "semantic_candidates": 0,
+        "reused_prompts": 0,
+        "model_calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+    }
+    assert WechatMpPromptGenerationResponse(items=[], analysis=analysis).model_dump() == {
+        "items": [],
+        "analysis": analysis.model_dump(),
+    }
+
+
 def test_image_prompt_section_index_matches_migration(monkeypatch):
     from backend.app.models.wechat_mp import WechatMpImagePrompt
 

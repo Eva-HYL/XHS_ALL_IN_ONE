@@ -54,6 +54,8 @@ class WechatMpArticleSection(Base):
     section_index: Mapped[int] = mapped_column(Integer, nullable=False)
     summary: Mapped[str] = mapped_column(Text, default="", nullable=False)
     source_excerpt: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    source_fingerprint: Mapped[str] = mapped_column(String(64), default="", nullable=False)
+    analysis_version: Mapped[str] = mapped_column(String(32), default="", nullable=False)
     needs_image: Mapped[bool] = mapped_column(default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
@@ -70,6 +72,7 @@ class WechatMpImagePrompt(Base):
     skill_version: Mapped[str] = mapped_column(String(32), default="v1.0.0", nullable=False)
     prompt: Mapped[str] = mapped_column(Text, nullable=False)
     editable_prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    generation_fingerprint: Mapped[str] = mapped_column(String(64), default="", nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="prompt_ready", index=True, nullable=False)
     cost_estimate: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
