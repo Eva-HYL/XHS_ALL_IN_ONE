@@ -2176,6 +2176,98 @@ def test_xiaomao_prompt_contract_preserves_exact_diagram_nodes():
     assert "不要把流程改成泛化插画" in prompt
 
 
+def test_deterministic_prompts_keep_canonical_character_mentions_and_exact_labels():
+    from backend.app.services.wechat_mp_content_analysis_service import analyze_content
+    from backend.app.services.wechat_mp_image_prompt_service import build_deterministic_prompt
+    from backend.app.models.wechat_mp import WechatMpIllustrationCharacter
+
+    character = WechatMpIllustrationCharacter(name="团团", user_id=1, skill_name="custom-1", prompt="自定义形象")
+    analysis = analyze_content(
+        "收集需求 → 分析需求 → 确认需求\n\n"
+        "| 阶段 | 产物 |\n| --- | --- |\n| 收集 | 清单 |\n\n"
+        "输入：原始数据\n输出：标准数据"
+    )
+    prompts = {
+        candidate.kind: build_deterministic_prompt(candidate, character)
+        for candidate in analysis.deterministic_candidates
+    }
+
+    assert prompts["flow"] == "@团团\n收集需求 -> 分析需求 -> 确认需求"
+    assert prompts["table"] == "@团团\n阶段 | 产物\n收集 | 清单"
+    assert prompts["classification"] == "@团团\n输入：原始数据\n输出：标准数据"
+    assert all("标题" not in prompt and "尺寸" not in prompt and "水印" not in prompt for prompt in prompts.values())
+
+
+def test_deterministic_prompts_use_no_model_calls_or_text_usage(api_client, auth_headers, monkeypatch):
+    from backend.app.models import UsageRecord, User, WechatMpArticle
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        article = WechatMpArticle(
+            user_id=owner.id,
+            title="不应进入提示词",
+            markdown_body="收集需求 → 分析需求 → 确认需求\n\n输入：原始数据\n输出：标准数据",
+            html_body="<p>收集需求 → 分析需求 → 确认需求</p><p>输入：原始数据<br>输出：标准数据</p>",
+            status="layout_ready",
+        )
+        session.add(article)
+        session.commit()
+        article_id = article.id
+    finally:
+        session.close()
+
+    monkeypatch.setattr(prompt_service, "_call_prompt_model", lambda **kwargs: pytest.fail("deterministic candidates must not call the prompt model"))
+
+    response = client.post(f"/api/platforms/wechat-mp/articles/{article_id}/prompts", headers=auth_headers)
+
+    assert response.status_code == 201
+    assert [item["cost_estimate"] for item in response.json()] == [
+        {"currency": "CNY", "total_yuan": "0.0000", "calls": 0},
+        {"currency": "CNY", "total_yuan": "0.0000", "calls": 0},
+    ]
+    session = session_factory()
+    try:
+        assert session.query(UsageRecord).filter_by(step="generate_image_prompt").count() == 0
+    finally:
+        session.close()
+
+
+def test_deterministic_prompt_reuse_survives_reruns_and_paragraph_moves(db_session, test_user, monkeypatch):
+    from backend.app.models.wechat_mp import WechatMpArticle, WechatMpImagePrompt
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    article = WechatMpArticle(
+        user_id=test_user.id,
+        title="不应进入提示词",
+        markdown_body="说明段落。\n\n收集需求 → 分析需求 → 确认需求\n\n结尾段落。",
+        html_body="<p>说明段落。</p><p>收集需求 → 分析需求 → 确认需求</p><p>结尾段落。</p>",
+        status="layout_ready",
+    )
+    db_session.add(article)
+    db_session.commit()
+    monkeypatch.setattr(prompt_service, "_call_prompt_model", lambda **kwargs: pytest.fail("deterministic candidates must not call the prompt model"))
+
+    first = prompt_service.generate_image_prompts(
+        db=db_session, user_id=test_user.id, article_id=article.id, skill_name=None,
+    )
+    rerun = prompt_service.generate_image_prompts(
+        db=db_session, user_id=test_user.id, article_id=article.id, skill_name=None,
+    )
+    article.markdown_body = "收集需求 → 分析需求 → 确认需求\n\n说明段落。\n\n结尾段落。"
+    article.html_body = "<p>收集需求 → 分析需求 → 确认需求</p><p>说明段落。</p><p>结尾段落。</p>"
+    db_session.commit()
+    moved = prompt_service.generate_image_prompts(
+        db=db_session, user_id=test_user.id, article_id=article.id, skill_name=None,
+    )
+
+    assert [prompt.id for prompt in rerun] == [prompt.id for prompt in first]
+    assert [prompt.id for prompt in moved] == [prompt.id for prompt in first]
+    assert db_session.query(WechatMpImagePrompt).filter_by(article_id=article.id).count() == 1
+
+
 def test_generating_prompts_twice_reuses_prompts_and_placeholders(api_client, auth_headers, created_wechat_article, monkeypatch):
     from backend.app.models import WechatMpImagePrompt
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
