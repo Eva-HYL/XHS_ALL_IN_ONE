@@ -1,6 +1,6 @@
 import { ArrowLeftOutlined, ArrowRightOutlined, EditOutlined, PictureOutlined, SaveOutlined, SendOutlined } from "@ant-design/icons";
 import { Alert, Button, Card, Col, Empty, Input, Row, Select, Space, Steps, Tag, Typography } from "antd";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { PageHeader } from "../../../components/layout/app-shell";
@@ -93,8 +93,18 @@ export function WechatMpWriterPage() {
   const imageQueueRef = useRef<number[]>([]);
   const imageWorkerRunningRef = useRef(false);
   const promptSnapshotRef = useRef<WechatMpImagePrompt[]>([]);
+  const activePromptArticleIdRef = useRef<number | null>(null);
+  const promptGenerationTokenRef = useRef(0);
   const articleId = Number(params.get("article"));
   const focusPromptId = Number(params.get("prompt")) || null;
+
+  useLayoutEffect(() => {
+    activePromptArticleIdRef.current = articleId || null;
+    promptGenerationTokenRef.current += 1;
+    setPrompts([]);
+    setPromptAnalysis(null);
+    setPromptBusy(false);
+  }, [articleId]);
 
   useEffect(() => {
     promptSnapshotRef.current = prompts;
@@ -302,14 +312,21 @@ export function WechatMpWriterPage() {
 
   async function makePrompts() {
     if (!article) return;
+    const requestedArticleId = article.id;
+    const requestToken = ++promptGenerationTokenRef.current;
+    const isCurrentPromptRequest = () =>
+      requestToken === promptGenerationTokenRef.current && activePromptArticleIdRef.current === requestedArticleId;
     setPromptBusy(true);
     setError(null);
     setNotice("配图提示词生成中；正在分析正文内容。");
     try {
       const result = await generateWechatMpPrompts(article.id, skill);
+      if (!isCurrentPromptRequest()) return;
+      const refreshedArticle = await fetchWechatMpArticle(article.id);
+      if (!isCurrentPromptRequest()) return;
       setPrompts(result.items);
       setPromptAnalysis(result.analysis);
-      setArticle(await fetchWechatMpArticle(article.id));
+      setArticle(refreshedArticle);
       setWorkflowStep(4);
       setNotice(skill === "none"
         ? "已跳过正文提示词和正文生图费用。"
@@ -318,9 +335,10 @@ export function WechatMpWriterPage() {
           : "配图提示词已生成。"
       );
     } catch (err) {
+      if (!isCurrentPromptRequest()) return;
       setError(errorMessage(err, "提示词生成失败。"));
     } finally {
-      setPromptBusy(false);
+      if (isCurrentPromptRequest()) setPromptBusy(false);
     }
   }
 

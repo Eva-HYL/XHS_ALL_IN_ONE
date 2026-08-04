@@ -4519,6 +4519,27 @@ def test_wechat_mp_writer_surfaces_prompt_analysis_result():
     assert "已跳过正文提示词和正文生图费用。" in writer_source
 
 
+def test_wechat_mp_writer_ignores_stale_prompt_generation_updates():
+    writer_source = Path("frontend/src/pages/platforms/wechat-mp/writer-page.tsx").read_text(encoding="utf-8")
+    make_start = writer_source.index("async function makePrompts()")
+    make_end = writer_source.index("async function regenerate(", make_start)
+    make_source = writer_source[make_start:make_end]
+
+    assert "const activePromptArticleIdRef = useRef<number | null>(null);" in writer_source
+    assert "const promptGenerationTokenRef = useRef(0);" in writer_source
+    assert "activePromptArticleIdRef.current = articleId || null;" in writer_source
+    assert "promptGenerationTokenRef.current += 1;" in writer_source
+    assert "setPrompts([]);" in writer_source
+    assert "setPromptAnalysis(null);" in writer_source
+    assert "setPromptBusy(false);" in writer_source
+    assert "const requestedArticleId = article.id;" in make_source
+    assert "const requestToken = ++promptGenerationTokenRef.current;" in make_source
+    assert "requestToken === promptGenerationTokenRef.current && activePromptArticleIdRef.current === requestedArticleId" in make_source
+    assert make_source.count("if (!isCurrentPromptRequest()) return;") >= 2
+    assert "catch (err) {\n      if (!isCurrentPromptRequest()) return;" in make_source
+    assert "if (isCurrentPromptRequest()) setPromptBusy(false);" in make_source
+
+
 def _semantic_batch_candidates(count=2):
     from backend.app.services.wechat_mp_content_analysis_service import ContentBlock, VisualCandidate
 
