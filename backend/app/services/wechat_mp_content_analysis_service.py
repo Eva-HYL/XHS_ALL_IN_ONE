@@ -18,6 +18,23 @@ _DIMENSION_RE = re.compile(r"\b\d{2,4}\s*(?:x|×)\s*\d{2,4}\b", re.IGNORECASE)
 _MARKDOWN_DECORATION_RE = re.compile(r"[`*_]")
 _MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _MARKDOWN_LINK_RE = re.compile(r"(?<!!)\[([^\]]+)\]\([^)]*\)")
+# Authoring and non-rendered containers must never become illustration structures.
+_NON_RENDERED_HTML_TAGS = (
+    "base",
+    "code",
+    "details",
+    "head",
+    "link",
+    "meta",
+    "noscript",
+    "pre",
+    "script",
+    "style",
+    "summary",
+    "template",
+    "title",
+)
+_NON_RENDERED_HTML_RE = re.compile(r"</?(?:" + "|".join(_NON_RENDERED_HTML_TAGS) + r")\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -68,6 +85,7 @@ class ContentAnalysis:
 def _clean_text(text: str) -> str:
     text = _MARKDOWN_IMAGE_RE.sub("", text)
     text = _MARKDOWN_LINK_RE.sub(r"\1", text)
+    text = text.replace(r"\|", "|")
     text = _MARKDOWN_DECORATION_RE.sub("", text)
     return re.sub(r"\s+", " ", text).strip()
 
@@ -85,9 +103,33 @@ def _new_block(source_index: int, heading_path: tuple[str, ...], lines: list[str
     )
 
 
+def _is_escaped(text: str, index: int) -> bool:
+    preceding_backslashes = 0
+    index -= 1
+    while index >= 0 and text[index] == "\\":
+        preceding_backslashes += 1
+        index -= 1
+    return preceding_backslashes % 2 == 1
+
+
+def _split_unescaped_pipes(text: str) -> list[str]:
+    cells: list[str] = []
+    cell: list[str] = []
+    for index, character in enumerate(text):
+        if character == "|" and not _is_escaped(text, index):
+            cells.append("".join(cell))
+            cell = []
+            continue
+        if character == "|" and cell and cell[-1] == "\\":
+            cell.pop()
+        cell.append(character)
+    cells.append("".join(cell))
+    return cells
+
+
 def _is_table_line(line: str) -> bool:
     stripped = line.strip()
-    return bool(stripped) and stripped.count("|") >= 1
+    return bool(stripped) and len(_split_unescaped_pipes(stripped)) >= 2
 
 
 def _is_indented_code_line(line: str) -> bool:
@@ -181,7 +223,7 @@ def _filter_reason(block: ContentBlock) -> str | None:
         return "empty"
     if "```" in text or all(_is_indented_code_line(line) for line in block.raw_text.splitlines() if line.strip()):
         return "code"
-    if "<!--" in lowered or re.search(r"</?(?:details|summary|script|style|meta|pre|code)\b", lowered):
+    if "<!--" in lowered or _NON_RENDERED_HTML_RE.search(text):
         return "html"
     if _DIMENSION_RE.search(text) or any(word in text for word in ("提示词", "水印", "封面尺寸", "生成参数")):
         return "metadata"
@@ -196,9 +238,9 @@ def _table_rows(text: str) -> tuple[tuple[str, ...], ...] | None:
         table_line = line.strip()
         if table_line.startswith("|"):
             table_line = table_line[1:]
-        if table_line.endswith("|"):
+        if table_line.endswith("|") and not _is_escaped(table_line, len(table_line) - 1):
             table_line = table_line[:-1]
-        cells = tuple(_clean_text(cell) for cell in table_line.split("|"))
+        cells = tuple(_clean_text(cell) for cell in _split_unescaped_pipes(table_line))
         if not cells or any(not cell for cell in cells):
             return None
         rows.append(cells)

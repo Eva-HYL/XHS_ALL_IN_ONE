@@ -195,6 +195,18 @@ def test_content_analysis_filters_indented_code_comments_and_nonvisual_html_befo
     assert analysis.candidates == ()
 
 
+def test_content_analysis_filters_non_rendered_html_authoring_containers_before_flows():
+    from backend.app.services.wechat_mp_content_analysis_service import analyze_content
+
+    analysis = analyze_content(
+        "<template>需求获取 -> 需求分析 -> 需求确认</template>\n\n"
+        "<noscript>需求获取 -> 需求分析 -> 需求确认</noscript>"
+    )
+
+    assert analysis.filtered_blocks == 2
+    assert analysis.candidates == ()
+
+
 def test_content_analysis_extracts_exact_flow_with_heading_context():
     from backend.app.services.wechat_mp_content_analysis_service import analyze_content
 
@@ -246,6 +258,11 @@ def test_content_analysis_accepts_only_valid_markdown_tables():
         "--- | ---\n"
         "数据流风格 | [批处理序列](https://example.test/dataflow)"
     )
+    escaped_pipe = analyze_content(
+        "| 类型 | 说明 |\n"
+        "| --- | --- |\n"
+        "| A | a \\| b |"
+    )
 
     assert valid.candidates[0].kind == "table"
     assert valid.candidates[0].structure == (
@@ -258,6 +275,10 @@ def test_content_analysis_accepts_only_valid_markdown_tables():
     assert no_outer_pipes.candidates[0].structure == (
         ("风格", "包含类型"),
         ("数据流风格", "批处理序列"),
+    )
+    assert escaped_pipe.candidates[0].structure == (
+        ("类型", "说明"),
+        ("A", "a | b"),
     )
 
 
