@@ -165,6 +165,108 @@ def test_prompt_fingerprints_and_analysis_response_defaults(db_session, test_use
     }
 
 
+def test_content_analysis_filters_nonvisual_html_and_metadata_before_flow_detection():
+    from backend.app.services.wechat_mp_content_analysis_service import analyze_content
+
+    analysis = analyze_content(
+        "<details><summary>点击查看答案</summary>\n"
+        "需求获取 -> 需求分析 -> 需求确认\n"
+        "</details>\n\n"
+        "封面尺寸：900 x 383，禁止水印。\n\n"
+        "提示词：一只猫坐在桌前。"
+    )
+
+    assert len(analysis.blocks) == 3
+    assert analysis.filtered_blocks == 3
+    assert analysis.candidates == ()
+
+
+def test_content_analysis_extracts_exact_flow_with_heading_context():
+    from backend.app.services.wechat_mp_content_analysis_service import analyze_content
+
+    analysis = analyze_content(
+        "# 系统设计\n\n"
+        "## 需求流程\n\n"
+        "需求获取 -> 需求分析 -> 需求确认"
+    )
+
+    candidate = analysis.candidates[0]
+    assert candidate.kind == "flow"
+    assert candidate.heading_path == ("系统设计", "需求流程")
+    assert candidate.structure == (("需求获取", "需求分析", "需求确认"),)
+
+
+def test_content_analysis_accepts_only_valid_markdown_tables():
+    from backend.app.services.wechat_mp_content_analysis_service import analyze_content
+
+    valid = analyze_content(
+        "| 风格 | 包含类型 |\n"
+        "| --- | --- |\n"
+        "| 数据流风格 | 批处理序列、管道/过滤器 |\n"
+        "| 仓库风格 | 数据库系统、黑板系统 |"
+    )
+    invalid = analyze_content("| 风格 | 包含类型 |\n| 数据流风格 | 批处理序列 |")
+
+    assert valid.candidates[0].kind == "table"
+    assert valid.candidates[0].structure == (
+        ("风格", "包含类型"),
+        ("数据流风格", "批处理序列、管道/过滤器"),
+        ("仓库风格", "数据库系统、黑板系统"),
+    )
+    assert invalid.candidates == ()
+
+
+def test_content_analysis_extracts_explicit_classification_mappings():
+    from backend.app.services.wechat_mp_content_analysis_service import analyze_content
+
+    analysis = analyze_content(
+        "## 架构风格分类\n\n"
+        "- 数据流风格：批处理序列、管道/过滤器\n"
+        "- 调用/返回风格：主程序/子程序、层次结构"
+    )
+
+    candidate = analysis.candidates[0]
+    assert candidate.kind == "classification"
+    assert candidate.structure == (
+        ("数据流风格", "批处理序列、管道/过滤器"),
+        ("调用/返回风格", "主程序/子程序、层次结构"),
+    )
+
+
+def test_content_analysis_returns_no_candidate_for_low_information_copy():
+    from backend.app.services.wechat_mp_content_analysis_service import analyze_content
+
+    analysis = analyze_content("# 开场\n\n欢迎关注公众号，下一篇再见。")
+
+    assert analysis.candidates == ()
+    assert analysis.filtered_blocks == 0
+
+
+def test_content_analysis_deduplicates_at_jaccard_point_eight_two_boundary():
+    from backend.app.services.wechat_mp_content_analysis_service import (
+        ContentBlock,
+        VisualCandidate,
+        _char_bigrams,
+        _deduplicate,
+        _jaccard,
+    )
+
+    # The first text has 41 unique bigrams; the second appends nine, so 41 / 50 == 0.82.
+    base = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEF"
+    extended = base + "GHIJKLMNO"
+    first_block = ContentBlock(0, (), base, base, "first")
+    second_block = ContentBlock(1, (), extended, extended, "second")
+    candidates = (
+        VisualCandidate(first_block, "semantic", (), 0.70),
+        VisualCandidate(second_block, "semantic", (), 0.80),
+    )
+
+    deduplicated = _deduplicate(candidates)
+
+    assert _jaccard(_char_bigrams(base), _char_bigrams(extended)) == pytest.approx(0.82)
+    assert deduplicated == (candidates[1],)
+
+
 def test_image_prompt_section_index_matches_migration(monkeypatch):
     from backend.app.models.wechat_mp import WechatMpImagePrompt
 
