@@ -22,6 +22,7 @@ export function WechatMpCharactersPage() {
   const [previews, setPreviews] = useState<Record<string, string>>({});
   const [createOpen, setCreateOpen] = useState(false);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [initialReference, setInitialReference] = useState<File | null>(null);
 
   async function loadCharacters() {
     setLoading(true);
@@ -61,12 +62,18 @@ export function WechatMpCharactersPage() {
         name: values.name.trim(),
         prompt: values.prompt.trim(),
       });
-      setCharacters((items) => [...items, created]);
+      if (initialReference) {
+        await uploadWechatMpCharacterView(created.id!, "front", initialReference);
+      }
+      await loadCharacters();
       form.resetFields();
+      setInitialReference(null);
       setCreateOpen(false);
-      setNotice(`形象「${created.name}」已创建，可在写作页选择使用。`);
+      setNotice(initialReference
+        ? `形象「${created.name}」已创建，参考图已保存为正面视图。请确认正面视图后生成其余三视图。`
+        : `形象「${created.name}」已创建，请补齐并确认四视图后在写作页使用。`);
     } catch {
-      setError("自定义形象创建失败。");
+      setError("形象创建或参考图上传失败。若形象已出现于列表，请在正面视图重新上传参考图。");
     } finally {
       setSaving(false);
     }
@@ -114,13 +121,24 @@ export function WechatMpCharactersPage() {
       {previewWarning && <Alert type="warning" message={previewWarning} showIcon closable onClose={() => setPreviewWarning(null)} style={{ marginBottom: 16 }} />}
       {notice && <Alert type="success" message={notice} showIcon closable onClose={() => setNotice(null)} style={{ marginBottom: 16 }} />}
 
-      <Modal title="新增形象" open={createOpen} onCancel={() => setCreateOpen(false)} footer={null} destroyOnHidden>
+      <Modal title="新增形象" open={createOpen} onCancel={() => { setInitialReference(null); setCreateOpen(false); }} footer={null} destroyOnHidden>
             <Form form={form} layout="vertical" onFinish={(values) => void submit(values)}>
               <Form.Item name="name" label="形象名称" rules={[{ required: true, message: "请填写形象名称" }]}>
                 <Input placeholder="如：小护士、验收小猫、产品经理兔" />
               </Form.Item>
               <Form.Item name="prompt" label="自定义形象提示词" rules={[{ required: true, message: "请填写形象提示词" }]}>
                 <TextArea rows={8} placeholder="描述外观、性格、固定风格、动作边界和禁止项。例如：圆脸小护士，蓝白制服，手绘科普风，不写实，不复杂背景。" />
+              </Form.Item>
+              <Form.Item label="参考图（可选）" extra="将作为正面视图私密保存。建议上传五官清晰、无遮挡的正面照片；创建后确认该视图，即可据此生成其余三视图。">
+                <Upload
+                  accept="image/jpeg,image/png,image/webp"
+                  maxCount={1}
+                  fileList={initialReference ? [{ uid: "initial-reference", name: initialReference.name, status: "done" }] : []}
+                  beforeUpload={(file) => { setInitialReference(file); return false; }}
+                  onRemove={() => { setInitialReference(null); return true; }}
+                >
+                  <Button icon={<UploadOutlined />}>上传参考图</Button>
+                </Upload>
               </Form.Item>
               <Button type="primary" icon={<PlusOutlined />} htmlType="submit" loading={saving}>新增形象</Button>
             </Form>
