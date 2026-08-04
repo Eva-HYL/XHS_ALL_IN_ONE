@@ -324,8 +324,16 @@ def _jaccard(left: frozenset[str], right: frozenset[str]) -> float:
 def _deduplicate(candidates: tuple[VisualCandidate, ...]) -> tuple[VisualCandidate, ...]:
     retained: list[VisualCandidate] = []
     for candidate in sorted(candidates, key=lambda item: (-item.score, item.source_index)):
+        if candidate.kind != "semantic":
+            # Exact structures are independently renderable contracts, not semantic near-duplicates.
+            retained.append(candidate)
+            continue
         bigrams = _char_bigrams(candidate.block.cleaned_text)
-        if any(_jaccard(bigrams, _char_bigrams(existing.block.cleaned_text)) >= 0.82 for existing in retained):
+        if any(
+            existing.kind == "semantic"
+            and _jaccard(bigrams, _char_bigrams(existing.block.cleaned_text)) >= 0.82
+            for existing in retained
+        ):
             continue
         retained.append(candidate)
     return tuple(retained)

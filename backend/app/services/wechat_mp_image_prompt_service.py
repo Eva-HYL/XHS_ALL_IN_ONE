@@ -63,6 +63,21 @@ def generation_fingerprint(
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _fingerprint_skill_version(skill_name: str) -> str:
+    return f"{skill_name}:{_SKILL_VERSION}"
+
+
+def _find_current_candidate(article: WechatMpArticle, section: WechatMpArticleSection) -> "VisualCandidate | None":
+    from backend.app.services.wechat_mp_content_analysis_service import analyze_content
+
+    if not section.source_fingerprint:
+        return None
+    return next(
+        (candidate for candidate in analyze_content(article.markdown_body).candidates if candidate.fingerprint == section.source_fingerprint),
+        None,
+    )
+
+
 def build_skill_prompt(
     skill_name: str,
     article_title: str,
@@ -122,6 +137,7 @@ def reset_inline_illustrations(
     article: WechatMpArticle,
     *,
     html_body: str | None = None,
+    preserve_prompt_identity: bool = False,
 ) -> str:
     """Remove obsolete inline planning state while retaining generated assets as history."""
     prompts = db.scalars(
@@ -147,6 +163,13 @@ def reset_inline_illustrations(
         cleaned_html = image_pattern.sub("", cleaned_html)
         asset.prompt_id = None
     cleaned_html = re.sub(r"\{\{image:prompt-\d+\}\}", "", cleaned_html)
+
+    if preserve_prompt_identity:
+        for prompt in prompts:
+            if prompt.status != "skipped":
+                prompt.status = "prompt_ready"
+        article.html_body = cleaned_html
+        return cleaned_html
 
     # Detach historical assets before deleting prompt rows to satisfy foreign keys.
     db.flush()
@@ -238,28 +261,48 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
         sections = generate_article_shotlist(db=db, user_id=user_id, article_id=article_id, text_model="deterministic")
         prompts = []
         revision_invalidated = False
+        reused_prompt_state_changed = False
         model = None
         for section in sections:
             candidate = getattr(section, "_visual_candidate", None)
             is_deterministic = candidate is not None and candidate.kind != "semantic"
+            fingerprint_skill_version = _fingerprint_skill_version(selected_skill)
             fingerprint = generation_fingerprint(
                 candidate,
                 character_id=selected_character.id if selected_character else None,
                 anchor_version=selected_character.anchor_version if selected_character else 0,
-                skill_version=_SKILL_VERSION,
+                skill_version=fingerprint_skill_version,
             )
             prompt = db.scalar(
                 select(WechatMpImagePrompt)
                 .where(WechatMpImagePrompt.article_id == article.id, WechatMpImagePrompt.section_id == section.id)
                 .order_by(WechatMpImagePrompt.id.desc())
             )
-            if prompt is not None and prompt.generation_fingerprint == fingerprint:
+            if (
+                prompt is not None
+                and prompt.generation_fingerprint == fingerprint
+                and prompt.skill_name == selected_skill
+                and prompt.character_id == (selected_character.id if selected_character else None)
+                and prompt.skill_version == _SKILL_VERSION
+            ):
                 if selected_skill != "none":
+                    previous_html = article.html_body
                     _insert_prompt_placeholder(article, section, prompt)
+                    reused_prompt_state_changed = reused_prompt_state_changed or article.html_body != previous_html
+                if prompt.status != ("skipped" if selected_skill == "none" else "prompt_ready"):
+                    prompt.status = "skipped" if selected_skill == "none" else "prompt_ready"
+                    reused_prompt_state_changed = True
                 prompts.append(prompt)
                 continue
 
-            if is_deterministic:
+            if selected_skill == "none":
+                result = {
+                    "prompt": prompt.editable_prompt if prompt is not None else "",
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "model_name": "deterministic",
+                }
+            elif is_deterministic:
                 result = {
                     "prompt": build_deterministic_prompt(candidate, selected_character),
                     "input_tokens": 0,
@@ -310,7 +353,7 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
                 prompt.status = prompt_status
             if selected_skill != "none":
                 _insert_prompt_placeholder(article, section, prompt)
-            if is_deterministic:
+            if selected_skill == "none" or is_deterministic:
                 prompt.cost_estimate = {"currency": "CNY", "total_yuan": "0.0000", "calls": 0}
             else:
                 usage = record_text_usage(
@@ -340,6 +383,9 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
                 article.status = "prompts_ready"
             # Each completed provider call is durable even if a later section fails.
             db.commit()
+        if reused_prompt_state_changed:
+            article.status = "prompts_ready"
+            db.commit()
     except Exception:
         db.rollback()
         raise
@@ -349,43 +395,75 @@ def generate_image_prompts(*, db: Session, user_id: int, article_id: int, skill_
 
 
 def regenerate_image_prompt(*, db: Session, prompt: WechatMpImagePrompt, article: WechatMpArticle) -> WechatMpImagePrompt:
-    from backend.app.services.wechat_mp_model_service import resolve_wechat_mp_model
-
     section = db.get(WechatMpArticleSection, prompt.section_id)
     if section is None or section.article_id != article.id:
         raise LookupError("WeChat MP prompt not found")
-    model = resolve_wechat_mp_model(db=db, user_id=article.user_id, model_type="text")
-    result = _call_prompt_model(
-        article_title=article.title,
-        section_summary=section.summary,
-        skill_name=prompt.skill_name,
-        model_name=model.model_name,
-        base_url=model.base_url,
-        api_key=model.api_key,
-    )
+    candidate = _find_current_candidate(article, section)
+    is_deterministic = candidate is not None and candidate.kind != "semantic"
+    character = None
+    if prompt.character_id is not None:
+        from backend.app.models import WechatMpIllustrationCharacter
+        character = db.get(WechatMpIllustrationCharacter, prompt.character_id)
+
+    if prompt.skill_name == "none":
+        result = {
+            "prompt": prompt.editable_prompt,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model_name": "deterministic",
+        }
+    elif is_deterministic:
+        result = {
+            "prompt": build_deterministic_prompt(candidate, character),
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model_name": "deterministic",
+        }
+    else:
+        from backend.app.services.wechat_mp_model_service import resolve_wechat_mp_model
+        model = resolve_wechat_mp_model(db=db, user_id=article.user_id, model_type="text")
+        result = _call_prompt_model(
+            article_title=article.title,
+            section_summary=section.summary,
+            skill_name=prompt.skill_name,
+            model_name=model.model_name,
+            base_url=model.base_url,
+            api_key=model.api_key,
+        )
     prompt.prompt = result["prompt"]
     prompt.editable_prompt = result["prompt"]
+    if candidate is not None:
+        prompt.generation_fingerprint = generation_fingerprint(
+            candidate,
+            character_id=character.id if character else None,
+            anchor_version=character.anchor_version if character else 0,
+            skill_version=_fingerprint_skill_version(prompt.skill_name),
+        )
+    prompt.skill_version = _SKILL_VERSION
     prompt.version += 1
     prompt.status = "skipped" if prompt.skill_name == "none" else "prompt_ready"
     if prompt.skill_name != "none":
         _restore_prompt_placeholder(db, article, section, prompt)
-    usage = record_text_usage(
-        db=db,
-        user_id=article.user_id,
-        pipeline_run_id=None,
-        step="generate_image_prompt",
-        model=result["model_name"],
-        input_tokens=int(result["input_tokens"]),
-        output_tokens=int(result["output_tokens"]),
-        platform="wechat_mp",
-        resource_type="wechat_mp_article",
-        resource_id=article.id,
-        commit=False,
-    )
-    prompt.cost_estimate = {
-        "currency": "CNY", "total_yuan": str(usage.cost_yuan), "calls": 1,
-    }
-    add_article_cost(article, usage.cost_yuan)
+    if prompt.skill_name == "none" or is_deterministic:
+        prompt.cost_estimate = {"currency": "CNY", "total_yuan": "0.0000", "calls": 0}
+    else:
+        usage = record_text_usage(
+            db=db,
+            user_id=article.user_id,
+            pipeline_run_id=None,
+            step="generate_image_prompt",
+            model=result["model_name"],
+            input_tokens=int(result["input_tokens"]),
+            output_tokens=int(result["output_tokens"]),
+            platform="wechat_mp",
+            resource_type="wechat_mp_article",
+            resource_id=article.id,
+            commit=False,
+        )
+        prompt.cost_estimate = {
+            "currency": "CNY", "total_yuan": str(usage.cost_yuan), "calls": 1,
+        }
+        add_article_cost(article, usage.cost_yuan)
     from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
     invalidate_synced_drafts(db, article, next_status="prompts_ready")
     db.commit()

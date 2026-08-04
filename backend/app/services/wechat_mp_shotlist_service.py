@@ -5,7 +5,7 @@ import re
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.app.models import WechatMpArticle, WechatMpArticleSection
+from backend.app.models import WechatMpArticle, WechatMpArticleSection, WechatMpAsset, WechatMpImagePrompt
 from backend.app.services.wechat_mp_content_analysis_service import VisualCandidate, analyze_content
 
 
@@ -119,18 +119,17 @@ def generate_article_shotlist(*, db: Session, user_id: int, article_id: int, tex
     if not candidates:
         raise ValueError("WeChat MP article has no content for illustration prompts")
 
+    existing_sections = db.scalars(
+        select(WechatMpArticleSection).where(WechatMpArticleSection.article_id == article.id)
+    ).all()
     existing_by_fingerprint = {
         section.source_fingerprint: section
-        for section in db.scalars(
-            select(WechatMpArticleSection).where(WechatMpArticleSection.article_id == article.id)
-        )
+        for section in existing_sections
         if section.source_fingerprint
     }
     legacy_by_index = {
         section.section_index: section
-        for section in db.scalars(
-            select(WechatMpArticleSection).where(WechatMpArticleSection.article_id == article.id)
-        )
+        for section in existing_sections
         if not section.source_fingerprint
     }
     sections = []
@@ -158,5 +157,17 @@ def generate_article_shotlist(*, db: Session, user_id: int, article_id: int, tex
         # This transient link keeps prompt rendering tied to the analyzed structure.
         section._visual_candidate = candidate
         sections.append(section)
+
+    matched_section_ids = {section.id for section in sections if section.id is not None}
+    for section in existing_sections:
+        if section.id in matched_section_ids:
+            continue
+        for prompt in db.scalars(
+            select(WechatMpImagePrompt).where(WechatMpImagePrompt.section_id == section.id)
+        ):
+            for asset in db.scalars(select(WechatMpAsset).where(WechatMpAsset.prompt_id == prompt.id)):
+                asset.prompt_id = None
+            db.delete(prompt)
+        db.delete(section)
     db.flush()
     return sections

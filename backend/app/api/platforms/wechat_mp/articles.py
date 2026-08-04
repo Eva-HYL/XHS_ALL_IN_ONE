@@ -157,7 +157,12 @@ def update_article(article_id: int, payload: WechatMpArticleUpdateRequest, curre
             next_html = render_wechat_html(article.markdown_body, image_placeholders=[])
         else:
             next_html = article.html_body
-        reset_inline_illustrations(db, article, html_body=next_html)
+        reset_inline_illustrations(
+            db,
+            article,
+            html_body=next_html,
+            preserve_prompt_identity=body_changed,
+        )
     if changed:
         invalidate_synced_drafts(db, article, next_status="layout_ready")
     db.commit()

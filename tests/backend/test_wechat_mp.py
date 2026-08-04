@@ -358,6 +358,20 @@ def test_content_analysis_deduplicates_at_jaccard_point_eight_two_boundary():
     assert deduplicated == (candidates[1],)
 
 
+def test_content_analysis_keeps_distinct_deterministic_flows_despite_near_duplicate_text():
+    from backend.app.services.wechat_mp_content_analysis_service import analyze_content
+
+    analysis = analyze_content(
+        "项目需求收集 -> 项目需求分析 -> 项目需求确认 -> 确认项目需求并提交审核\n\n"
+        "项目需求收集 -> 项目需求分析 -> 项目需求确认 -> 确认项目需求并提交复审"
+    )
+
+    assert [candidate.structure for candidate in analysis.deterministic_candidates] == [
+        (("项目需求收集", "项目需求分析", "项目需求确认", "确认项目需求并提交审核"),),
+        (("项目需求收集", "项目需求分析", "项目需求确认", "确认项目需求并提交复审"),),
+    ]
+
+
 def test_image_prompt_section_index_matches_migration(monkeypatch):
     from backend.app.models.wechat_mp import WechatMpImagePrompt
 
@@ -2268,6 +2282,163 @@ def test_deterministic_prompt_reuse_survives_reruns_and_paragraph_moves(db_sessi
     assert db_session.query(WechatMpImagePrompt).filter_by(article_id=article.id).count() == 1
 
 
+def test_article_patch_preserves_moved_deterministic_prompt_ids_and_cleans_stale_markers(
+    api_client, auth_headers, monkeypatch,
+):
+    from backend.app.models import User, WechatMpArticle
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        article = WechatMpArticle(
+            user_id=owner.id,
+            title="流程",
+            markdown_body="收集甲 → 分析甲 → 确认甲\n\n收集乙 → 分析乙 → 确认乙",
+            html_body="<p>收集甲 → 分析甲 → 确认甲</p><p>收集乙 → 分析乙 → 确认乙</p>",
+            status="layout_ready",
+        )
+        session.add(article)
+        session.commit()
+        article_id = article.id
+    finally:
+        session.close()
+    monkeypatch.setattr(prompt_service, "_call_prompt_model", lambda **kwargs: pytest.fail("exact flows must not call the prompt model"))
+
+    first = client.post(f"/api/platforms/wechat-mp/articles/{article_id}/prompts", headers=auth_headers)
+    assert first.status_code == 201
+    retained_prompt_id = first.json()[1]["id"]
+    stale_prompt_id = first.json()[0]["id"]
+    updated = client.patch(
+        f"/api/platforms/wechat-mp/articles/{article_id}",
+        json={"markdown_body": "收集乙 → 分析乙 → 确认乙"},
+        headers=auth_headers,
+    )
+    assert updated.status_code == 200
+
+    regenerated = client.post(f"/api/platforms/wechat-mp/articles/{article_id}/prompts", headers=auth_headers)
+    assert regenerated.status_code == 201
+    assert [item["id"] for item in regenerated.json()] == [retained_prompt_id]
+    assert [item["id"] for item in client.get(
+        f"/api/platforms/wechat-mp/articles/{article_id}/prompts", headers=auth_headers,
+    ).json()] == [retained_prompt_id]
+    html_body = client.get(f"/api/platforms/wechat-mp/articles/{article_id}", headers=auth_headers).json()["html_body"]
+    assert f"{{{{image:prompt-{retained_prompt_id}}}}}" in html_body
+    assert f"{{{{image:prompt-{stale_prompt_id}}}}}" not in html_body
+
+
+def test_none_generation_and_regeneration_never_call_models_or_write_usage(api_client, auth_headers, created_wechat_article, monkeypatch):
+    from backend.app.models import UsageRecord
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+    from backend.app.services import wechat_mp_model_service as model_service
+
+    client, session_factory = api_client
+    monkeypatch.setattr(prompt_service, "_call_prompt_model", lambda **kwargs: pytest.fail("none must not call the prompt model"))
+    monkeypatch.setattr(model_service, "resolve_wechat_mp_model", lambda **kwargs: pytest.fail("none must not resolve a text model"))
+    updated = client.patch(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}",
+        json={"illustration_skill": "none"},
+        headers=auth_headers,
+    )
+    assert updated.status_code == 200
+
+    generated = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts",
+        json={"skill_name": "none"},
+        headers=auth_headers,
+    )
+    assert generated.status_code == 201
+    assert all(item["status"] == "skipped" and item["cost_estimate"]["calls"] == 0 for item in generated.json())
+    regenerated = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/prompts/{generated.json()[0]['id']}/regenerate",
+        headers=auth_headers,
+    )
+    assert regenerated.status_code == 200
+    assert regenerated.json()["status"] == "skipped"
+    assert regenerated.json()["cost_estimate"]["calls"] == 0
+    session = session_factory()
+    try:
+        assert session.query(UsageRecord).filter_by(step="generate_image_prompt").count() == 0
+    finally:
+        session.close()
+
+
+def test_regenerate_deterministic_prompt_never_calls_a_text_model(api_client, auth_headers, monkeypatch):
+    from backend.app.models import UsageRecord, User, WechatMpArticle
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+    from backend.app.services import wechat_mp_model_service as model_service
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        article = WechatMpArticle(
+            user_id=owner.id,
+            title="流程",
+            markdown_body="收集需求 → 分析需求 → 确认需求",
+            html_body="<p>收集需求 → 分析需求 → 确认需求</p>",
+            status="layout_ready",
+        )
+        session.add(article)
+        session.commit()
+        article_id = article.id
+    finally:
+        session.close()
+    monkeypatch.setattr(prompt_service, "_call_prompt_model", lambda **kwargs: pytest.fail("exact flows must not call the prompt model"))
+    generated = client.post(f"/api/platforms/wechat-mp/articles/{article_id}/prompts", headers=auth_headers)
+    assert generated.status_code == 201
+    monkeypatch.setattr(model_service, "resolve_wechat_mp_model", lambda **kwargs: pytest.fail("deterministic prompts must not resolve a model"))
+
+    regenerated = client.post(
+        f"/api/platforms/wechat-mp/articles/{article_id}/prompts/{generated.json()[0]['id']}/regenerate",
+        headers=auth_headers,
+    )
+    assert regenerated.status_code == 200
+    assert regenerated.json()["cost_estimate"]["calls"] == 0
+    session = session_factory()
+    try:
+        assert session.query(UsageRecord).filter_by(step="generate_image_prompt").count() == 0
+    finally:
+        session.close()
+
+
+def test_generation_fingerprint_separates_missing_character_skills_and_updates_association(db_session, test_user, monkeypatch):
+    from backend.app.models.wechat_mp import WechatMpArticle
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    article = WechatMpArticle(
+        user_id=test_user.id,
+        title="语义段落",
+        markdown_body="制定步骤前必须明确问题、方法、风险和结果，避免遗漏关键约束。",
+        html_body="<p>制定步骤前必须明确问题、方法、风险和结果，避免遗漏关键约束。</p>",
+        status="layout_ready",
+    )
+    db_session.add(article)
+    db_session.commit()
+    calls = []
+    monkeypatch.setattr(
+        prompt_service,
+        "_call_prompt_model",
+        lambda **kwargs: calls.append(kwargs["skill_name"]) or {
+            "prompt": kwargs["skill_name"], "input_tokens": 1, "output_tokens": 1, "model_name": kwargs["model_name"],
+        },
+    )
+
+    first = prompt_service.generate_image_prompts(
+        db=db_session, user_id=test_user.id, article_id=article.id, skill_name="missing-skill-a",
+    )
+    second = prompt_service.generate_image_prompts(
+        db=db_session, user_id=test_user.id, article_id=article.id, skill_name="missing-skill-b",
+    )
+
+    assert calls == ["missing-skill-a", "missing-skill-b"]
+    assert first[0].id == second[0].id
+    assert second[0].skill_name == "missing-skill-b"
+    assert second[0].character_id is None
+    assert second[0].version == 2
+
+
 def test_generating_prompts_twice_reuses_prompts_and_placeholders(api_client, auth_headers, created_wechat_article, monkeypatch):
     from backend.app.models import WechatMpImagePrompt
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
@@ -2983,8 +3154,9 @@ def test_body_edit_resets_inline_state_and_stales_synced_draft(
     assert "{{image:" not in response.json()["html_body"]
     session = session_factory()
     try:
-        assert session.query(WechatMpImagePrompt).filter_by(article_id=created_wechat_prompt.article_id).count() == 0
-        assert session.query(WechatMpArticleSection).filter_by(article_id=created_wechat_prompt.article_id).count() == 0
+        retained_prompt = session.query(WechatMpImagePrompt).filter_by(article_id=created_wechat_prompt.article_id).one()
+        assert retained_prompt.status == "prompt_ready"
+        assert session.query(WechatMpArticleSection).filter_by(article_id=created_wechat_prompt.article_id).count() == 1
         assert session.get(WechatMpAsset, asset_id).prompt_id is None
         assert session.query(WechatMpDraftSync).filter_by(article_id=created_wechat_prompt.article_id).one().status == "stale"
     finally:
