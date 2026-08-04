@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -80,8 +79,8 @@ def _build_user_payload(
 def _call_batch_prompt_model(
     *, model: WechatMpModelContext, user_payload: str,
 ) -> dict[str, Any]:
-    base_url = (model.base_url or os.getenv("WECHAT_MP_PROMPT_BASE_URL", "")).rstrip("/")
-    api_key = model.api_key or os.getenv("WECHAT_MP_PROMPT_API_KEY", "")
+    base_url = model.base_url.rstrip("/")
+    api_key = model.api_key
     if not base_url or not api_key:
         raise ValueError("WeChat MP prompt model is not configured")
     try:
@@ -156,7 +155,10 @@ def generate_semantic_prompts(
     user_payload = _build_user_payload(
         article_title=article_title, candidates=compact_candidates, character=character,
     )
-    model = resolve_wechat_mp_shotlist_model(db=db, user_id=user_id)
+    try:
+        model = resolve_wechat_mp_shotlist_model(db=db, user_id=user_id)
+    except Exception:
+        return _empty_result(model_name=None, model_calls=0)
     try:
         response = _call_batch_prompt_model(model=model, user_payload=user_payload)
     except Exception as exc:
@@ -168,9 +170,9 @@ def generate_semantic_prompts(
             )
         except Exception:
             return _empty_result(model_name=model.model_name, model_calls=1)
+        model = fallback
         try:
-            response = _call_batch_prompt_model(model=fallback, user_payload=user_payload)
-            model = fallback
+            response = _call_batch_prompt_model(model=model, user_payload=user_payload)
         except Exception:
             return _empty_result(model_name=model.model_name, model_calls=2)
         model_calls = 2

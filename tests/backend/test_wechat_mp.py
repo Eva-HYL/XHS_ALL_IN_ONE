@@ -4761,6 +4761,119 @@ def test_semantic_batch_does_not_count_a_failed_fallback_selection_as_a_model_ca
     assert result.model_calls == 1
 
 
+def test_semantic_batch_without_a_config_degrades_before_any_provider_call(db_session, test_user, monkeypatch):
+    from backend.app.services import wechat_mp_prompt_batch_service as batch_service
+
+    monkeypatch.setattr(batch_service.requests, "post", lambda **kwargs: pytest.fail("missing config must not call provider"))
+
+    result = batch_service.generate_semantic_prompts(
+        db=db_session, user_id=test_user.id, article_title="方案复盘", candidates=_semantic_batch_candidates(), character=None,
+    )
+
+    assert result.items == ()
+    assert result.model_name is None
+    assert result.model_calls == 0
+
+
+def test_semantic_batch_skips_unusable_max_for_an_eligible_user_scoped_fallback(db_session, test_user, monkeypatch):
+    import json
+
+    from backend.app.core.security import encrypt_text
+    from backend.app.models import ModelConfig
+    from backend.app.services import wechat_mp_prompt_batch_service as batch_service
+
+    db_session.add_all([
+        ModelConfig(
+            user_id=test_user.id, name="Unavailable Max", model_type="text", provider="openai-compatible",
+            model_name="qwen3.7-max", base_url="https://max.example/v1", encrypted_api_key="", is_default=True,
+        ),
+        ModelConfig(
+            user_id=test_user.id, name="Usable Plus", model_type="text", provider="openai-compatible",
+            model_name="qwen3.7-plus", base_url="https://plus.example/v1", encrypted_api_key=encrypt_text("plus-key"), is_default=False,
+        ),
+    ])
+    db_session.commit()
+    captured = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": json.dumps({"items": [{"id": "0", "prompt": "备用模型提示词"}]}, ensure_ascii=False)}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 3},
+            }
+
+    monkeypatch.setenv("WECHAT_MP_PROMPT_API_KEY", "process-wide-secret")
+    monkeypatch.setattr(batch_service.requests, "post", lambda *args, **kwargs: captured.append(kwargs) or FakeResponse())
+
+    result = batch_service.generate_semantic_prompts(
+        db=db_session, user_id=test_user.id, article_title="方案复盘", candidates=_semantic_batch_candidates(), character=None,
+    )
+
+    assert result.model_name == "qwen3.7-plus"
+    assert result.model_calls == 1
+    assert len(captured) == 1
+    assert captured[0]["json"]["model"] == "qwen3.7-plus"
+    assert captured[0]["headers"]["Authorization"] == "Bearer plus-key"
+
+
+def test_semantic_batch_never_uses_process_wide_secrets_for_an_incomplete_user_config(db_session, test_user, monkeypatch):
+    from backend.app.models import ModelConfig
+    from backend.app.services import wechat_mp_prompt_batch_service as batch_service
+
+    db_session.add(ModelConfig(
+        user_id=test_user.id, name="Incomplete Max", model_type="text", provider="openai-compatible",
+        model_name="qwen3.7-max", base_url="", encrypted_api_key="", is_default=True,
+    ))
+    db_session.commit()
+    monkeypatch.setenv("WECHAT_MP_PROMPT_BASE_URL", "https://process.example/v1")
+    monkeypatch.setenv("WECHAT_MP_PROMPT_API_KEY", "process-wide-secret")
+    monkeypatch.setattr(batch_service.requests, "post", lambda **kwargs: pytest.fail("incomplete user config must not call provider"))
+
+    result = batch_service.generate_semantic_prompts(
+        db=db_session, user_id=test_user.id, article_title="方案复盘", candidates=_semantic_batch_candidates(), character=None,
+    )
+
+    assert result.items == ()
+    assert result.model_name is None
+    assert result.model_calls == 0
+
+
+def test_semantic_batch_counts_a_failed_provider_call_after_successful_fallback_selection(monkeypatch):
+    from backend.app.services import wechat_mp_prompt_batch_service as batch_service
+    from backend.app.services.wechat_mp_model_service import WechatMpModelContext
+
+    resolved = []
+    provider_calls = []
+
+    def resolve_model(**kwargs):
+        resolved.append(kwargs.get("excluded_model_names", set()))
+        return WechatMpModelContext(
+            "qwen3.7-max" if len(resolved) == 1 else "qwen3.7-plus",
+            "https://models.example/v1",
+            "test-key",
+        )
+
+    def call_model(**kwargs):
+        provider_calls.append(kwargs["model"].model_name)
+        raise ValueError("quota exhausted" if len(provider_calls) == 1 else "provider unavailable")
+
+    monkeypatch.setattr(batch_service, "resolve_wechat_mp_shotlist_model", resolve_model)
+    monkeypatch.setattr(batch_service, "_call_batch_prompt_model", call_model)
+
+    result = batch_service.generate_semantic_prompts(
+        db=Mock(), user_id=11, article_title="方案复盘", candidates=_semantic_batch_candidates(), character=None,
+    )
+
+    assert resolved == [set(), {"qwen3.7-max"}]
+    assert provider_calls == ["qwen3.7-max", "qwen3.7-plus"]
+    assert result.items == ()
+    assert result.model_name == "qwen3.7-plus"
+    assert result.model_calls == 2
+
+
 def test_wechat_shotlist_model_prefers_configured_qwen_max_and_uses_selector_when_excluded(db_session, test_user, monkeypatch):
     from backend.app.core.security import encrypt_text
     from backend.app.models import ModelConfig
