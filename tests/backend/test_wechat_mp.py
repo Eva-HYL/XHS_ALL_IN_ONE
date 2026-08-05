@@ -6874,6 +6874,29 @@ def test_visual_plan_extracts_comparison_relation_before_image_generation():
     assert report["single_character"] is True
 
 
+def test_visual_plan_treats_numbered_process_table_as_grouped_flow():
+    from backend.app.services.wechat_mp_content_analysis_service import analyze_content
+    from backend.app.services.wechat_mp_visual_plan_service import build_visual_plan, compile_visual_prompt
+
+    candidate = analyze_content("""| # | 过程 | 过程组 |
+|---|---|---|
+| 1 | 规划范围管理 | 规划 |
+| 2 | 收集需求 | 规划 |
+| 3 | 定义范围 | 规划 |
+| 4 | 创建WBS | 规划 |
+| 5 | 确认范围 | 监控 |
+| 6 | 控制范围 | 监控 |""").candidates[0]
+
+    plan = build_visual_plan(candidate)
+    prompt = compile_visual_prompt(plan)
+
+    assert plan["kind"] == "flow"
+    assert plan["nodes"] == ["规划范围管理", "收集需求", "定义范围", "创建WBS", "确认范围", "控制范围"]
+    assert plan["groups"] == {"规划": ["规划范围管理", "收集需求", "定义范围", "创建WBS"], "监控": ["确认范围", "控制范围"]}
+    assert "规划范围管理 → 收集需求 → 定义范围 → 创建WBS → 确认范围 → 控制范围" in prompt
+    assert "规划组" in prompt and "监控组" in prompt
+
+
 def test_visual_plan_compiler_version_invalidates_legacy_prompt_fingerprints():
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
 

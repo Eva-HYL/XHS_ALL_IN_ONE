@@ -22,6 +22,27 @@ def _comparison_relation(columns: list[str], rows: list[dict[str, Any]]) -> list
 def build_visual_plan(candidate: VisualCandidate) -> dict[str, Any]:
     if candidate.kind == "table":
         header, *body = candidate.structure
+        if (
+            len(header) >= 3
+            and header[0].strip().lower() in {"#", "序号", "编号"}
+            and body
+            and all(row[0].strip().isdigit() for row in body)
+        ):
+            nodes = [row[1] for row in body]
+            groups: dict[str, list[str]] = {}
+            for row in body:
+                groups.setdefault(row[2], []).append(row[1])
+            return {
+                "kind": "flow",
+                "nodes": nodes,
+                "groups": groups,
+                "relations": [
+                    {"from": nodes[index], "to": nodes[index + 1], "label": ""}
+                    for index in range(len(nodes) - 1)
+                ],
+                "character_role": "边缘单只解说员",
+                "source_cells": [cell for row in candidate.structure for cell in row],
+            }
         columns = list(header[1:])
         rows = [{"label": row[0], "values": list(row[1:])} for row in body]
         kind = "comparison" if len(columns) == 2 else "matrix"
@@ -73,10 +94,14 @@ def compile_visual_prompt(plan: dict[str, Any]) -> str:
     kind = plan.get("kind")
     if kind == "flow":
         nodes = plan.get("nodes", [])
+        group_text = "；".join(
+            f"{group}组：{'、'.join(str(node) for node in grouped_nodes)}"
+            for group, grouped_nodes in plan.get("groups", {}).items()
+        )
         return (
             "具体画面：横向有序流程信息图，知识结构占画面主体；固定顺序为"
             + " → ".join(str(node) for node in nodes)
-            + "。每个节点只出现一次，以箭头依次连接，不得交换、合并、遗漏或新增节点；"
+            + f"。{('分组：' + group_text + '。') if group_text else ''}每个节点只出现一次，以箭头依次连接，不得交换、合并、遗漏或新增节点；"
               "主角最多一只，仅在右下角辅助指向流程。"
         )
     if kind == "comparison":
