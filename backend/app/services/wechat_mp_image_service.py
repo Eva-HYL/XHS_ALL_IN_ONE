@@ -21,6 +21,37 @@ from backend.app.services.wechat_mp_cost_service import add_article_cost
 from backend.app.services.wechat_mp_layout_service import clean_markdown_plain_text
 
 PROMPT_REUSE_SIMILARITY_THRESHOLD = 0.92
+_NUMBERED_SCENE_ROW_RE = re.compile(r"^\s*(\d+)\s*(?:[|｜、.．:：])\s*(.+?)\s*$")
+_SCENE_FLOW_SPLIT_RE = re.compile(r"\s*(?:→|->|⇒|=>|＞)\s*")
+
+
+def _ordered_scene_contract(scene_prompt: str) -> str:
+    """Repeat ordered structures as an explicit final-generation constraint."""
+    scene = scene_prompt.strip().removeprefix("具体画面：").strip()
+    numbered_rows: list[tuple[str, str]] = []
+    for line in scene.splitlines():
+        match = _NUMBERED_SCENE_ROW_RE.match(line)
+        if match is None:
+            continue
+        numbered_rows.append((match.group(1), re.sub(r"\s*[|｜]\s*", "｜", match.group(2)).strip()))
+    if len(numbered_rows) >= 2:
+        numbers = " -> ".join(number for number, _ in numbered_rows)
+        rows = "\n".join(f"{number}｜{content}" for number, content in numbered_rows)
+        return (
+            "\n顺序图硬约束：固定顺序："
+            f"{numbers}。按编号从左到右排列，空间不足时从上到下；每个编号对应一个独立节点，"
+            "不得交换、合并、省略或新增节点，不得让连线跨越错误节点；主角最多出现一次。\n"
+            f"有序节点原文：\n{rows}"
+        )
+
+    flow_nodes = [node.strip() for node in _SCENE_FLOW_SPLIT_RE.split(scene) if node.strip()]
+    if len(flow_nodes) >= 2:
+        return (
+            "\n顺序图硬约束：严格按从左到右的原始箭头顺序绘制，每个文本只对应一个节点；"
+            "不得交换、合并、省略或新增节点，不得反转箭头；主角最多出现一次。\n"
+            f"固定流程：{' -> '.join(flow_nodes)}"
+        )
+    return ""
 
 
 def _media_dir() -> Path:
@@ -245,6 +276,7 @@ def generate_asset_for_prompt(
         effective_prompt = f"{character.prompt}\n{scene_prompt if scene_prompt.startswith('具体画面：') else f'具体画面：{scene_prompt}'}"
     else:
         effective_prompt = scene_prompt
+    effective_prompt = f"{effective_prompt}{_ordered_scene_contract(scene_prompt)}"
     model = resolve_wechat_mp_model(
         db=db, user_id=user_id, model_type="image", requested_model=image_model,
     )

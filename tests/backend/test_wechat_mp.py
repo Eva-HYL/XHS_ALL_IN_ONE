@@ -2291,6 +2291,29 @@ def test_deterministic_prompts_keep_canonical_character_mentions_and_exact_label
     assert all("标题" not in prompt and "尺寸" not in prompt and "水印" not in prompt for prompt in prompts.values())
 
 
+def test_ordered_scene_contract_preserves_numbered_rows_in_generation_order():
+    from backend.app.services.wechat_mp_image_service import _ordered_scene_contract
+
+    contract = _ordered_scene_contract(
+        "具体画面：# | 过程 | 过程组\n"
+        "1 | 规划范围管理 | 规划\n"
+        "2 | 收集需求 | 规划\n"
+        "3 | 定义范围 | 规划\n"
+        "4 | 创建WBS | 规划"
+    )
+
+    assert "固定顺序：1 -> 2 -> 3 -> 4" in contract
+    assert "1｜规划范围管理｜规划" in contract
+    assert "4｜创建WBS｜规划" in contract
+    assert "不得交换、合并、省略或新增节点" in contract
+    assert "主角最多出现一次" in contract
+    assert contract.index("规划范围管理") < contract.index("收集需求") < contract.index("定义范围") < contract.index("创建WBS")
+
+    flow_contract = _ordered_scene_contract("确定数据需求 → 制定数据标准 → 批准数据标准 → 实施数据标准")
+    assert "固定流程：确定数据需求 -> 制定数据标准 -> 批准数据标准 -> 实施数据标准" in flow_contract
+    assert "不得反转箭头" in flow_contract
+
+
 def test_deterministic_prompts_use_no_model_calls_or_text_usage(api_client, auth_headers, monkeypatch):
     from backend.app.models import UsageRecord, User, WechatMpArticle
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
@@ -6265,7 +6288,11 @@ def test_cover_uses_character_anchor_and_expands_mentions_at_image_boundary(
         article.title = "软考高项·第9章 项目范围管理"
         article.cover_brief = "主角：@小猫生图\n具体画面：项目范围管理核心考点速记指南"
         prompt = session.get(WechatMpImagePrompt, created_wechat_prompt.id)
-        prompt.prompt = "主角：@小猫生图\n具体画面：小猫整理便签"
+        prompt.prompt = (
+            "主角：@小猫生图\n具体画面：# | 过程 | 过程组\n"
+            "1 | 规划范围管理 | 规划\n2 | 收集需求 | 规划\n"
+            "3 | 定义范围 | 规划\n4 | 创建WBS | 规划"
+        )
         prompt.editable_prompt = prompt.prompt
         session.commit()
     finally:
@@ -6292,6 +6319,8 @@ def test_cover_uses_character_anchor_and_expands_mentions_at_image_boundary(
     assert "主角：@小猫生图" not in captured["prompt"]
     assert "主角必须是一只胖胖慵懒" in captured["prompt"]
     assert "具体画面：" in captured["prompt"]
+    assert "固定顺序：1 -> 2 -> 3 -> 4" in captured["prompt"]
+    assert "不得交换、合并、省略或新增节点" in captured["prompt"]
     assert len(captured["reference_images"]) == 4
     session = session_factory()
     try:
