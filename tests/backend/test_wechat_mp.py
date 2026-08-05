@@ -6881,6 +6881,53 @@ def test_visual_plan_compiler_version_invalidates_legacy_prompt_fingerprints():
     assert prompt_service._fingerprint_skill_version("xiaomao-illustrations") == "xiaomao-illustrations:v1.2.0"
 
 
+def test_regenerate_structural_prompt_persists_visual_plan(db_session, test_user):
+    from backend.app.models import WechatMpArticle, WechatMpArticleSection, WechatMpImagePrompt
+    from backend.app.services.wechat_mp_image_prompt_service import regenerate_image_prompt
+
+    article = WechatMpArticle(
+        user_id=test_user.id,
+        title="确认范围",
+        markdown_body="""| 对比项 | 确认范围 | 质量控制 |
+|---|---|---|
+| 关系 | — | 质量控制在确认范围前进行 |""",
+        html_body="<p>正文</p>",
+        status="images_ready",
+        illustration_skill="none",
+    )
+    db_session.add(article)
+    db_session.flush()
+    section = WechatMpArticleSection(
+        user_id=test_user.id,
+        article_id=article.id,
+        section_index=0,
+        source_excerpt=article.markdown_body,
+        source_fingerprint="",
+        summary="对比",
+    )
+    db_session.add(section)
+    db_session.flush()
+    prompt = WechatMpImagePrompt(
+        user_id=test_user.id,
+        article_id=article.id,
+        section_id=section.id,
+        skill_name="none",
+        prompt="旧提示词",
+        editable_prompt="旧提示词",
+    )
+    db_session.add(prompt)
+    db_session.commit()
+
+    # Backfill the stable fingerprint used to locate the current candidate.
+    from backend.app.services.wechat_mp_content_analysis_service import analyze_content
+    section.source_fingerprint = analyze_content(article.markdown_body).candidates[0].fingerprint
+    db_session.commit()
+    regenerated = regenerate_image_prompt(db=db_session, prompt=prompt, article=article)
+
+    assert regenerated.visual_plan["kind"] == "comparison"
+    assert regenerated.quality_report["valid"] is True
+
+
 def test_prompt_ignore_signature_matches_same_knowledge_structure_not_generic_topic():
     from backend.app.services.wechat_mp_prompt_ignore_service import build_concept_signature, concept_similarity
 

@@ -808,6 +808,8 @@ def regenerate_image_prompt(*, db: Session, prompt: WechatMpImagePrompt, article
     prompt.prompt = result["prompt"]
     prompt.editable_prompt = result["prompt"]
     if candidate is not None:
+        prompt.visual_plan = build_visual_plan(candidate)
+        prompt.quality_report = validate_visual_plan(candidate, prompt.visual_plan)
         prompt.generation_fingerprint = generation_fingerprint(
             candidate,
             character_id=character.id if character else None,
