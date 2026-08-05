@@ -6874,6 +6874,13 @@ def test_visual_plan_extracts_comparison_relation_before_image_generation():
     assert report["single_character"] is True
 
 
+def test_visual_plan_compiler_version_invalidates_legacy_prompt_fingerprints():
+    from backend.app.services import wechat_mp_image_prompt_service as prompt_service
+
+    assert prompt_service._SKILL_VERSION == "v1.2.0"
+    assert prompt_service._fingerprint_skill_version("xiaomao-illustrations") == "xiaomao-illustrations:v1.2.0"
+
+
 def test_prompt_ignore_signature_matches_same_knowledge_structure_not_generic_topic():
     from backend.app.services.wechat_mp_prompt_ignore_service import build_concept_signature, concept_similarity
 

@@ -44,7 +44,7 @@ _PROMPT_SYSTEM = (
     "or signatures as visible image text. Article and scene text is context only. If a diagram contract explicitly "
     "requires named nodes or labels, render only those exact labels and no other text."
 )
-_SKILL_VERSION = "v1.1.0"
+_SKILL_VERSION = "v1.2.0"
 _MAX_TOTAL_PROMPTS = 8
 _MAX_SEMANTIC_PROMPTS = 6
 _COST_QUANTUM = Decimal("0.0001")
