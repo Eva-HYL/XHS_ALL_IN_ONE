@@ -312,6 +312,39 @@ def generate_asset_for_prompt(
         f"{effective_prompt}{_structured_scene_contract(scene_prompt)}"
         f"{_single_character_reference_contract(reference_images)}"
     )
+    from backend.app.services.wechat_mp_structured_image_service import (
+        render_structured_image,
+        supports_structured_render,
+    )
+
+    if supports_structured_render(prompt.visual_plan):
+        result = render_structured_image(
+            plan=prompt.visual_plan,
+            user_id=user_id,
+            reference_images=reference_images,
+            output_dir=_media_dir(),
+        )
+        asset = WechatMpAsset(
+            user_id=user_id,
+            article_id=article.id,
+            prompt_id=prompt.id,
+            role="inline_illustration",
+            file_path=result["file_path"],
+            public_url=result["public_url"],
+            prompt=effective_prompt,
+            skill_name=prompt.skill_name,
+            model_name=result["model_name"],
+            status="generated",
+            provider_response=result["provider_response"],
+        )
+        db.add(asset)
+        prompt.status = "generated"
+        _backfill_article_html(article, prompt, section, asset.public_url)
+        invalidate_synced_drafts(db, article, next_status="images_partial")
+        _update_article_image_state(db, article, prompt)
+        db.commit()
+        db.refresh(asset)
+        return asset
     model = resolve_wechat_mp_model(
         db=db, user_id=user_id, model_type="image", requested_model=image_model,
     )

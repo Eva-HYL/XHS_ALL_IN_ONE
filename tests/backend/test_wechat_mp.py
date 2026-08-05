@@ -6897,6 +6897,124 @@ def test_visual_plan_treats_numbered_process_table_as_grouped_flow():
     assert "规划组" in prompt and "监控组" in prompt
 
 
+def test_structural_visual_plan_renders_exact_png_without_image_model(tmp_path, monkeypatch):
+    from PIL import Image
+
+    from backend.app.services import wechat_mp_structured_image_service as renderer
+
+    character_path = tmp_path / "character.png"
+    Image.new("RGB", (240, 240), "white").save(character_path)
+    plan = {
+        "kind": "flow",
+        "nodes": ["规划范围管理", "收集需求", "定义范围", "创建WBS", "确认范围", "控制范围"],
+        "groups": {
+            "规划": ["规划范围管理", "收集需求", "定义范围", "创建WBS"],
+            "监控": ["确认范围", "控制范围"],
+        },
+        "source_cells": ["#", "过程", "过程组", "1", "规划范围管理", "规划"],
+    }
+
+    result = renderer.render_structured_image(
+        plan=plan,
+        user_id=7,
+        reference_images=[str(character_path)],
+        output_dir=tmp_path,
+    )
+
+    assert result["model_name"] == "deterministic-layout-v1"
+    assert result["provider_response"]["renderer"] == "pillow"
+    assert result["provider_response"]["rendered_labels"] == [
+        "规划范围管理", "收集需求", "定义范围", "创建WBS", "确认范围", "控制范围",
+    ]
+    assert result["provider_response"]["rendered_cells"] == [
+        "#", "过程", "过程组", "1", "规划范围管理", "规划",
+    ]
+    with Image.open(result["file_path"]) as image:
+        assert image.size == (1600, 900)
+        assert image.format == "PNG"
+
+
+def test_generate_structural_wechat_image_bypasses_provider_and_usage(
+    db_session, test_user, tmp_path, monkeypatch,
+):
+    from PIL import Image
+
+    from backend.app.models import (
+        UsageRecord,
+        WechatMpArticle,
+        WechatMpArticleSection,
+        WechatMpImagePrompt,
+    )
+    from backend.app.services import wechat_mp_image_service as image_service
+
+    article = WechatMpArticle(
+        user_id=test_user.id,
+        title="范围管理",
+        markdown_body="规划范围管理 -> 收集需求 -> 定义范围",
+        html_body="<p>正文</p>",
+        status="prompts_ready",
+        illustration_skill="xiaomao-illustrations",
+    )
+    db_session.add(article)
+    db_session.flush()
+    section = WechatMpArticleSection(
+        user_id=test_user.id,
+        article_id=article.id,
+        section_index=0,
+        source_excerpt=article.markdown_body,
+        summary="范围管理流程",
+    )
+    db_session.add(section)
+    db_session.flush()
+    prompt = WechatMpImagePrompt(
+        user_id=test_user.id,
+        article_id=article.id,
+        section_id=section.id,
+        skill_name="xiaomao-illustrations",
+        prompt="具体画面：范围管理流程",
+        editable_prompt="具体画面：范围管理流程",
+        visual_plan={
+            "kind": "flow",
+            "nodes": ["规划范围管理", "收集需求", "定义范围"],
+            "groups": {"规划": ["规划范围管理", "收集需求", "定义范围"]},
+        },
+        quality_report={"valid": True},
+    )
+    db_session.add(prompt)
+    db_session.flush()
+    article.html_body += f"{{{{image:prompt-{prompt.id}}}}}"
+    db_session.commit()
+
+    character_path = tmp_path / "character.png"
+    Image.new("RGB", (240, 240), "white").save(character_path)
+    monkeypatch.setattr(
+        "backend.app.services.wechat_mp_character_service.resolve_prompt_character",
+        lambda *args, **kwargs: (None, prompt.editable_prompt),
+    )
+    monkeypatch.setattr(
+        "backend.app.services.wechat_mp_character_service.resolve_confirmed_character_anchor",
+        lambda *args, **kwargs: (object(), [str(character_path)]),
+    )
+    monkeypatch.setattr(image_service, "_media_dir", lambda: tmp_path)
+    monkeypatch.setattr(
+        image_service,
+        "_call_image_model",
+        lambda **kwargs: pytest.fail("structural plans must not call the image provider"),
+    )
+
+    asset = image_service.generate_asset_for_prompt(
+        db_session,
+        user_id=test_user.id,
+        prompt_id=prompt.id,
+        image_model="unused-model",
+    )
+
+    assert asset.model_name == "deterministic-layout-v1"
+    assert asset.provider_response["rendered_labels"] == ["规划范围管理", "收集需求", "定义范围"]
+    assert db_session.query(UsageRecord).count() == 0
+    assert prompt.status == "generated"
+
+
 def test_visual_plan_compiler_version_invalidates_legacy_prompt_fingerprints():
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
 
