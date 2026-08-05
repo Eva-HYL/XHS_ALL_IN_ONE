@@ -25,8 +25,8 @@ _NUMBERED_SCENE_ROW_RE = re.compile(r"^\s*(\d+)\s*(?:[|｜、.．:：])\s*(.+?)\
 _SCENE_FLOW_SPLIT_RE = re.compile(r"\s*(?:→|->|⇒|=>|＞)\s*")
 
 
-def _ordered_scene_contract(scene_prompt: str) -> str:
-    """Repeat ordered structures as an explicit final-generation constraint."""
+def _structured_scene_contract(scene_prompt: str) -> str:
+    """Repeat ordered and tabular structures as explicit final-generation constraints."""
     scene = scene_prompt.strip().removeprefix("具体画面：").strip()
     numbered_rows: list[tuple[str, str]] = []
     for line in scene.splitlines():
@@ -43,6 +43,25 @@ def _ordered_scene_contract(scene_prompt: str) -> str:
             "不得交换、合并、省略或新增节点，不得让连线跨越错误节点；主角最多出现一次。\n"
             f"有序节点原文：\n{rows}"
         )
+
+    table_rows: list[list[str]] = []
+    for line in scene.splitlines():
+        cells = [cell.strip().lstrip("#").strip() for cell in re.split(r"[|｜]", line.strip().strip("|｜"))]
+        if len(cells) < 2 or all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells):
+            continue
+        table_rows.append(cells)
+    if len(table_rows) >= 2:
+        column_count = len(table_rows[0])
+        aligned_rows = [row for row in table_rows if len(row) == column_count]
+        if len(aligned_rows) >= 2:
+            source_rows = "\n".join("｜".join(row) for row in aligned_rows)
+            return (
+                f"\n表格视觉化硬约束：绘制一个统一的 {len(aligned_rows)} 行 {column_count} 列二维对比矩阵，"
+                "共享同一组表头和对齐网格；同一行横向对比，同一列纵向归类。整个表格是一张完整信息图，"
+                "不是多个互不相关的独立插画或文案卡片。把长句语义转成图标、物体、状态或关系，"
+                "文字只保留表头、行名和必要短标签，不得逐字抄写长句；主角最多出现一次，只能在表格边缘辅助指示。\n"
+                f"表格原文：\n{source_rows}"
+            )
 
     flow_nodes = [node.strip() for node in _SCENE_FLOW_SPLIT_RE.split(scene) if node.strip()]
     if len(flow_nodes) >= 2:
@@ -286,7 +305,7 @@ def generate_asset_for_prompt(
     else:
         effective_prompt = scene_prompt
     effective_prompt = (
-        f"{effective_prompt}{_ordered_scene_contract(scene_prompt)}"
+        f"{effective_prompt}{_structured_scene_contract(scene_prompt)}"
         f"{_single_character_reference_contract(reference_images)}"
     )
     model = resolve_wechat_mp_model(

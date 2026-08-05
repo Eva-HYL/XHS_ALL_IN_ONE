@@ -2292,9 +2292,9 @@ def test_deterministic_prompts_keep_canonical_character_mentions_and_exact_label
 
 
 def test_ordered_scene_contract_preserves_numbered_rows_in_generation_order():
-    from backend.app.services.wechat_mp_image_service import _ordered_scene_contract
+    from backend.app.services.wechat_mp_image_service import _structured_scene_contract
 
-    contract = _ordered_scene_contract(
+    contract = _structured_scene_contract(
         "具体画面：# | 过程 | 过程组\n"
         "1 | 规划范围管理 | 规划\n"
         "2 | 收集需求 | 规划\n"
@@ -2309,9 +2309,27 @@ def test_ordered_scene_contract_preserves_numbered_rows_in_generation_order():
     assert "主角最多出现一次" in contract
     assert contract.index("规划范围管理") < contract.index("收集需求") < contract.index("定义范围") < contract.index("创建WBS")
 
-    flow_contract = _ordered_scene_contract("确定数据需求 → 制定数据标准 → 批准数据标准 → 实施数据标准")
+    flow_contract = _structured_scene_contract("确定数据需求 → 制定数据标准 → 批准数据标准 → 实施数据标准")
     assert "固定流程：确定数据需求 -> 制定数据标准 -> 批准数据标准 -> 实施数据标准" in flow_contract
     assert "不得反转箭头" in flow_contract
+
+
+def test_table_scene_contract_builds_one_integrated_visual_matrix():
+    from backend.app.services.wechat_mp_image_service import _structured_scene_contract
+
+    contract = _structured_scene_contract(
+        "具体画面：对比项 | 产品范围 | 项目范围\n"
+        "定义 | 产品或服务应包含的功能和特征 | 为交付产品所必须做的工作\n"
+        "完成判断 | 产品是否满足产品描述 | 是否符合范围基准"
+    )
+
+    assert "统一的 3 行 3 列二维对比矩阵" in contract
+    assert "同一行横向对比，同一列纵向归类" in contract
+    assert "不是多个互不相关的独立插画或文案卡片" in contract
+    assert "长句语义转成图标、物体、状态或关系" in contract
+    assert "文字只保留表头、行名和必要短标签" in contract
+    assert "对比项｜产品范围｜项目范围" in contract
+    assert "完成判断｜产品是否满足产品描述｜是否符合范围基准" in contract
 
 
 def test_deterministic_prompts_use_no_model_calls_or_text_usage(api_client, auth_headers, monkeypatch):
