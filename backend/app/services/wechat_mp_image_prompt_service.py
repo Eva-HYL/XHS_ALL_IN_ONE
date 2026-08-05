@@ -115,12 +115,41 @@ def _fingerprint_skill_version(skill_name: str) -> str:
 
 
 def _find_current_candidate(article: WechatMpArticle, section: WechatMpArticleSection) -> "VisualCandidate | None":
-    if not section.source_fingerprint:
-        return None
-    return next(
-        (candidate for candidate in analyze_content(article.markdown_body).candidates if candidate.fingerprint == section.source_fingerprint),
-        None,
-    )
+    if section.source_fingerprint:
+        candidate = next(
+            (
+                candidate
+                for candidate in analyze_content(article.markdown_body).candidates
+                if candidate.fingerprint == section.source_fingerprint
+            ),
+            None,
+        )
+        if candidate is not None:
+            return candidate
+    # Legacy sections may predate stable fingerprints but still retain exact source markdown.
+    section_candidates = analyze_content(section.source_excerpt).candidates
+    deterministic = [
+        candidate
+        for candidate in section_candidates
+        if candidate.kind in {"flow", "table", "classification"}
+    ]
+    return deterministic[0] if len(deterministic) == 1 else None
+
+
+def ensure_prompt_visual_plan(
+    *,
+    article: WechatMpArticle,
+    section: WechatMpArticleSection,
+    prompt: WechatMpImagePrompt,
+) -> None:
+    """Backfill deterministic plans before legacy prompts can reach the image model."""
+    if prompt.visual_plan.get("kind"):
+        return
+    candidate = _find_current_candidate(article, section)
+    if candidate is None or candidate.kind not in {"flow", "table", "classification"}:
+        return
+    prompt.visual_plan = build_visual_plan(candidate)
+    prompt.quality_report = validate_visual_plan(candidate, prompt.visual_plan)
 
 
 def build_skill_prompt(

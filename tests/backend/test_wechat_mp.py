@@ -6947,10 +6947,17 @@ def test_generate_structural_wechat_image_bypasses_provider_and_usage(
     )
     from backend.app.services import wechat_mp_image_service as image_service
 
+    from backend.app.services.wechat_mp_content_analysis_service import analyze_content
+
     article = WechatMpArticle(
         user_id=test_user.id,
         title="范围管理",
-        markdown_body="规划范围管理 -> 收集需求 -> 定义范围",
+        markdown_body=(
+            "| 内容 | 要点 |\n"
+            "|---|---|\n"
+            "| 范围管理六过程 | 规划→收集→定义→WBS→确认→控制 |\n"
+            "| WBS八项注意 | 面向交付、一人负责、4-6层 |"
+        ),
         html_body="<p>正文</p>",
         status="prompts_ready",
         illustration_skill="xiaomao-illustrations",
@@ -6962,7 +6969,8 @@ def test_generate_structural_wechat_image_bypasses_provider_and_usage(
         article_id=article.id,
         section_index=0,
         source_excerpt=article.markdown_body,
-        summary="范围管理流程",
+        summary="范围管理速记表",
+        source_fingerprint=analyze_content(article.markdown_body).candidates[0].fingerprint,
     )
     db_session.add(section)
     db_session.flush()
@@ -6971,14 +6979,10 @@ def test_generate_structural_wechat_image_bypasses_provider_and_usage(
         article_id=article.id,
         section_id=section.id,
         skill_name="xiaomao-illustrations",
-        prompt="具体画面：范围管理流程",
-        editable_prompt="具体画面：范围管理流程",
-        visual_plan={
-            "kind": "flow",
-            "nodes": ["规划范围管理", "收集需求", "定义范围"],
-            "groups": {"规划": ["规划范围管理", "收集需求", "定义范围"]},
-        },
-        quality_report={"valid": True},
+        prompt="具体画面：范围管理速记表",
+        editable_prompt="具体画面：范围管理速记表",
+        visual_plan={},
+        quality_report={},
     )
     db_session.add(prompt)
     db_session.flush()
@@ -7010,8 +7014,10 @@ def test_generate_structural_wechat_image_bypasses_provider_and_usage(
     )
 
     assert asset.model_name == "deterministic-layout-v1"
-    assert asset.provider_response["rendered_labels"] == ["规划范围管理", "收集需求", "定义范围"]
+    assert asset.provider_response["render_kind"] == "matrix"
+    assert asset.provider_response["rendered_labels"] == ["要点", "范围管理六过程", "WBS八项注意"]
     assert db_session.query(UsageRecord).count() == 0
+    assert prompt.visual_plan["kind"] == "matrix"
     assert prompt.status == "generated"
 
 
