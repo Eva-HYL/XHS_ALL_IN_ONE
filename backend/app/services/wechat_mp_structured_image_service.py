@@ -210,9 +210,26 @@ def _render_table(draw: ImageDraw.ImageDraw, plan: dict[str, Any]) -> list[str]:
     relations = plan.get("relations", [])
     if relations:
         relation = relations[0]
-        relation_text = f"{relation.get('from', '')} → {relation.get('to', '')}  {relation.get('label', '')}".strip()
+        relation_direction = f"{relation.get('from', '')} → {relation.get('to', '')}".strip()
+        relation_label = str(relation.get("label", "")).strip()
         draw.rounded_rectangle((WIDTH - 255, 180, WIDTH - 36, 270), radius=18, fill="#fff1e6")
-        _centered_lines(draw, (WIDTH - 247, 184, WIDTH - 44, 266), relation_text, _font(20, bold=True), fill="#a94d13", max_lines=3)
+        _centered_lines(
+            draw,
+            (WIDTH - 247, 188, WIDTH - 44, 226),
+            relation_direction,
+            _font(17, bold=True),
+            fill="#a94d13",
+            max_lines=1,
+        )
+        if relation_label:
+            _centered_lines(
+                draw,
+                (WIDTH - 247, 226, WIDTH - 44, 264),
+                relation_label,
+                _font(18, bold=True),
+                fill="#a94d13",
+                max_lines=1,
+            )
     return columns + labels
 
 
