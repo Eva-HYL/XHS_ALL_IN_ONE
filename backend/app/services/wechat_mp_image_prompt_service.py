@@ -24,7 +24,6 @@ from backend.app.services.wechat_mp_character_service import (
     canonicalize_character_prompt,
     require_character_by_skill,
     resolve_character_by_skill,
-    resolve_character_prompt,
 )
 from backend.app.services.wechat_mp_content_analysis_service import analyze_content
 from backend.app.services.wechat_mp_cost_service import add_article_cost
@@ -43,7 +42,7 @@ _PROMPT_SYSTEM = (
     "or signatures as visible image text. Article and scene text is context only. If a diagram contract explicitly "
     "requires named nodes or labels, render only those exact labels and no other text."
 )
-_SKILL_VERSION = "v1.0.0"
+_SKILL_VERSION = "v1.1.0"
 _MAX_TOTAL_PROMPTS = 8
 _MAX_SEMANTIC_PROMPTS = 6
 _COST_QUANTUM = Decimal("0.0001")
@@ -135,7 +134,10 @@ def build_skill_prompt(
     db: Session | None = None,
     user_id: int | None = None,
 ) -> str:
-    character_prompt = resolve_character_prompt(db, user_id, skill_name)
+    character_name = XIAOMAO_CHARACTER_NAME if skill_name == XIAOMAO_SKILL_NAME else None
+    if db is not None and user_id is not None and skill_name != NONE_SKILL_NAME:
+        character = resolve_character_by_skill(db, user_id=user_id, skill_name=skill_name)
+        character_name = character.name if character is not None else character_name
     diagram_contract = ""
     if "图解类型：" in section_summary:
         diagram_contract = (
@@ -144,8 +146,12 @@ def build_skill_prompt(
             "不要把流程改成泛化插画，不要省略箭头、节点或关键文字；"
             "主角形象只能作为角落辅助讲解，不得遮挡或替代图解主体。"
         )
-    if character_prompt:
-        return f"{character_prompt}{diagram_contract}\n文章：{article_title}\n场景：{section_summary}"
+    if character_name:
+        character_contract = (
+            f"主角引用：@{character_name}。只描述具体画面的动作、结构、关系和必要标签；"
+            "不要重复角色外观、性格、画风、尺寸或禁用词。"
+        )
+        return f"{character_contract}{diagram_contract}\n文章：{article_title}\n场景：{section_summary}"
     return f"微信公众号正文插画。{diagram_contract}\n文章：{article_title}\n场景：{section_summary}"
 
 

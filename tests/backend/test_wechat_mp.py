@@ -2149,6 +2149,48 @@ def test_list_prompts_returns_persisted_prompts_for_owned_article(api_client, au
     assert prompts[0]["editable_prompt"] == "一只小猫开始最小动作"
 
 
+def test_list_prompts_repairs_persisted_legacy_character_details(
+    api_client, auth_headers, created_wechat_prompt,
+):
+    from backend.app.models import User, WechatMpImagePrompt
+    from backend.app.services.wechat_mp_character_service import ensure_builtin_character
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        character = ensure_builtin_character(session, owner.id)
+        prompt = session.get(WechatMpImagePrompt, created_wechat_prompt.id)
+        prompt.character_id = character.id
+        prompt.skill_name = character.skill_name
+        prompt.prompt = (
+            "主角：@小猫生图\n"
+            "具体画面：白色背景，横向画幅，轻微抖动的手绘线稿；"
+            "一只胖胖慵懒的玳瑁猫，半闭眼、冷淡表情；"
+            "不得渲染标题、比例、尺寸、提示词、说明文字、水印、签名或图中文字。"
+        )
+        prompt.editable_prompt = prompt.prompt
+        session.commit()
+    finally:
+        session.close()
+
+    response = client.get(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_prompt.article_id}/prompts",
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()[0]["editable_prompt"] == (
+        "主角：@小猫生图\n具体画面：先完成最小动作"
+    )
+    session = session_factory()
+    try:
+        repaired = session.get(WechatMpImagePrompt, created_wechat_prompt.id)
+        assert repaired.prompt == repaired.editable_prompt == response.json()[0]["editable_prompt"]
+    finally:
+        session.close()
+
+
 def test_generate_prompts_creates_shotlist_and_records_article_usage(api_client, auth_headers, created_wechat_article, monkeypatch):
     from backend.app.models import UsageRecord
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
@@ -3365,8 +3407,10 @@ def test_xiaomao_prompt_contract_keeps_rendering_instructions_out_of_image_text(
     from backend.app.services.wechat_mp_image_prompt_service import build_skill_prompt
 
     prompt = build_skill_prompt("xiaomao-illustrations", "稳定输出", "先做最小动作")
-    for required in ("白色背景", "手绘", "慵懒", "玳瑁猫", "不得渲染"):
-        assert required in prompt
+    assert "主角引用：@小猫生图" in prompt
+    for excluded in ("白色背景", "手绘", "慵懒", "玳瑁猫", "不得渲染"):
+        assert excluded not in prompt
+    assert "只描述具体画面" in prompt
     assert "16:9" not in prompt
     assert "横版构图" not in prompt
     assert "15-25%" not in prompt
@@ -4633,6 +4677,48 @@ def test_semantic_batch_sends_one_compact_request_and_prefers_configured_max(mon
     assert all(set(candidate) == {"id", "heading", "text"} for candidate in payload["candidates"])
 
 
+def test_semantic_batch_sends_only_character_reference_not_character_contract(monkeypatch):
+    import json
+
+    from backend.app.models import WechatMpIllustrationCharacter
+    from backend.app.services import wechat_mp_prompt_batch_service as batch_service
+    from backend.app.services.wechat_mp_model_service import WechatMpModelContext
+
+    character = WechatMpIllustrationCharacter(
+        user_id=11,
+        name="小猫生图",
+        skill_name="xiaomao-illustrations",
+        prompt="主角必须是一只胖胖慵懒的玳瑁猫",
+    )
+    captured = {}
+
+    monkeypatch.setattr(
+        batch_service,
+        "resolve_wechat_mp_shotlist_model",
+        lambda **kwargs: WechatMpModelContext("qwen3.7-max", "https://models.example/v1", "test-key"),
+    )
+    monkeypatch.setattr(
+        batch_service,
+        "_call_batch_prompt_model",
+        lambda **kwargs: captured.update(kwargs) or {
+            "content": '{"items":[]}', "input_tokens": 1, "output_tokens": 1,
+        },
+    )
+
+    batch_service.generate_semantic_prompts(
+        db=Mock(),
+        user_id=11,
+        article_title="项目管理",
+        candidates=_semantic_batch_candidates()[:1],
+        character=character,
+    )
+
+    payload = json.loads(captured["user_payload"])
+    assert payload["character"] == "@小猫生图"
+    assert "胖胖慵懒" not in captured["user_payload"]
+    assert "只描述具体画面" in batch_service._SYSTEM_PROMPT
+
+
 def test_semantic_batch_strict_json_ignores_invalid_duplicate_unknown_and_overflow_ids(monkeypatch):
     import json
 
@@ -5625,6 +5711,41 @@ def test_character_mention_formats_and_parses_the_full_reference_line():
     stored = format_character_prompt(character, "小猫压住流程图")
     assert stored == "主角：@小猫生图\n具体画面：小猫压住流程图"
     assert parse_character_mention(stored) == ("小猫生图", "具体画面：小猫压住流程图")
+
+
+def test_character_prompt_canonicalization_removes_legacy_character_rules_but_keeps_scene():
+    from backend.app.models import WechatMpIllustrationCharacter
+    from backend.app.services.wechat_mp_character_service import (
+        canonicalize_character_prompt,
+    )
+
+    character = WechatMpIllustrationCharacter(
+        user_id=1,
+        name="小猫生图",
+        skill_name="xiaomao-illustrations",
+        prompt="自定义的新形象合同",
+    )
+    legacy_mixed_prompt = (
+        "主角：@小猫生图\n"
+        "具体画面：白色背景，横向画幅，轻微抖动的手绘线稿；"
+        "一只胖胖慵懒、半推半就但会把活干完的玳瑁猫，身体以黑白色块为主，"
+        "背、头、尾点缀少量橙斑，半闭眼、冷淡表情；"
+        "小猫自然趴卧，爪子压着一张简单的树状结构图（代表WBS），"
+        "旁边放着放大镜和打勾的印章；"
+        "画面留白充足，一图一个核心结构，不使用写实摄影、3D 渲染、复杂背景或大段文字；"
+        "不得渲染标题、比例、尺寸、提示词、说明文字、水印、签名或图中文字。"
+    )
+
+    result = canonicalize_character_prompt(character, legacy_mixed_prompt, include_character=True)
+
+    assert result == (
+        "主角：@小猫生图\n"
+        "具体画面：小猫自然趴卧，爪子压着一张简单的树状结构图（代表WBS），"
+        "旁边放着放大镜和打勾的印章"
+    )
+    assert "胖胖慵懒" not in result
+    assert "手绘线稿" not in result
+    assert "不得渲染" not in result
 
 
 def test_character_mention_rejects_multiple_primary_characters():

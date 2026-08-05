@@ -246,11 +246,43 @@ def list_prompts(
     db: Session = Depends(get_db),
 ):
     article = _get_owned_article(db, current_user, article_id)
-    return db.scalars(
+    prompts = db.scalars(
         select(WechatMpImagePrompt)
         .where(WechatMpImagePrompt.article_id == article.id, WechatMpImagePrompt.user_id == current_user.id)
         .order_by(WechatMpImagePrompt.section_id, WechatMpImagePrompt.id)
     ).all()
+    repaired = False
+    for prompt in prompts:
+        stored_text = f"{prompt.prompt}\n{prompt.editable_prompt}"
+        if "主角：@" not in stored_text and "胖胖慵懒" not in stored_text:
+            continue
+        character = db.get(WechatMpIllustrationCharacter, prompt.character_id) if prompt.character_id else None
+        if character is None or character.user_id != current_user.id:
+            character = resolve_character_by_skill(
+                db,
+                user_id=current_user.id,
+                skill_name=prompt.skill_name,
+            )
+        if character is None:
+            continue
+        normalized_prompt = canonicalize_character_prompt(character, prompt.prompt, include_character=True)
+        normalized_editable = canonicalize_character_prompt(character, prompt.editable_prompt, include_character=True)
+        section = db.get(WechatMpArticleSection, prompt.section_id)
+        fallback_scene = (section.summary or section.source_excerpt).strip() if section is not None else ""
+        if fallback_scene:
+            if not parse_character_mention(normalized_prompt)[1].removeprefix("具体画面：").strip():
+                normalized_prompt = canonicalize_character_prompt(character, fallback_scene, include_character=True)
+            if not parse_character_mention(normalized_editable)[1].removeprefix("具体画面：").strip():
+                normalized_editable = canonicalize_character_prompt(character, fallback_scene, include_character=True)
+        if normalized_prompt != prompt.prompt or normalized_editable != prompt.editable_prompt:
+            prompt.prompt = normalized_prompt
+            prompt.editable_prompt = normalized_editable
+            repaired = True
+    if repaired:
+        db.commit()
+        for prompt in prompts:
+            db.refresh(prompt)
+    return prompts
 
 
 @router.patch("/{article_id}/prompts/{prompt_id}", response_model=WechatMpImagePromptResponse)

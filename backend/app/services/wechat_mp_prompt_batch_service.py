@@ -20,7 +20,9 @@ BatchPromptOutcome = Literal["success", "parse_degraded", "provider_failed", "no
 _SYSTEM_PROMPT = (
     "Return strict JSON only. The complete response must be {\"items\":[...]}. "
     "Each item must contain exactly an input candidate id and one concise Chinese image prompt: "
-    "{\"id\":\"...\",\"prompt\":\"...\"}. Do not use Markdown fences or add commentary."
+    "{\"id\":\"...\",\"prompt\":\"...\"}. Each prompt must only describe the concrete scene: "
+    "只描述具体画面的动作、结构、关系和必要标签，不要重复角色外观、性格、画风、尺寸或禁用词。"
+    " Do not use Markdown fences or add commentary."
 )
 
 
@@ -67,9 +69,7 @@ def _compact_candidates(candidates: tuple["VisualCandidate", ...] | list["Visual
 def _build_user_payload(
     *, article_title: str, candidates: list[dict[str, str]], character: "WechatMpIllustrationCharacter | None",
 ) -> str:
-    character_summary = ""
-    if character is not None:
-        character_summary = character.prompt or character.name
+    character_summary = f"@{character.name}" if character is not None else ""
     return json.dumps({
         "article_title": article_title,
         "character": character_summary,

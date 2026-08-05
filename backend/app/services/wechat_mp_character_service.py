@@ -33,6 +33,19 @@ XIAOMAO_PROMPT = (
     "不得渲染标题、比例、尺寸、提示词、说明文字、水印、签名或图中文字。"
 )
 
+_XIAOMAO_SCENE_RULE_PATTERNS = tuple(re.compile(pattern) for pattern in (
+    r"(?:白色背景[，,]\s*)?(?:16:9\s*)?横(?:向画幅|版构图)[，,]\s*轻微抖动的手绘线稿"
+    r"(?:[，,]\s*少量浅橙、红、蓝批注)?[；;]?",
+    r"(?:主角必须是)?一只胖胖慵懒(?:、半推半就但会把活干完)?的玳瑁猫[，,]?",
+    r"身体以黑白色块为主[，,]背、头、尾(?:点缀少量橙斑|只有约\s*15-25%\s*小块橙斑)"
+    r"[，,]半闭眼、冷淡表情[；;]?",
+    r"半闭眼、冷淡表情[；;]?",
+    r"小猫自然趴卧并辅助表达画面核心概念[，,]不穿衣、不画成可爱吉祥物[；;]?",
+    r"小猫必须承担画面的核心概念动作[，,]不能只做装饰[，,]不穿衣、不直立、不画成可爱吉祥物[；;]?",
+    r"画面留白充足[，,]一图一个核心结构[，,]不使用写实摄影、3D\s*渲染、复杂背景或大段文字[；;]?",
+    r"不得渲染标题、比例、尺寸、提示词、说明文字、水印、签名或图中文字[。.;]?",
+))
+
 
 class WechatMpIllustrationSkillError(ValueError):
     """Raised when a request references an unavailable illustration skill."""
@@ -77,6 +90,22 @@ def format_character_prompt(character: WechatMpIllustrationCharacter, scene_prom
     return "\n".join(part for part in (format_character_mention(character), cleaned) if part)
 
 
+def sanitize_character_scene_prompt(
+    character: WechatMpIllustrationCharacter | None,
+    scene_prompt: str,
+) -> str:
+    """Remove character/style contracts while preserving the actual scene payload."""
+    cleaned = CHARACTER_MENTION_DIRECTIVE_RE.sub("", scene_prompt).strip().removeprefix("具体画面：").lstrip()
+    if character is not None and character.prompt:
+        cleaned = cleaned.replace(character.prompt, "")
+    if character is not None and character.skill_name == XIAOMAO_SKILL_NAME:
+        for pattern in _XIAOMAO_SCENE_RULE_PATTERNS:
+            cleaned = pattern.sub("", cleaned)
+    cleaned = re.sub(r"[；;]{2,}", "；", cleaned)
+    cleaned = "\n".join(line.strip(" ，,；;。. ") for line in cleaned.splitlines() if line.strip(" ，,；;。. "))
+    return cleaned.strip()
+
+
 def canonicalize_character_prompt(
     character: WechatMpIllustrationCharacter | None,
     scene_prompt: str,
@@ -84,9 +113,7 @@ def canonicalize_character_prompt(
     include_character: bool,
 ) -> str:
     """Keep stored prompts in reference form, never with a full character contract."""
-    cleaned = scene_prompt.replace(character.prompt, "") if character is not None else scene_prompt
-    cleaned = CHARACTER_MENTION_DIRECTIVE_RE.sub("", cleaned)
-    cleaned = "\n".join(line.strip() for line in cleaned.splitlines() if line.strip())
+    cleaned = sanitize_character_scene_prompt(character, scene_prompt)
     if include_character and character is not None:
         return format_character_prompt(character, cleaned)
     return cleaned.strip()
