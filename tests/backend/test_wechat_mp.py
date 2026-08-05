@@ -6968,3 +6968,62 @@ def test_prompt_ignore_rule_is_user_scoped_and_keeps_generated_asset(db_session,
     )
     assert restored.status == "prompt_ready"
     assert f"{{{{image:prompt-{prompt.id}}}}}" in article.html_body
+
+
+def test_prompt_ignore_api_exposes_rule_and_restore(api_client, auth_headers):
+    from backend.app.models import User, WechatMpArticle, WechatMpArticleSection, WechatMpImagePrompt
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        article = WechatMpArticle(
+            user_id=owner.id,
+            title="忽略测试",
+            markdown_body="规划→收集→定义→确认",
+            html_body="<p>正文</p>",
+            status="prompts_ready",
+        )
+        session.add(article)
+        session.flush()
+        section = WechatMpArticleSection(
+            user_id=owner.id,
+            article_id=article.id,
+            section_index=0,
+            summary="流程",
+            source_excerpt="规划→收集→定义→确认",
+        )
+        session.add(section)
+        session.flush()
+        prompt = WechatMpImagePrompt(
+            user_id=owner.id,
+            article_id=article.id,
+            section_id=section.id,
+            prompt="具体画面：规划→收集→定义→确认",
+            editable_prompt="具体画面：规划→收集→定义→确认",
+            visual_plan={"kind": "flow"},
+            quality_report={"valid": True},
+        )
+        session.add(prompt)
+        session.flush()
+        article.html_body += f"{{{{image:prompt-{prompt.id}}}}}"
+        session.commit()
+        article_id = article.id
+        prompt_id = prompt.id
+    finally:
+        session.close()
+
+    ignored = client.post(
+        f"/api/platforms/wechat-mp/articles/{article_id}/prompts/{prompt_id}/ignore",
+        json={"scope": "future_similar"},
+        headers=auth_headers,
+    )
+    rules = client.get("/api/platforms/wechat-mp/prompt-ignore-rules", headers=auth_headers)
+    restored = client.post(
+        f"/api/platforms/wechat-mp/articles/{article_id}/prompts/{prompt_id}/restore",
+        headers=auth_headers,
+    )
+
+    assert ignored.status_code == 200 and ignored.json()["status"] == "ignored"
+    assert rules.status_code == 200 and len(rules.json()) == 1
+    assert restored.status_code == 200 and restored.json()["status"] == "prompt_ready"
