@@ -37,8 +37,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libgl1 \
     libglib2.0-0 \
-    fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/*
+
+# Pillow needs an explicit CJK font for deterministic WeChat information graphics.
+RUN mkdir -p /usr/share/fonts/opentype/noto \
+    && curl -fL --retry 5 --retry-delay 2 \
+      https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf \
+      -o /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
 
 # Install Node.js runtime (required for JS signature execution)
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
