@@ -21,6 +21,7 @@ from backend.app.models.wechat_mp import (
     WechatMpIllustrationCharacter,
     WechatMpCharacterView,
     WechatMpImagePrompt,
+    WechatMpPromptIgnoreRule,
     WechatMpMaterial,
     WechatMpPublishJob,
 )
@@ -61,6 +62,7 @@ __all__ = [
     "WechatMpDraftSync",
     "WechatMpIllustrationCharacter",
     "WechatMpImagePrompt",
+    "WechatMpPromptIgnoreRule",
     "WechatMpMaterial",
     "WechatMpPublishJob",
     "note_tags",

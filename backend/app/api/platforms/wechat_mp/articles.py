@@ -12,6 +12,7 @@ from backend.app.models import (
     WechatMpAsset,
     WechatMpIllustrationCharacter,
     WechatMpImagePrompt,
+    WechatMpPromptIgnoreRule,
 )
 from backend.app.schemas.wechat_mp import (
     WechatMpArticleCreateRequest,
@@ -19,6 +20,7 @@ from backend.app.schemas.wechat_mp import (
     WechatMpAssetResponse,
     WechatMpImagePromptResponse,
     WechatMpPromptGenerationResponse,
+    WechatMpPromptIgnoreRuleResponse,
 )
 from backend.app.services.wechat_mp_image_service import (
     WechatMpImageValidationError,
@@ -43,6 +45,7 @@ from backend.app.services.wechat_mp_character_service import (
 )
 from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style, get_wechat_layout_styles, normalize_wechat_layout_style, render_wechat_html
 from backend.app.services.wechat_mp_writer_service import generate_wechat_article
+from backend.app.services.wechat_mp_prompt_ignore_service import ignore_prompt, restore_prompt
 
 
 router = APIRouter(prefix="/platforms/wechat-mp/articles", tags=["wechat-mp-articles"])
@@ -70,6 +73,14 @@ class WechatMpPromptUpdateRequest(BaseModel):
 class WechatMpImageGenerateRequest(BaseModel):
     image_model: str | None = Field(default=None, min_length=1, max_length=128)
     size: str = Field(default="16:9", min_length=1, max_length=32)
+
+
+class WechatMpPromptIgnoreRequest(BaseModel):
+    scope: str = Field(default="future_similar", pattern="^(current|future_similar)$")
+
+
+class WechatMpPromptIgnoreRuleUpdateRequest(BaseModel):
+    status: str = Field(pattern="^(active|disabled)$")
 
 
 class WechatMpLayoutPreviewResponse(BaseModel):
@@ -425,3 +436,83 @@ def regenerate_prompt(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+
+
+@router.post("/{article_id}/prompts/{prompt_id}/ignore", response_model=WechatMpImagePromptResponse)
+def ignore_article_prompt(
+    article_id: int,
+    prompt_id: int,
+    payload: WechatMpPromptIgnoreRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _get_owned_article(db, current_user, article_id)
+    try:
+        return ignore_prompt(
+            db,
+            user_id=current_user.id,
+            article_id=article_id,
+            prompt_id=prompt_id,
+            future_similar=payload.scope == "future_similar",
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.post("/{article_id}/prompts/{prompt_id}/restore", response_model=WechatMpImagePromptResponse)
+def restore_article_prompt(
+    article_id: int,
+    prompt_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _get_owned_article(db, current_user, article_id)
+    try:
+        return restore_prompt(db, user_id=current_user.id, article_id=article_id, prompt_id=prompt_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@image_router.get("/prompt-ignore-rules", response_model=list[WechatMpPromptIgnoreRuleResponse])
+def list_prompt_ignore_rules(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return db.scalars(select(WechatMpPromptIgnoreRule).where(
+        WechatMpPromptIgnoreRule.user_id == current_user.id,
+    ).order_by(WechatMpPromptIgnoreRule.id.desc())).all()
+
+
+@image_router.patch("/prompt-ignore-rules/{rule_id}", response_model=WechatMpPromptIgnoreRuleResponse)
+def update_prompt_ignore_rule(
+    rule_id: int,
+    payload: WechatMpPromptIgnoreRuleUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    rule = db.scalar(select(WechatMpPromptIgnoreRule).where(
+        WechatMpPromptIgnoreRule.id == rule_id,
+        WechatMpPromptIgnoreRule.user_id == current_user.id,
+    ))
+    if rule is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="WeChat MP ignore rule not found")
+    rule.status = payload.status
+    db.commit()
+    db.refresh(rule)
+    return rule
+
+
+@image_router.delete("/prompt-ignore-rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_prompt_ignore_rule(
+    rule_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    rule = db.scalar(select(WechatMpPromptIgnoreRule).where(
+        WechatMpPromptIgnoreRule.id == rule_id,
+        WechatMpPromptIgnoreRule.user_id == current_user.id,
+    ))
+    if rule is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="WeChat MP ignore rule not found")
+    db.delete(rule)
+    db.commit()

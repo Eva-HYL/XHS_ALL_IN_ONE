@@ -892,6 +892,8 @@ export interface WechatMpImagePrompt {
   status: string;
   skill_version?: string;
   cost_estimate?: Record<string, unknown>;
+  visual_plan?: Record<string, unknown>;
+  quality_report?: Record<string, boolean>;
   created_at?: string;
   updated_at?: string;
 }
@@ -916,6 +918,19 @@ export type WechatMpPromptAnalysis = {
 export type WechatMpPromptGenerationResult = {
   items: WechatMpImagePrompt[];
   analysis: WechatMpPromptAnalysis;
+};
+
+export type WechatMpPromptIgnoreRule = {
+  id: number;
+  user_id: number;
+  source_article_id: number | null;
+  source_prompt_id: number | null;
+  candidate_kind: string;
+  source_text: string;
+  concept_signature: { kind?: string; concepts?: string[] };
+  status: "active" | "disabled";
+  created_at: string;
+  updated_at: string;
 };
 
 export type WechatMpAccount = {

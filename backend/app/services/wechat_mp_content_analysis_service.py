@@ -244,14 +244,17 @@ def _table_rows(text: str) -> tuple[tuple[str, ...], ...] | None:
         if not cells or any(not cell for cell in cells):
             return None
         rows.append(cells)
-    if len(rows) < 3 or len(rows[0]) < 2:
+    if len(rows) < 2 or len(rows[0]) < 2:
         return None
+    body_start = 1
     divider = rows[1]
-    if len(divider) != len(rows[0]) or not all(_TABLE_DIVIDER_CELL_RE.fullmatch(cell) for cell in divider):
+    if len(divider) == len(rows[0]) and all(_TABLE_DIVIDER_CELL_RE.fullmatch(cell) for cell in divider):
+        body_start = 2
+    elif len(rows) < 3:
         return None
-    if any(len(row) != len(rows[0]) for row in rows[2:]):
+    if len(rows) <= body_start or any(len(row) != len(rows[0]) for row in rows[body_start:]):
         return None
-    return tuple([rows[0], *rows[2:]])
+    return tuple([rows[0], *rows[body_start:]])
 
 
 def _extract_structure(block: ContentBlock) -> tuple[str, tuple[tuple[str, ...], ...]] | None:

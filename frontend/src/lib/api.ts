@@ -1153,6 +1153,25 @@ export async function regenerateWechatMpPrompt(articleId: number, promptId: numb
   return response.data;
 }
 
+export async function ignoreWechatMpPrompt(
+  articleId: number,
+  promptId: number,
+  scope: "current" | "future_similar" = "future_similar",
+): Promise<WechatMpImagePrompt> {
+  const response = await http.post<WechatMpImagePrompt>(
+    `/platforms/wechat-mp/articles/${articleId}/prompts/${promptId}/ignore`,
+    { scope },
+  );
+  return response.data;
+}
+
+export async function restoreWechatMpPrompt(articleId: number, promptId: number): Promise<WechatMpImagePrompt> {
+  const response = await http.post<WechatMpImagePrompt>(
+    `/platforms/wechat-mp/articles/${articleId}/prompts/${promptId}/restore`,
+  );
+  return response.data;
+}
+
 export async function generateWechatMpImage(promptId: number, payload: { image_model?: string; size?: string }): Promise<WechatMpAsset> {
   const response = await http.post<WechatMpAsset>(`/platforms/wechat-mp/prompts/${promptId}/image`, payload);
   return response.data;

@@ -8,7 +8,7 @@ WechatMpArticleStatus = Literal[
     "draft_local", "writing", "layout_ready", "prompts_ready", "images_partial",
     "images_ready", "synced_to_wechat", "publish_pending", "published", "failed",
 ]
-WechatMpImageStatus = Literal["prompt_ready", "generating", "generated", "failed", "skipped"]
+WechatMpImageStatus = Literal["prompt_ready", "generating", "generated", "failed", "skipped", "ignored"]
 WechatMpDraftSyncStatus = Literal["pending", "synced", "stale", "failed"]
 WechatMpPublishStatus = Literal["pending", "scheduled", "submitted", "publishing", "published", "failed", "cancelled"]
 WechatMpMaterialType = Literal["text", "link", "outline", "quote", "file", "other"]
@@ -109,6 +109,23 @@ class WechatMpImagePromptResponse(BaseModel):
     version: int
     status: WechatMpImageStatus
     cost_estimate: dict
+    visual_plan: dict = Field(default_factory=dict)
+    quality_report: dict = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class WechatMpPromptIgnoreRuleResponse(BaseModel):
+    id: int
+    user_id: int
+    source_article_id: int | None
+    source_prompt_id: int | None
+    candidate_kind: str
+    source_text: str
+    concept_signature: dict
+    status: str
     created_at: datetime
     updated_at: datetime
 

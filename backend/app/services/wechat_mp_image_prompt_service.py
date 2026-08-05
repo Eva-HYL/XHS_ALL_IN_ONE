@@ -29,6 +29,8 @@ from backend.app.services.wechat_mp_content_analysis_service import analyze_cont
 from backend.app.services.wechat_mp_cost_service import add_article_cost
 from backend.app.services.wechat_mp_layout_service import render_wechat_html
 from backend.app.services.wechat_mp_prompt_batch_service import generate_semantic_prompts
+from backend.app.services.wechat_mp_prompt_ignore_service import filter_ignored_candidates
+from backend.app.services.wechat_mp_visual_plan_service import build_visual_plan, compile_visual_prompt, validate_visual_plan
 from backend.app.services.wechat_mp_shotlist_service import generate_article_shotlist
 
 if TYPE_CHECKING:
@@ -81,18 +83,12 @@ class WechatMpPromptProviderError(RuntimeError):
 
 def build_deterministic_prompt(candidate: "VisualCandidate", character: "WechatMpIllustrationCharacter | None") -> str:
     """Render only the analyzed structure and its canonical character mention."""
-    lines: list[str] = []
-    if candidate.kind == "flow":
-        lines.append(" -> ".join(candidate.structure[0]))
-    elif candidate.kind == "table":
-        lines.extend(" | ".join(row) for row in candidate.structure)
-    elif candidate.kind == "classification":
-        lines.extend(f"{label}：{value}" for label, value in candidate.structure)
-    else:
+    plan = build_visual_plan(candidate)
+    if candidate.kind not in {"flow", "table", "classification"}:
         raise ValueError("Candidate is not deterministic")
     return canonicalize_character_prompt(
         character,
-        "\n".join(lines),
+        compile_visual_prompt(plan),
         include_character=character is not None,
     )
 
@@ -432,10 +428,13 @@ def generate_image_prompts(
             skill_name=selected_skill,
         )
     content_analysis = analyze_content(article.markdown_body)
-    candidates = () if selected_skill == NONE_SKILL_NAME else _selected_candidates(content_analysis)
+    selected_candidates = () if selected_skill == NONE_SKILL_NAME else _selected_candidates(content_analysis)
+    candidates, ignored_matches = filter_ignored_candidates(
+        db, user_id=user_id, candidates=selected_candidates,
+    )
     analysis_values = {
         "source_blocks": len(content_analysis.blocks),
-        "filtered_blocks": content_analysis.filtered_blocks,
+        "filtered_blocks": content_analysis.filtered_blocks + len(ignored_matches),
         "deterministic_prompts": sum(candidate.kind != "semantic" for candidate in candidates),
         "semantic_candidates": sum(candidate.kind == "semantic" for candidate in candidates),
         "reused_prompts": 0,
@@ -469,6 +468,17 @@ def generate_image_prompts(
 
     try:
         if not candidates:
+            if ignored_matches:
+                db.commit()
+                ignored_prompts = db.scalars(select(WechatMpImagePrompt).where(
+                    WechatMpImagePrompt.article_id == article.id,
+                    WechatMpImagePrompt.user_id == user_id,
+                    WechatMpImagePrompt.status == "ignored",
+                )).all()
+                return WechatMpPromptGenerationResult(
+                    items=ignored_prompts,
+                    analysis=WechatMpPromptGenerationAnalysis(**analysis_values),
+                )
             if existing_prompt_ids or existing_section_ids or "{{image:prompt-" in article.html_body:
                 reset_inline_illustrations(db, article)
             article.illustration_skill = selected_skill
@@ -501,8 +511,12 @@ def generate_image_prompts(
             if matching:
                 active_sections.append((matching.popleft(), candidate))
         active_section_ids = {section.id for section, _ in active_sections}
+        ignored_section_ids = set(db.scalars(select(WechatMpImagePrompt.section_id).where(
+            WechatMpImagePrompt.article_id == article.id,
+            WechatMpImagePrompt.status == "ignored",
+        )).all())
         for section in all_sections:
-            if section.id not in active_section_ids:
+            if section.id not in active_section_ids and section.id not in ignored_section_ids:
                 _delete_section_state(db, article, section)
         pre_generation_prompt_ids = set(db.scalars(
             select(WechatMpImagePrompt.id).where(WechatMpImagePrompt.article_id == article.id)
@@ -518,6 +532,8 @@ def generate_image_prompts(
         character_id = selected_character.id if selected_character else None
         anchor_version = selected_character.anchor_version if selected_character else 0
         for section, candidate in active_sections:
+            visual_plan = build_visual_plan(candidate)
+            quality_report = validate_visual_plan(candidate, visual_plan)
             fingerprint = generation_fingerprint(
                 candidate,
                 character_id=character_id,
@@ -544,6 +560,8 @@ def generate_image_prompts(
                 and prompt.skill_version == _SKILL_VERSION
             )
             if reusable:
+                prompt.visual_plan = visual_plan
+                prompt.quality_report = quality_report
                 has_embedded_asset = _has_embedded_generated_asset(db, article, prompt)
                 if prompt.status == "generated" and has_embedded_asset:
                     article.html_body = article.html_body.replace(
@@ -574,6 +592,8 @@ def generate_image_prompts(
                     skill_version=_SKILL_VERSION,
                     version=1,
                     status="prompt_ready",
+                    visual_plan=visual_plan,
+                    quality_report=quality_report,
                 )
                 db.add(prompt)
                 db.flush()
@@ -587,6 +607,8 @@ def generate_image_prompts(
                 prompt.skill_version = _SKILL_VERSION
                 prompt.version += 1
                 prompt.status = "prompt_ready"
+                prompt.visual_plan = visual_plan
+                prompt.quality_report = quality_report
             prompt.cost_estimate = {"currency": "CNY", "total_yuan": "0.0000", "calls": 0}
             _insert_prompt_placeholder(article, section, prompt)
             prompts_by_section[section.id] = prompt
@@ -607,6 +629,8 @@ def generate_image_prompts(
             })
             batch_items = {item.candidate_id: item.prompt for item in batch_result.items}
             for section, candidate, prompt, fingerprint in unresolved_semantic:
+                visual_plan = build_visual_plan(candidate)
+                quality_report = validate_visual_plan(candidate, visual_plan)
                 generated_prompt = batch_items.get(str(candidate.source_index))
                 if generated_prompt is None:
                     continue
@@ -628,6 +652,8 @@ def generate_image_prompts(
                         skill_version=_SKILL_VERSION,
                         version=1,
                         status="prompt_ready",
+                        visual_plan=visual_plan,
+                        quality_report=quality_report,
                     )
                     db.add(prompt)
                     db.flush()
@@ -641,6 +667,8 @@ def generate_image_prompts(
                     prompt.skill_version = _SKILL_VERSION
                     prompt.version += 1
                     prompt.status = "prompt_ready"
+                    prompt.visual_plan = visual_plan
+                    prompt.quality_report = quality_report
                 _insert_prompt_placeholder(article, section, prompt)
                 prompts_by_section[section.id] = prompt
                 semantic_prompts.append(prompt)

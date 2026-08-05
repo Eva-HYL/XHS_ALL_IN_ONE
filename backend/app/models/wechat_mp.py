@@ -76,6 +76,23 @@ class WechatMpImagePrompt(Base):
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     status: Mapped[str] = mapped_column(String(32), default="prompt_ready", index=True, nullable=False)
     cost_estimate: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    visual_plan: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    quality_report: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class WechatMpPromptIgnoreRule(Base):
+    __tablename__ = "wechat_mp_prompt_ignore_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    source_article_id: Mapped[int | None] = mapped_column(ForeignKey("wechat_mp_articles.id"), index=True, nullable=True)
+    source_prompt_id: Mapped[int | None] = mapped_column(ForeignKey("wechat_mp_image_prompts.id"), index=True, nullable=True)
+    candidate_kind: Mapped[str] = mapped_column(String(32), default="semantic", nullable=False)
+    source_text: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    concept_signature: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active", index=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 

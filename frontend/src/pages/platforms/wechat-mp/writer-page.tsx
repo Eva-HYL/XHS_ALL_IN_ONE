@@ -17,7 +17,9 @@ import {
   generateWechatMpCover,
   generateWechatMpImage,
   generateWechatMpPrompts,
+  ignoreWechatMpPrompt,
   regenerateWechatMpPrompt,
+  restoreWechatMpPrompt,
   updateWechatMpArticle,
   updateWechatMpPrompt,
 } from "../../../lib/api";
@@ -380,6 +382,35 @@ export function WechatMpWriterPage() {
     }
   }
 
+  async function ignorePrompt(prompt: WechatMpImagePrompt, scope: "current" | "future_similar") {
+    setError(null);
+    imageQueueRef.current = imageQueueRef.current.filter((id) => id !== prompt.id);
+    setImageQueue([...imageQueueRef.current]);
+    try {
+      const updated = await ignoreWechatMpPrompt(prompt.article_id, prompt.id, scope);
+      setPrompts((items) => items.map((item) => item.id === updated.id ? updated : item));
+      setArticle(await fetchWechatMpArticle(prompt.article_id));
+      setNotice(scope === "future_similar"
+        ? "已忽略；后续文章中的相似内容会在生成提示词前跳过。"
+        : "已仅忽略当前提示词。"
+      );
+    } catch (err) {
+      setError(errorMessage(err, "忽略提示词失败。"));
+    }
+  }
+
+  async function restorePrompt(prompt: WechatMpImagePrompt) {
+    setError(null);
+    try {
+      const updated = await restoreWechatMpPrompt(prompt.article_id, prompt.id);
+      setPrompts((items) => items.map((item) => item.id === updated.id ? updated : item));
+      setArticle(await fetchWechatMpArticle(prompt.article_id));
+      setNotice("已恢复当前提示词；长期忽略规则可在规则管理中单独停用。 ");
+    } catch (err) {
+      setError(errorMessage(err, "恢复提示词失败。"));
+    }
+  }
+
   async function selectCharacter(prompt: WechatMpImagePrompt, skillName: string) {
     const character = characters.find((item) => item.skill_name === skillName && item.is_available && item.skill_name !== "none");
     if (!character || character.id === null) return;
@@ -631,6 +662,14 @@ export function WechatMpWriterPage() {
                     ? "重新生成正文图片"
                     : "生成正文图片";
               const character = resolveCharacterMention(characters, prompt.character_id, prompt.skill_name, prompt.editable_prompt);
+              const isIgnored = prompt.status === "ignored";
+              const visualPlan = prompt.visual_plan as {
+                kind?: string;
+                columns?: string[];
+                rows?: Array<{ label: string; values: string[] }>;
+                nodes?: string[];
+                relations?: Array<{ from: string; to: string; label: string }>;
+              } | undefined;
               const characterMentionBadge = character ? (
                 <Tooltip title={<div><strong>{character.name}</strong><div>{character.is_available ? "四视图已确认" : "待确认四视图"}</div><div>{character.prompt}</div></div>}>
                   <Tag color={character.is_available ? "blue" : "gold"}>
@@ -650,6 +689,14 @@ export function WechatMpWriterPage() {
                 <Col xs={24} lg={15}>
                   {characterMentionBadge && <div style={{ marginBottom: 8 }}>{characterMentionBadge}</div>}
                   <TextArea value={prompt.editable_prompt} onChange={(event) => setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, editable_prompt: event.target.value } : item))} rows={5} />
+                  {visualPlan?.kind && (
+                    <Card size="small" title={`视觉规划 · ${visualPlan.kind}`} style={{ marginTop: 8 }}>
+                      {visualPlan.nodes?.length ? <Text>{visualPlan.nodes.join(" → ")}</Text> : null}
+                      {visualPlan.columns?.length ? <Text strong>{visualPlan.columns.join(" / ")}</Text> : null}
+                      {visualPlan.rows?.map((row) => <div key={row.label}><Text type="secondary">{row.label}：</Text>{row.values.join(" ｜ ")}</div>)}
+                      {visualPlan.relations?.map((relation) => <div key={`${relation.from}-${relation.to}`}><Tag color="blue">{relation.from} → {relation.to}</Tag>{relation.label}</div>)}
+                    </Card>
+                  )}
                   <Space style={{ marginTop: 8 }} wrap>
                     <Select
                       size="small"
@@ -659,11 +706,19 @@ export function WechatMpWriterPage() {
                       options={characters.filter((character) => character.is_available && character.skill_name !== "none").map((character) => ({ value: character.skill_name, label: `@${character.name}` }))}
                       onChange={(skillName) => skillName && void selectCharacter(prompt, skillName)}
                     />
-                    <Button onClick={() => void regenerate(prompt)} loading={promptBusy}>重新生成提示词</Button>
+                    {isIgnored ? (
+                      <Button onClick={() => void restorePrompt(prompt)}>恢复当前提示词</Button>
+                    ) : (
+                      <>
+                        <Button onClick={() => void regenerate(prompt)} loading={promptBusy}>重新生成提示词</Button>
+                        <Button danger onClick={() => void ignorePrompt(prompt, "current")}>只忽略本条</Button>
+                        <Button danger type="primary" onClick={() => void ignorePrompt(prompt, "future_similar")}>以后忽略类似内容</Button>
+                      </>
+                    )}
                     <Button
                       type="primary"
                       icon={<PictureOutlined />}
-                      disabled={prompt.skill_name === "none" || isGenerating || isQueued}
+                      disabled={isIgnored || prompt.skill_name === "none" || isGenerating || isQueued}
                       loading={isGenerating}
                       onClick={() => enqueueImage(prompt)}
                     >

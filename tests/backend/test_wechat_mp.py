@@ -2285,9 +2285,10 @@ def test_deterministic_prompts_keep_canonical_character_mentions_and_exact_label
         for candidate in analysis.deterministic_candidates
     }
 
-    assert prompts["flow"] == "主角：@团团\n具体画面：收集需求 -> 分析需求 -> 确认需求"
-    assert prompts["table"] == "主角：@团团\n具体画面：阶段 | 产物\n收集 | 清单"
-    assert prompts["classification"] == "主角：@团团\n具体画面：输入：原始数据\n输出：标准数据"
+    assert prompts["flow"].startswith("主角：@团团\n具体画面：横向有序流程信息图")
+    assert "收集需求 → 分析需求 → 确认需求" in prompts["flow"]
+    assert "列为产物" in prompts["table"] and "收集：清单" in prompts["table"]
+    assert "输入、原始数据" in prompts["classification"] and "输出、标准数据" in prompts["classification"]
     assert all("标题" not in prompt and "尺寸" not in prompt and "水印" not in prompt for prompt in prompts.values())
 
 
@@ -6831,3 +6832,139 @@ def test_wechat_mp_character_images_are_persisted_outside_the_container():
         "./backend/app/storage/character-images:"
         "/app/backend/app/storage/character-images"
     ) in compose_source
+
+
+def test_content_analysis_accepts_pipe_table_without_markdown_divider():
+    from backend.app.services.wechat_mp_content_analysis_service import analyze_content
+
+    body = """对比项 | 确认范围 | 质量控制
+关注点 | 可交付成果获得客户接受 | 可交付成果的准确性和质量要求
+执行方 | 外部干系人检查验收 | 内部质量部门实施
+时机 | 一般在阶段末尾 | 不一定在阶段末
+关系 | — | 质量控制一般在确认范围前进行"""
+
+    analysis = analyze_content(body)
+
+    assert len(analysis.candidates) == 1
+    assert analysis.candidates[0].kind == "table"
+    assert analysis.candidates[0].structure[0] == ("对比项", "确认范围", "质量控制")
+    assert analysis.candidates[0].structure[-1] == ("关系", "—", "质量控制一般在确认范围前进行")
+
+
+def test_visual_plan_extracts_comparison_relation_before_image_generation():
+    from backend.app.services.wechat_mp_content_analysis_service import analyze_content
+    from backend.app.services.wechat_mp_visual_plan_service import build_visual_plan, validate_visual_plan
+
+    body = """| 对比项 | 确认范围 | 质量控制 |
+|---|---|---|
+| 关注点 | 客户接受 | 准确性和质量 |
+| 执行方 | 外部干系人 | 内部质量部门 |
+| 时机 | 阶段末 | 不一定在阶段末 |
+| 关系 | — | 质量控制在确认范围前进行 |"""
+    candidate = analyze_content(body).candidates[0]
+
+    plan = build_visual_plan(candidate)
+    report = validate_visual_plan(candidate, plan)
+
+    assert plan["kind"] == "comparison"
+    assert plan["columns"] == ["确认范围", "质量控制"]
+    assert plan["relations"] == [{"from": "质量控制", "to": "确认范围", "label": "先质检，再验收"}]
+    assert report["valid"] is True
+    assert report["source_coverage"] is True
+    assert report["single_character"] is True
+
+
+def test_prompt_ignore_signature_matches_same_knowledge_structure_not_generic_topic():
+    from backend.app.services.wechat_mp_prompt_ignore_service import build_concept_signature, concept_similarity
+
+    ignored = build_concept_signature("规划→收集→定义→WBS→确认→控制", "flow")
+    duplicate = build_concept_signature(
+        "范围管理六过程 | 规划 | 收集 | 定义 | WBS | 确认 | 控制",
+        "table",
+    )
+    unrelated = build_concept_signature("规划范围时需要识别风险并制定沟通计划", "semantic")
+
+    assert concept_similarity(ignored, duplicate) >= 0.78
+    assert concept_similarity(ignored, unrelated) < 0.78
+
+
+def test_prompt_ignore_rule_is_user_scoped_and_keeps_generated_asset(db_session, test_user):
+    from backend.app.models import User, WechatMpArticle, WechatMpArticleSection, WechatMpAsset, WechatMpImagePrompt
+    from backend.app.services.wechat_mp_content_analysis_service import analyze_content
+    from backend.app.services.wechat_mp_prompt_ignore_service import (
+        filter_ignored_candidates,
+        ignore_prompt,
+        restore_prompt,
+    )
+
+    other_user = User(username="other-wechat-user", password_hash="unused")
+    article = WechatMpArticle(
+        user_id=test_user.id,
+        title="范围管理",
+        markdown_body="规划→收集→定义→WBS→确认→控制",
+        html_body='<p>正文</p>{{image:prompt-1}}<img src="/api/files/media/history.png" alt="配图" />',
+        status="prompts_ready",
+    )
+    db_session.add_all([other_user, article])
+    db_session.flush()
+    section = WechatMpArticleSection(
+        user_id=test_user.id,
+        article_id=article.id,
+        section_index=0,
+        summary="范围管理六过程",
+        source_excerpt="规划→收集→定义→WBS→确认→控制",
+    )
+    db_session.add(section)
+    db_session.flush()
+    prompt = WechatMpImagePrompt(
+        user_id=test_user.id,
+        article_id=article.id,
+        section_id=section.id,
+        prompt="主角：@小猫生图\n具体画面：规划→收集→定义→WBS→确认→控制",
+        editable_prompt="主角：@小猫生图\n具体画面：规划→收集→定义→WBS→确认→控制",
+        visual_plan={"kind": "flow"},
+        quality_report={"valid": True},
+    )
+    db_session.add(prompt)
+    db_session.flush()
+    article.html_body = article.html_body.replace("prompt-1", f"prompt-{prompt.id}")
+    asset = WechatMpAsset(
+        user_id=test_user.id,
+        article_id=article.id,
+        prompt_id=prompt.id,
+        role="inline_illustration",
+        file_path="/tmp/history.png",
+        public_url="/api/files/media/history.png",
+        prompt=prompt.prompt,
+        skill_name="xiaomao-illustrations",
+        model_name="test-image",
+    )
+    db_session.add(asset)
+    db_session.commit()
+
+    ignored = ignore_prompt(
+        db_session,
+        user_id=test_user.id,
+        article_id=article.id,
+        prompt_id=prompt.id,
+        future_similar=True,
+    )
+    candidate = analyze_content("规划→收集→定义→WBS→确认→控制").candidates
+    owner_kept, owner_matches = filter_ignored_candidates(db_session, user_id=test_user.id, candidates=candidate)
+    other_kept, other_matches = filter_ignored_candidates(db_session, user_id=other_user.id, candidates=candidate)
+
+    assert ignored.status == "ignored"
+    assert f"{{{{image:prompt-{prompt.id}}}}}" not in article.html_body
+    assert "/api/files/media/history.png" not in article.html_body
+    assert db_session.get(WechatMpAsset, asset.id) is not None
+    assert owner_kept == () and owner_matches
+    assert other_kept == candidate and other_matches == {}
+
+    restored = restore_prompt(
+        db_session,
+        user_id=test_user.id,
+        article_id=article.id,
+        prompt_id=prompt.id,
+    )
+    assert restored.status == "prompt_ready"
+    assert f"{{{{image:prompt-{prompt.id}}}}}" in article.html_body

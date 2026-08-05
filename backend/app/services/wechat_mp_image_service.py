@@ -282,6 +282,8 @@ def generate_asset_for_prompt(
         raise WechatMpImageValidationError("Image generation is disabled when illustration skill is none")
     if prompt.status not in {"prompt_ready", "failed"}:
         raise ValueError("WeChat MP prompt is not ready for image generation")
+    if prompt.quality_report and not prompt.quality_report.get("valid", False):
+        raise WechatMpImageValidationError("Visual plan validation failed; fix the structure before image generation")
 
     from backend.app.services.wechat_mp_model_service import resolve_wechat_mp_model
     from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
