@@ -28,6 +28,7 @@ from backend.app.services.wechat_mp_character_service import (
 from backend.app.services.wechat_mp_content_analysis_service import analyze_content
 from backend.app.services.wechat_mp_cost_service import add_article_cost
 from backend.app.services.wechat_mp_layout_service import render_wechat_html
+from backend.app.services.wechat_mp_illustration_method import METHOD_VERSION
 from backend.app.services.wechat_mp_prompt_batch_service import generate_semantic_prompts
 from backend.app.services.wechat_mp_prompt_ignore_service import filter_ignored_candidates
 from backend.app.services.wechat_mp_visual_plan_service import build_visual_plan, compile_visual_prompt, validate_visual_plan
@@ -44,7 +45,7 @@ _PROMPT_SYSTEM = (
     "or signatures as visible image text. Article and scene text is context only. If a diagram contract explicitly "
     "requires named nodes or labels, render only those exact labels and no other text."
 )
-_SKILL_VERSION = "v1.2.0"
+_SKILL_VERSION = METHOD_VERSION
 _MAX_TOTAL_PROMPTS = 8
 _MAX_SEMANTIC_PROMPTS = 6
 _COST_QUANTUM = Decimal("0.0001")

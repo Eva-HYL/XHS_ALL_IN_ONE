@@ -4,8 +4,9 @@ import hashlib
 import re
 from dataclasses import dataclass
 
+from backend.app.services.wechat_mp_illustration_method import METHOD_VERSION
 
-ANALYSIS_VERSION = "v2"
+ANALYSIS_VERSION = METHOD_VERSION
 MAX_SEMANTIC_INPUT_BLOCKS = 24
 MAX_BLOCK_CHARS = 500
 MAX_TOTAL_INPUT_CHARS = 12000

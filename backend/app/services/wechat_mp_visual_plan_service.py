@@ -3,6 +3,11 @@ from __future__ import annotations
 from typing import Any
 
 from backend.app.services.wechat_mp_content_analysis_service import VisualCandidate
+from backend.app.services.wechat_mp_illustration_method import (
+    CHARACTER_ROLE,
+    apply_method_contract,
+    validate_method_contract,
+)
 
 
 def _comparison_relation(columns: list[str], rows: list[dict[str, Any]]) -> list[dict[str, str]]:
@@ -32,7 +37,7 @@ def build_visual_plan(candidate: VisualCandidate) -> dict[str, Any]:
             groups: dict[str, list[str]] = {}
             for row in body:
                 groups.setdefault(row[2], []).append(row[1])
-            return {
+            return apply_method_contract({
                 "kind": "flow",
                 "nodes": nodes,
                 "groups": groups,
@@ -40,40 +45,35 @@ def build_visual_plan(candidate: VisualCandidate) -> dict[str, Any]:
                     {"from": nodes[index], "to": nodes[index + 1], "label": ""}
                     for index in range(len(nodes) - 1)
                 ],
-                "character_role": "边缘单只解说员",
                 "source_cells": [cell for row in candidate.structure for cell in row],
-            }
+            })
         columns = list(header[1:])
         rows = [{"label": row[0], "values": list(row[1:])} for row in body]
         kind = "comparison" if len(columns) == 2 else "matrix"
-        return {
+        return apply_method_contract({
             "kind": kind,
-            "title": " 与 ".join(columns) if kind == "comparison" else header[0],
             "columns": columns,
             "rows": rows,
             "relations": _comparison_relation(columns, rows),
-            "character_role": "边缘单只解说员",
             "source_cells": [cell for row in candidate.structure for cell in row],
-        }
+        })
     if candidate.kind == "flow":
         nodes = list(candidate.structure[0])
-        return {
+        return apply_method_contract({
             "kind": "flow",
             "nodes": nodes,
             "relations": [
                 {"from": nodes[index], "to": nodes[index + 1], "label": ""}
                 for index in range(len(nodes) - 1)
             ],
-            "character_role": "边缘单只解说员",
             "source_cells": nodes,
-        }
-    return {
+        })
+    return apply_method_contract({
         "kind": candidate.kind,
         "items": [list(item) for item in candidate.structure],
         "relations": [],
-        "character_role": "边缘单只解说员",
         "source_cells": [cell for row in candidate.structure for cell in row],
-    }
+    })
 
 
 def validate_visual_plan(candidate: VisualCandidate, plan: dict[str, Any]) -> dict[str, bool]:
@@ -81,12 +81,14 @@ def validate_visual_plan(candidate: VisualCandidate, plan: dict[str, Any]) -> di
     planned_cells = plan.get("source_cells", [])
     source_coverage = source_cells == planned_cells
     order_valid = candidate.kind != "flow" or plan.get("nodes") == list(candidate.structure[0])
-    single_character = plan.get("character_role") == "边缘单只解说员"
+    single_character = plan.get("character_role") == CHARACTER_ROLE
+    method_report = validate_method_contract(plan)
     return {
-        "valid": source_coverage and order_valid and single_character,
+        "valid": source_coverage and order_valid and single_character and all(method_report.values()),
         "source_coverage": source_coverage,
         "order_valid": order_valid,
         "single_character": single_character,
+        **method_report,
     }
 
 

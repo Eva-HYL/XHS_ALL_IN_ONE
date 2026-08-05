@@ -4767,6 +4767,9 @@ def test_semantic_batch_sends_only_character_reference_not_character_contract(mo
     assert payload["character"] == "@小猫生图"
     assert "胖胖慵懒" not in captured["user_payload"]
     assert "只描述具体画面" in batch_service._SYSTEM_PROMPT
+    assert "主角只是单只边缘解说员" in batch_service._SYSTEM_PROMPT
+    assert "不得复述 Markdown" in batch_service._SYSTEM_PROMPT
+    assert "没有有效视觉信息" in batch_service._SYSTEM_PROMPT
 
 
 def test_semantic_batch_strict_json_ignores_invalid_duplicate_unknown_and_overflow_ids(monkeypatch):
@@ -6869,9 +6872,15 @@ def test_visual_plan_extracts_comparison_relation_before_image_generation():
     assert plan["kind"] == "comparison"
     assert plan["columns"] == ["确认范围", "质量控制"]
     assert plan["relations"] == [{"from": "质量控制", "to": "确认范围", "label": "先质检，再验收"}]
+    assert plan["method_version"] == "v1.3.0"
+    assert plan["layout_style"] == "article_knowledge_cards_v1"
+    assert plan["template_copy"] == []
+    assert "title" not in plan
     assert report["valid"] is True
     assert report["source_coverage"] is True
     assert report["single_character"] is True
+    assert report["article_only_copy"] is True
+    assert report["layout_valid"] is True
 
 
 def test_visual_plan_treats_numbered_process_table_as_grouped_flow():
@@ -6923,6 +6932,7 @@ def test_structural_visual_plan_renders_exact_png_without_image_model(tmp_path, 
 
     assert result["model_name"] == "deterministic-layout-v1"
     assert result["provider_response"]["renderer"] == "pillow"
+    assert result["provider_response"]["method_version"] == "v1.3.0"
     assert result["provider_response"]["layout_style"] == "article_knowledge_cards_v1"
     assert result["provider_response"]["template_copy"] == []
     assert result["provider_response"]["rendered_labels"] == [
@@ -7062,8 +7072,8 @@ def test_generate_structural_wechat_image_bypasses_provider_and_usage(
 def test_visual_plan_compiler_version_invalidates_legacy_prompt_fingerprints():
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
 
-    assert prompt_service._SKILL_VERSION == "v1.2.0"
-    assert prompt_service._fingerprint_skill_version("xiaomao-illustrations") == "xiaomao-illustrations:v1.2.0"
+    assert prompt_service._SKILL_VERSION == "v1.3.0"
+    assert prompt_service._fingerprint_skill_version("xiaomao-illustrations") == "xiaomao-illustrations:v1.3.0"
 
 
 def test_regenerate_structural_prompt_persists_visual_plan(db_session, test_user):

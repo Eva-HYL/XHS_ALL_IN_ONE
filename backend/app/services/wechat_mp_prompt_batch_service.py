@@ -8,6 +8,7 @@ import requests
 from sqlalchemy.orm import Session
 
 from backend.app.services.model_selector_service import ModelSelectionError, is_quota_error
+from backend.app.services.wechat_mp_illustration_method import SEMANTIC_PROMPT_CONTRACT
 from backend.app.services.wechat_mp_model_service import WechatMpModelContext, resolve_wechat_mp_shotlist_model
 
 if TYPE_CHECKING:
@@ -21,8 +22,9 @@ _SYSTEM_PROMPT = (
     "Return strict JSON only. The complete response must be {\"items\":[...]}. "
     "Each item must contain exactly an input candidate id and one concise Chinese image prompt: "
     "{\"id\":\"...\",\"prompt\":\"...\"}. Each prompt must only describe the concrete scene: "
-    "只描述具体画面的动作、结构、关系和必要标签，不要重复角色外观、性格、画风、尺寸或禁用词。"
-    " Do not use Markdown fences or add commentary."
+    "只描述具体画面的动作、结构、关系和必要标签。"
+    + SEMANTIC_PROMPT_CONTRACT
+    + " Do not use Markdown fences or add commentary."
 )
 
 

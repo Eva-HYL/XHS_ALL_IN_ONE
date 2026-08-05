@@ -9,6 +9,7 @@ from uuid import uuid4
 from PIL import Image, ImageDraw, ImageFont
 
 from backend.app.core.config import get_settings
+from backend.app.services.wechat_mp_illustration_method import LAYOUT_STYLE, METHOD_VERSION
 
 
 WIDTH = 1600
@@ -342,7 +343,8 @@ def render_structured_image(
         "model_name": "deterministic-layout-v1",
         "provider_response": {
             "renderer": "pillow",
-            "layout_style": "article_knowledge_cards_v1",
+            "method_version": METHOD_VERSION,
+            "layout_style": LAYOUT_STYLE,
             "template_copy": [],
             "render_kind": kind,
             "rendered_labels": rendered_labels,
