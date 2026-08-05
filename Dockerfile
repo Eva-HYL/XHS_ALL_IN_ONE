@@ -44,15 +44,15 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Python dependencies
+COPY requirements.txt ./
+RUN pip install --no-cache-dir --default-timeout=120 --retries 10 -r requirements.txt
+
 # Pillow needs an explicit CJK font for deterministic WeChat information graphics.
 RUN mkdir -p /usr/share/fonts/opentype/noto \
     && curl -fL --retry 5 --retry-delay 2 \
       https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf \
       -o /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc
-
-# Install Python dependencies
-COPY requirements.txt ./
-RUN pip install --no-cache-dir --default-timeout=120 --retries 10 -r requirements.txt
 
 # Copy project source
 COPY . .
