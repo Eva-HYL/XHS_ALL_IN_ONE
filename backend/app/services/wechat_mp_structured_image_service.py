@@ -126,22 +126,86 @@ def _paste_character(canvas: Image.Image, reference_images: list[str] | None) ->
     return True
 
 
-def _draw_header(draw: ImageDraw.ImageDraw, title: str, subtitle: str) -> None:
-    draw.text((62, 42), title, font=_font(40, bold=True), fill="#16212b")
-    draw.text((64, 96), subtitle, font=_font(20), fill="#64707c")
-    draw.line((62, 132, WIDTH - 62, 132), fill="#d9e0e4", width=2)
+def _left_lines(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    text: str,
+    font: ImageFont.ImageFont,
+    *,
+    fill: str = "#263746",
+    max_lines: int = 3,
+) -> None:
+    left, top, right, _ = box
+    line_height = int(getattr(font, "size", 22) * 1.35)
+    for index, line in enumerate(_wrap(draw, text, font, right - left, max_lines=max_lines)):
+        draw.text((left, top + index * line_height), line, font=font, fill=fill)
+
+
+def _draw_knowledge_icon(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], label: str) -> None:
+    left, top, right, bottom = box
+    color = "#52606d"
+    width = 3
+    center_x = (left + right) // 2
+    center_y = (top + bottom) // 2
+    if any(word in label for word in ("执行", "人员", "干系人")):
+        draw.ellipse((center_x - 9, top + 4, center_x + 9, top + 22), outline=color, width=width)
+        draw.ellipse((left + 4, top + 12, left + 20, top + 28), outline=color, width=width)
+        draw.ellipse((right - 20, top + 12, right - 4, top + 28), outline=color, width=width)
+        draw.arc((left + 10, top + 20, right - 10, bottom - 2), 180, 360, fill=color, width=width)
+        return
+    if any(word in label for word in ("时机", "时间", "阶段")):
+        draw.rounded_rectangle((left + 4, top + 8, right - 4, bottom - 3), radius=5, outline=color, width=width)
+        draw.line((left + 4, top + 20, right - 4, top + 20), fill=color, width=width)
+        draw.line((left + 14, top + 2, left + 14, top + 13), fill=color, width=width)
+        draw.line((right - 14, top + 2, right - 14, top + 13), fill=color, width=width)
+        return
+    if any(word in label for word in ("关系", "流程", "过程", "顺序")):
+        draw.line((left + 3, center_y, right - 7, center_y), fill=color, width=width)
+        draw.polygon(((right - 2, center_y), (right - 14, center_y - 9), (right - 14, center_y + 9)), fill=color)
+        return
+    if any(word in label for word in ("范围", "WBS", "结构", "基准")):
+        draw.polygon(
+            ((center_x, top + 3), (right - 4, top + 14), (center_x, top + 25), (left + 4, top + 14)),
+            outline=color,
+        )
+        draw.line((left + 4, top + 14, left + 4, bottom - 9, center_x, bottom - 2, center_x, top + 25), fill=color, width=width)
+        draw.line((right - 4, top + 14, right - 4, bottom - 9, center_x, bottom - 2), fill=color, width=width)
+        return
+    draw.rounded_rectangle((left + 8, top + 3, right - 8, bottom - 2), radius=4, outline=color, width=width)
+    draw.line((left + 15, top + 15, right - 15, top + 15), fill=color, width=2)
+    draw.line((left + 15, top + 25, right - 15, top + 25), fill=color, width=2)
+
+
+def _draw_knowledge_cell(
+    draw: ImageDraw.ImageDraw,
+    box: tuple[int, int, int, int],
+    *,
+    label: str,
+    value: str,
+) -> None:
+    left, top, right, bottom = box
+    icon_box = (left + 18, top + 24, left + 66, top + 72)
+    _draw_knowledge_icon(draw, icon_box, label)
+    text_left = left + 82
+    draw.text((text_left, top + 18), f"{label}：", font=_font(20, bold=True), fill="#1f2933")
+    _left_lines(
+        draw,
+        (text_left, top + 52, right - 20, bottom - 12),
+        value,
+        _font(20),
+        max_lines=max(2, int((bottom - top - 58) / 27)),
+    )
 
 
 def _render_flow(draw: ImageDraw.ImageDraw, plan: dict[str, Any]) -> list[str]:
     nodes = [str(item) for item in plan.get("nodes", [])]
     groups = plan.get("groups", {}) or {}
-    _draw_header(draw, "流程关系", "按原文顺序逐项推进，节点不合并、不省略")
     left, right = 66, WIDTH - 66
     gap = 24
     node_width = max(145, min(220, int((right - left - gap * max(len(nodes) - 1, 0)) / max(len(nodes), 1))))
     total_width = node_width * len(nodes) + gap * max(len(nodes) - 1, 0)
     start_x = left + max(0, (right - left - total_width) // 2)
-    node_top, node_bottom = 330, 500
+    node_top, node_bottom = 350, 520
     title_font = _font(26, bold=True)
     positions: dict[str, tuple[int, int, int, int]] = {}
     for index, node in enumerate(nodes):
@@ -177,67 +241,60 @@ def _render_flow(draw: ImageDraw.ImageDraw, plan: dict[str, Any]) -> list[str]:
 def _render_table(draw: ImageDraw.ImageDraw, plan: dict[str, Any]) -> list[str]:
     columns = [str(item) for item in plan.get("columns", [])]
     rows = list(plan.get("rows", []))
-    title = "对比关系" if plan.get("kind") == "comparison" else "结构矩阵"
-    _draw_header(draw, title, "同一行横向对照，内容按原始列归属精确呈现")
-    table_left, table_right = 62, WIDTH - 280
-    table_top, table_bottom = 165, HEIGHT - 58
-    label_width = 180
-    column_width = int((table_right - table_left - label_width) / max(len(columns), 1))
-    row_height = int((table_bottom - table_top) / max(len(rows) + 1, 1))
-    header_font = _font(27, bold=True)
-    label_font = _font(23, bold=True)
-    value_font = _font(21)
-    draw.rounded_rectangle((table_left, table_top, table_right, table_bottom), radius=18, fill="#ffffff", outline="#263746", width=3)
-    draw.rectangle((table_left, table_top, table_right, table_top + row_height), fill="#e8f4f1")
-    draw.line((table_left + label_width, table_top, table_left + label_width, table_bottom), fill="#aebbc4", width=2)
+    if not columns:
+        return []
+    table_left, table_right = 72, WIDTH - 280
+    header_height = 86
+    row_height = min(160, max(112, int(650 / max(len(rows), 1))))
+    total_height = header_height + row_height * len(rows)
+    table_top = max(42, int((HEIGHT - total_height) / 2))
+    table_bottom = table_top + total_height
+    column_width = int((table_right - table_left) / len(columns))
+    header_font = _font(30, bold=True)
+    line_color = "#9ba8b2"
+    draw.rounded_rectangle(
+        (table_left, table_top, table_right, table_bottom),
+        radius=18,
+        fill="#fffefa",
+        outline="#7f8c96",
+        width=2,
+    )
     for index, column in enumerate(columns):
-        x0 = table_left + label_width + index * column_width
+        x0 = table_left + index * column_width
         if index:
-            draw.line((x0, table_top, x0, table_bottom), fill="#aebbc4", width=2)
-        _centered_lines(draw, (x0, table_top, x0 + column_width, table_top + row_height), column, header_font, max_lines=2)
-    labels: list[str] = []
-    for row_index, row in enumerate(rows):
-        y0 = table_top + (row_index + 1) * row_height
-        draw.line((table_left, y0, table_right, y0), fill="#aebbc4", width=2)
-        label = str(row.get("label", ""))
-        labels.append(label)
-        _centered_lines(draw, (table_left, y0, table_left + label_width, y0 + row_height), label, label_font, max_lines=2)
-        values = list(row.get("values", []))
-        for column_index in range(len(columns)):
-            x0 = table_left + label_width + column_index * column_width
-            value = str(values[column_index]) if column_index < len(values) else "—"
-            _centered_lines(draw, (x0 + 8, y0 + 4, x0 + column_width - 8, y0 + row_height - 4), value, value_font, max_lines=4)
-    relations = plan.get("relations", [])
-    if relations:
-        relation = relations[0]
-        relation_direction = f"{relation.get('from', '')} → {relation.get('to', '')}".strip()
-        relation_label = str(relation.get("label", "")).strip()
-        draw.rounded_rectangle((WIDTH - 255, 180, WIDTH - 36, 270), radius=18, fill="#fff1e6")
+            draw.line((x0, table_top + 12, x0, table_bottom - 12), fill=line_color, width=2)
         _centered_lines(
             draw,
-            (WIDTH - 247, 188, WIDTH - 44, 226),
-            relation_direction,
-            _font(17, bold=True),
-            fill="#a94d13",
-            max_lines=1,
+            (x0, table_top, x0 + column_width, table_top + header_height),
+            column,
+            header_font,
+            max_lines=2,
         )
-        if relation_label:
-            _centered_lines(
+    draw.line((table_left + 18, table_top + header_height, table_right - 18, table_top + header_height), fill="#697782", width=3)
+    labels: list[str] = []
+    for row_index, row in enumerate(rows):
+        y0 = table_top + header_height + row_index * row_height
+        if row_index:
+            draw.line((table_left + 18, y0, table_right - 18, y0), fill=line_color, width=2)
+        label = str(row.get("label", ""))
+        labels.append(label)
+        values = list(row.get("values", []))
+        for column_index in range(len(columns)):
+            x0 = table_left + column_index * column_width
+            value = str(values[column_index]) if column_index < len(values) else "—"
+            _draw_knowledge_cell(
                 draw,
-                (WIDTH - 247, 226, WIDTH - 44, 264),
-                relation_label,
-                _font(18, bold=True),
-                fill="#a94d13",
-                max_lines=1,
+                (x0 + 4, y0 + 3, x0 + column_width - 4, y0 + row_height - 3),
+                label=label,
+                value=value,
             )
     return columns + labels
 
 
 def _render_classification(draw: ImageDraw.ImageDraw, plan: dict[str, Any]) -> list[str]:
     items = [list(item) for item in plan.get("items", [])]
-    _draw_header(draw, "分类结构", "类别与内容保持一一对应")
     labels: list[str] = []
-    top = 170
+    top = max(70, int((HEIGHT - min(650, len(items) * 132)) / 2))
     row_height = min(120, int(620 / max(len(items), 1)))
     for index, item in enumerate(items):
         label = str(item[0]) if item else ""
@@ -285,6 +342,8 @@ def render_structured_image(
         "model_name": "deterministic-layout-v1",
         "provider_response": {
             "renderer": "pillow",
+            "layout_style": "article_knowledge_cards_v1",
+            "template_copy": [],
             "render_kind": kind,
             "rendered_labels": rendered_labels,
             "rendered_cells": rendered_cells,

@@ -6923,6 +6923,8 @@ def test_structural_visual_plan_renders_exact_png_without_image_model(tmp_path, 
 
     assert result["model_name"] == "deterministic-layout-v1"
     assert result["provider_response"]["renderer"] == "pillow"
+    assert result["provider_response"]["layout_style"] == "article_knowledge_cards_v1"
+    assert result["provider_response"]["template_copy"] == []
     assert result["provider_response"]["rendered_labels"] == [
         "规划范围管理", "收集需求", "定义范围", "创建WBS", "确认范围", "控制范围",
     ]
@@ -6932,6 +6934,42 @@ def test_structural_visual_plan_renders_exact_png_without_image_model(tmp_path, 
     with Image.open(result["file_path"]) as image:
         assert image.size == (1600, 900)
         assert image.format == "PNG"
+
+
+def test_structured_comparison_renderer_uses_only_article_copy(tmp_path):
+    from backend.app.services import wechat_mp_structured_image_service as renderer
+
+    plan = {
+        "kind": "comparison",
+        "columns": ["确认范围", "质量控制"],
+        "rows": [
+            {
+                "label": "关注点",
+                "values": ["可交付成果获得客户/发起人接受", "可交付成果的准确性和质量要求"],
+            },
+            {
+                "label": "执行方",
+                "values": ["外部干系人检查验收", "内部质量部门实施"],
+            },
+        ],
+        "source_cells": [
+            "对比项", "确认范围", "质量控制", "关注点",
+            "可交付成果获得客户/发起人接受", "可交付成果的准确性和质量要求",
+        ],
+        "relations": [{"from": "质量控制", "to": "确认范围", "label": "先质检，再验收"}],
+    }
+
+    result = renderer.render_structured_image(
+        plan=plan,
+        user_id=7,
+        reference_images=None,
+        output_dir=tmp_path,
+    )
+
+    response = result["provider_response"]
+    assert response["rendered_labels"] == ["确认范围", "质量控制", "关注点", "执行方"]
+    assert response["rendered_cells"] == plan["source_cells"]
+    assert response["template_copy"] == []
 
 
 def test_generate_structural_wechat_image_bypasses_provider_and_usage(
