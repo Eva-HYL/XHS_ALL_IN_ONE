@@ -54,6 +54,15 @@ def _ordered_scene_contract(scene_prompt: str) -> str:
     return ""
 
 
+def _single_character_reference_contract(reference_images: list[str] | None) -> str:
+    if not reference_images:
+        return ""
+    return (
+        "\n参考图解释硬约束：四张参考图属于同一只角色的不同视角，只用于锁定同一角色的轮廓、"
+        "花色和配色，不代表四只角色。成图只能出现 1 只主角，不得复制、分身或在每个节点重复放置主角。"
+    )
+
+
 def _media_dir() -> Path:
     return Path(get_settings().storage_dir) / "media"
 
@@ -276,7 +285,10 @@ def generate_asset_for_prompt(
         effective_prompt = f"{character.prompt}\n{scene_prompt if scene_prompt.startswith('具体画面：') else f'具体画面：{scene_prompt}'}"
     else:
         effective_prompt = scene_prompt
-    effective_prompt = f"{effective_prompt}{_ordered_scene_contract(scene_prompt)}"
+    effective_prompt = (
+        f"{effective_prompt}{_ordered_scene_contract(scene_prompt)}"
+        f"{_single_character_reference_contract(reference_images)}"
+    )
     model = resolve_wechat_mp_model(
         db=db, user_id=user_id, model_type="image", requested_model=image_model,
     )
@@ -420,6 +432,7 @@ def generate_cover_asset(
             )
         else:
             prompt_text = scene_prompt
+    prompt_text = f"{prompt_text}{_single_character_reference_contract(reference_images)}"
     result = _call_image_model(
         prompt=prompt_text, model_name=model.model_name, size=normalized_size,
         base_url=model.base_url, api_key=model.api_key, reference_images=reference_images,

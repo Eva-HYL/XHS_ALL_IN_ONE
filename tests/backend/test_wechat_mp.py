@@ -6319,6 +6319,9 @@ def test_cover_uses_character_anchor_and_expands_mentions_at_image_boundary(
     assert "主角：@小猫生图" not in captured["prompt"]
     assert "主角必须是一只胖胖慵懒" in captured["prompt"]
     assert "具体画面：" in captured["prompt"]
+    assert "四张参考图属于同一只角色的不同视角" in captured["prompt"]
+    assert "成图只能出现 1 只主角" in captured["prompt"]
+    assert "不得复制、分身或在每个节点重复放置主角" in captured["prompt"]
     assert "固定顺序：1 -> 2 -> 3 -> 4" in captured["prompt"]
     assert "不得交换、合并、省略或新增节点" in captured["prompt"]
     assert len(captured["reference_images"]) == 4
@@ -6346,6 +6349,8 @@ def test_cover_uses_character_anchor_and_expands_mentions_at_image_boundary(
     assert "角色只占画面 20-30%" in captured["prompt"]
     assert "不得只画角色" in captured["prompt"]
     assert "严格继承参考图中的轮廓、黑白橙配色及橙斑位置" in captured["prompt"]
+    assert "四张参考图属于同一只角色的不同视角" in captured["prompt"]
+    assert "成图只能出现 1 只主角" in captured["prompt"]
     assert captured["prompt"].index("封面主题：") < captured["prompt"].index("主角必须是一只胖胖慵懒")
     assert len(captured["reference_images"]) == 4
     session = session_factory()
