@@ -20,7 +20,9 @@ from backend.app.services.wechat_mp_layout_service import render_wechat_html
 
 
 _WRITER_PROMPT = """你是微信公众号文章编辑。根据输入写一篇中文文章，并只返回 JSON。
-JSON 必须包含 title、markdown_body、digest、cover_brief。正文使用 Markdown。"""
+JSON 必须包含 title、markdown_body、digest、cover_brief。正文使用 Markdown。
+cover_brief 必须描述可直接绘制的封面场景，明确主题物、结构关系和主角动作，不能只复述文章标题。
+封面应让主题结构是主体，角色只作辅助；不要输出画幅、尺寸、水印、签名或让模型渲染标题的指令。"""
 
 
 def _selected_material_ids(material_ids: list[int]) -> list[int]:

@@ -335,6 +335,7 @@ def generate_cover_asset(
     normalized_size = normalize_illustration_size(model.model_name, size)
     from backend.app.services.wechat_mp_character_service import (
         NONE_SKILL_NAME,
+        XIAOMAO_SKILL_NAME,
         canonicalize_character_prompt,
         resolve_character_by_skill,
         resolve_confirmed_character_anchor,
@@ -370,7 +371,21 @@ def generate_cover_asset(
         reference_images = anchor[1] if anchor is not None else None
         if character is not None:
             scene_prompt = scene_prompt.strip()
-            prompt_text = f"{character.prompt}\n{scene_prompt if scene_prompt.startswith('具体画面：') else f'具体画面：{scene_prompt}'}"
+            scene_contract = scene_prompt if scene_prompt.startswith("具体画面：") else f"具体画面：{scene_prompt}"
+            color_contract = (
+                "严格继承参考图中的轮廓、黑白橙配色及橙斑位置，不得改成纯黑白或重新设计花色。"
+                if character.skill_name == XIAOMAO_SKILL_NAME
+                else "严格继承参考图中的轮廓、配色和特征位置，不得重新设计角色外观。"
+            )
+            prompt_text = (
+                "微信公众号封面任务。\n"
+                f"封面主题：{article.title}\n"
+                f"{scene_contract}\n"
+                "构图硬约束：把封面主题转译成清晰的可视化主体、结构或关系，主题结构占画面 70-80%；"
+                "角色只占画面 20-30% 并参与解释主题，不得只画角色，不得把标题文字直接画进图片。\n"
+                f"角色一致性：{color_contract}\n"
+                f"角色设定：{character.prompt}"
+            )
         else:
             prompt_text = scene_prompt
     result = _call_image_model(

@@ -2038,6 +2038,14 @@ def test_create_wechat_mp_article_generates_markdown_html_and_usage(api_client, 
         session.close()
 
 
+def test_writer_requests_a_visual_cover_scene_instead_of_a_title_repetition():
+    from backend.app.services.wechat_mp_writer_service import _WRITER_PROMPT
+
+    assert "cover_brief 必须描述可直接绘制的封面场景" in _WRITER_PROMPT
+    assert "不能只复述文章标题" in _WRITER_PROMPT
+    assert "主题结构是主体，角色只作辅助" in _WRITER_PROMPT
+
+
 def test_create_wechat_mp_article_can_use_material_library_items(api_client, auth_headers, monkeypatch):
     from backend.app.models import WechatMpArticleMaterial
     from backend.app.services import wechat_mp_writer_service as writer
@@ -6254,7 +6262,8 @@ def test_cover_uses_character_anchor_and_expands_mentions_at_image_boundary(
                 status="confirmed",
             ))
         article = session.get(WechatMpArticle, created_wechat_prompt.article_id)
-        article.cover_brief = "主角：@小猫生图\n具体画面：小猫压住一张计划表"
+        article.title = "软考高项·第9章 项目范围管理"
+        article.cover_brief = "主角：@小猫生图\n具体画面：项目范围管理核心考点速记指南"
         prompt = session.get(WechatMpImagePrompt, created_wechat_prompt.id)
         prompt.prompt = "主角：@小猫生图\n具体画面：小猫整理便签"
         prompt.editable_prompt = prompt.prompt
@@ -6303,13 +6312,18 @@ def test_cover_uses_character_anchor_and_expands_mentions_at_image_boundary(
     assert cover.status_code == 201
     assert "主角：@小猫生图" not in captured["prompt"]
     assert "主角必须是一只胖胖慵懒" in captured["prompt"]
-    assert "具体画面：" in captured["prompt"]
+    assert "封面主题：软考高项·第9章 项目范围管理" in captured["prompt"]
+    assert "主题结构占画面 70-80%" in captured["prompt"]
+    assert "角色只占画面 20-30%" in captured["prompt"]
+    assert "不得只画角色" in captured["prompt"]
+    assert "严格继承参考图中的轮廓、黑白橙配色及橙斑位置" in captured["prompt"]
+    assert captured["prompt"].index("封面主题：") < captured["prompt"].index("主角必须是一只胖胖慵懒")
     assert len(captured["reference_images"]) == 4
     session = session_factory()
     try:
         article = session.get(WechatMpArticle, created_wechat_prompt.article_id)
         asset = session.query(WechatMpAsset).filter_by(article_id=article.id, role="cover").one()
-        assert article.cover_brief == "主角：@小猫生图\n具体画面：小猫压住一张计划表"
+        assert article.cover_brief == "主角：@小猫生图\n具体画面：项目范围管理核心考点速记指南"
         assert asset.prompt == captured["prompt"]
     finally:
         session.close()
