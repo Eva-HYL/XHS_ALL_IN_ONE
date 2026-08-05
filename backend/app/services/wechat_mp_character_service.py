@@ -28,7 +28,8 @@ XIAOMAO_PROMPT = (
     "白色背景，横向画幅，轻微抖动的手绘线稿；"
     "主角必须是一只胖胖慵懒、半推半就但会把活干完的玳瑁猫，"
     "身体以黑白色块为主，背、头、尾点缀少量橙斑，半闭眼、冷淡表情；"
-    "小猫自然趴卧并辅助表达画面核心概念，不穿衣、不画成可爱吉祥物；"
+    "小猫只是角落解说员，自然趴卧并用视线或爪子辅助讲解，仅占画面 10-20%，"
+    "不得替代流程、表格、结构或对比关系，不穿衣、不画成可爱吉祥物；"
     "画面留白充足，一图一个核心结构，不使用写实摄影、3D 渲染、复杂背景或大段文字；"
     "不得渲染标题、比例、尺寸、提示词、说明文字、水印、签名或图中文字。"
 )
@@ -143,9 +144,17 @@ def ensure_builtin_character(db: Session, user_id: int) -> WechatMpIllustrationC
         )
         db.add(character)
         db.commit()
-    elif character.name != XIAOMAO_CHARACTER_NAME:
-        character.name = XIAOMAO_CHARACTER_NAME
-        db.commit()
+    else:
+        changed = False
+        if character.name != XIAOMAO_CHARACTER_NAME:
+            character.name = XIAOMAO_CHARACTER_NAME
+            changed = True
+        if character.prompt != XIAOMAO_PROMPT:
+            character.prompt = XIAOMAO_PROMPT
+            character.anchor_version = max(character.anchor_version, 1) + 1
+            changed = True
+        if changed:
+            db.commit()
     return character
 
 

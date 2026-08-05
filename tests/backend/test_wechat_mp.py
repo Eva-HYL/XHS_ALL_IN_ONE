@@ -5797,6 +5797,32 @@ def test_character_prompt_canonicalization_removes_legacy_character_rules_but_ke
     assert "不得渲染" not in result
 
 
+def test_ensure_builtin_character_upgrades_legacy_narrator_contract(db_session, test_user):
+    from backend.app.models import WechatMpIllustrationCharacter
+    from backend.app.services.wechat_mp_character_service import (
+        XIAOMAO_PROMPT,
+        ensure_builtin_character,
+    )
+
+    character = WechatMpIllustrationCharacter(
+        user_id=test_user.id,
+        name="小猫生图",
+        skill_name="xiaomao-illustrations",
+        prompt="小猫必须承担画面的核心概念动作",
+        status="confirmed",
+        anchor_version=4,
+    )
+    db_session.add(character)
+    db_session.commit()
+
+    upgraded = ensure_builtin_character(db_session, test_user.id)
+
+    assert upgraded.prompt == XIAOMAO_PROMPT
+    assert "小猫只是角落解说员" in upgraded.prompt
+    assert "不得替代流程、表格、结构或对比关系" in upgraded.prompt
+    assert upgraded.anchor_version == 5
+
+
 def test_character_mention_rejects_multiple_primary_characters():
     from backend.app.services.wechat_mp_character_service import parse_character_mention
 
@@ -6340,6 +6366,9 @@ def test_cover_uses_character_anchor_and_expands_mentions_at_image_boundary(
     assert "四张参考图属于同一只角色的不同视角" in captured["prompt"]
     assert "成图只能出现 1 只主角" in captured["prompt"]
     assert "不得复制、分身或在每个节点重复放置主角" in captured["prompt"]
+    assert "知识内容和信息结构必须占画面 80-90%" in captured["prompt"]
+    assert "主角只是角落解说员，只占画面 10-20%" in captured["prompt"]
+    assert "不得替代流程节点、表格单元、结构框或对比关系" in captured["prompt"]
     assert "固定顺序：1 -> 2 -> 3 -> 4" in captured["prompt"]
     assert "不得交换、合并、省略或新增节点" in captured["prompt"]
     assert len(captured["reference_images"]) == 4
@@ -6363,8 +6392,8 @@ def test_cover_uses_character_anchor_and_expands_mentions_at_image_boundary(
     assert "主角：@小猫生图" not in captured["prompt"]
     assert "主角必须是一只胖胖慵懒" in captured["prompt"]
     assert "封面主题：软考高项·第9章 项目范围管理" in captured["prompt"]
-    assert "主题结构占画面 70-80%" in captured["prompt"]
-    assert "角色只占画面 20-30%" in captured["prompt"]
+    assert "主题结构占画面 80-90%" in captured["prompt"]
+    assert "角色只占画面 10-20%" in captured["prompt"]
     assert "不得只画角色" in captured["prompt"]
     assert "严格继承参考图中的轮廓、黑白橙配色及橙斑位置" in captured["prompt"]
     assert "四张参考图属于同一只角色的不同视角" in captured["prompt"]
