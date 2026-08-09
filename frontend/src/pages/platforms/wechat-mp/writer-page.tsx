@@ -436,6 +436,20 @@ export function WechatMpWriterPage() {
     }
   }
 
+  function isPromptImageComplete(prompt: WechatMpImagePrompt) {
+    return prompt.status === "generated"
+      || assets.some((asset) => asset.prompt_id === prompt.id && asset.role !== "cover");
+  }
+
+  const eligibleImagePrompts = prompts.filter((prompt) =>
+    prompt.skill_name !== "none"
+    && prompt.status !== "ignored"
+    && prompt.status !== "generated"
+    && !isPromptImageComplete(prompt)
+    && activeImagePromptId !== prompt.id
+    && !imageQueueRef.current.includes(prompt.id)
+  );
+
   async function runImageQueue() {
     if (imageWorkerRunningRef.current) return;
     imageWorkerRunningRef.current = true;
@@ -484,6 +498,15 @@ export function WechatMpWriterPage() {
     imageQueueRef.current = [...imageQueueRef.current, prompt.id];
     setImageQueue([...imageQueueRef.current]);
     setNotice(imageWorkerRunningRef.current ? "已加入图片生成队列。" : "开始按队列生成正文图片。");
+    void runImageQueue();
+  }
+
+  function enqueueAllImages() {
+    const promptIds = eligibleImagePrompts.map((prompt) => prompt.id);
+    if (promptIds.length === 0) return;
+    imageQueueRef.current = [...imageQueueRef.current, ...promptIds];
+    setImageQueue([...imageQueueRef.current]);
+    setNotice(`已将 ${promptIds.length} 张正文配图加入串行生成队列。`);
     void runImageQueue();
   }
 
@@ -628,6 +651,16 @@ export function WechatMpWriterPage() {
           />}
           <Select placeholder="使用后端默认图片模型" allowClear value={imageModel} onChange={setImageModel} options={imageModels.map((model) => ({ value: model.model_name, label: `${model.name}${model.is_default ? "（默认）" : ""}` }))} />
           <Text type="secondary">{estimatedCost}；执行后会写入上方累计实际费用。</Text>
+          <Button
+            type="primary"
+            icon={<PictureOutlined />}
+            disabled={eligibleImagePrompts.length === 0}
+            onClick={enqueueAllImages}
+          >
+            {activeImagePromptId !== null || imageQueue.length > 0
+              ? `正在按队列生成（剩余 ${imageQueue.length}）`
+              : `一键生成全部正文图片（${eligibleImagePrompts.length}）`}
+          </Button>
           <Card size="small" title="公众号封面" extra={<Tag>{coverAsset ? "已生成" : "未生成"}</Tag>}>
             <Row gutter={[16, 12]} align="stretch">
               <Col xs={24} lg={15}>
