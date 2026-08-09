@@ -21,6 +21,7 @@ from backend.app.services.wechat_mp_layout_service import render_wechat_html
 
 _WRITER_PROMPT = """你是微信公众号文章编辑。根据输入写一篇中文文章，并只返回 JSON。
 JSON 必须包含 title、markdown_body、digest、cover_brief。正文使用 Markdown。
+title 必须与输入的 title_hint 完全一致，不得改写。
 cover_brief 必须描述可直接绘制的封面场景，明确主题物、结构关系和主角动作，不能只复述文章标题。
 封面应让主题结构是主体，角色只作辅助；不要输出画幅、尺寸、水印、签名或让模型渲染标题的指令。"""
 
@@ -78,7 +79,7 @@ def _compose_source_material(manual_material: str, selected_materials: list[Wech
 
 
 def _call_writer_model(
-    *, topic: str, source_material: str, target_reader: str, tone: str,
+    *, title_hint: str, topic: str, source_material: str, target_reader: str, tone: str,
     model_name: str, base_url: str = "", api_key: str = "",
 ) -> dict[str, Any]:
     """Call the configured OpenAI-compatible writer endpoint.
@@ -98,6 +99,7 @@ def _call_writer_model(
                 "messages": [
                     {"role": "system", "content": _WRITER_PROMPT},
                     {"role": "user", "content": json.dumps({
+                        "title_hint": title_hint,
                         "topic": topic,
                         "source_material": source_material,
                         "target_reader": target_reader,
@@ -219,6 +221,7 @@ def generate_wechat_article(*, db: Session, user_id: int, request: WechatMpArtic
     model = resolve_wechat_mp_model(db=db, user_id=user_id, model_type="text")
     selected_materials = _load_selected_materials(db, user_id, request.material_ids)
     result = _call_writer_model(
+        title_hint=request.title.strip(),
         topic=request.topic,
         source_material=_compose_source_material(request.source_material, selected_materials),
         target_reader=request.target_reader,
@@ -227,6 +230,7 @@ def generate_wechat_article(*, db: Session, user_id: int, request: WechatMpArtic
         base_url=model.base_url,
         api_key=model.api_key,
     )
+    result["title"] = request.title.strip()
     cover_brief = canonicalize_character_prompt(
         character,
         result["cover_brief"],

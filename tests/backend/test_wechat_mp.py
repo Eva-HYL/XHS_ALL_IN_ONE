@@ -2005,7 +2005,10 @@ def test_create_wechat_mp_article_generates_markdown_html_and_usage(api_client, 
     from backend.app.services import wechat_mp_writer_service as writer
     from backend.app.services.wechat_mp_character_service import XIAOMAO_PROMPT
 
-    def fake_call(*, topic, source_material, target_reader, tone, model_name, **kwargs):
+    captured = {}
+
+    def fake_call(*, title_hint, topic, source_material, target_reader, tone, model_name, **kwargs):
+        captured["title_hint"] = title_hint
         return {
             "title": "会偷懒的人，反而更稳定",
             "markdown_body": "## 开头\n正文第一段\n\n## 方法\n正文第二段",
@@ -2026,7 +2029,8 @@ def test_create_wechat_mp_article_generates_markdown_html_and_usage(api_client, 
 
     assert response.status_code == 201
     data = response.json()
-    assert data["title"] == "会偷懒的人，反而更稳定"
+    assert captured["title_hint"] == "稳定输出"
+    assert data["title"] == "稳定输出"
     assert "<h2>开头</h2>" in data["html_body"]
     assert data["illustration_skill"] == "xiaomao-illustrations"
     assert data["cover_brief"] == "主角：@小猫生图\n具体画面：小猫压住一张计划表"
