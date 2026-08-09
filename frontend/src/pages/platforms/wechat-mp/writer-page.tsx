@@ -33,6 +33,15 @@ import type {
   WechatMpMaterial,
   WechatMpPromptAnalysis,
 } from "../../../types";
+import {
+  appendUniquePromptIds,
+  isQueueLifecycleCurrent,
+  nextQueuedPromptId,
+  removeQueuedPromptId,
+  resetImageQueueForArticle,
+  selectEligibleImagePromptIds,
+} from "./image-queue";
+import type { ImageQueueLifecycle } from "./image-queue";
 import { WechatMpLayout } from "./wechat-mp-layout";
 
 const { Text, Paragraph } = Typography;
@@ -118,6 +127,7 @@ export function WechatMpWriterPage() {
   const [imageQueue, setImageQueue] = useState<number[]>([]);
   const imageQueueRef = useRef<number[]>([]);
   const imageWorkerRunningRef = useRef(false);
+  const imageQueueLifecycleRef = useRef<ImageQueueLifecycle>({ articleId: null, token: 0 });
   const promptSnapshotRef = useRef<WechatMpImagePrompt[]>([]);
   const activePromptArticleIdRef = useRef<number | null>(null);
   const promptGenerationTokenRef = useRef(0);
@@ -127,6 +137,15 @@ export function WechatMpWriterPage() {
   useLayoutEffect(() => {
     activePromptArticleIdRef.current = articleId || null;
     promptGenerationTokenRef.current += 1;
+    const resetQueue = resetImageQueueForArticle(
+      imageQueueRef.current,
+      imageQueueLifecycleRef.current,
+      articleId || null,
+    );
+    imageQueueLifecycleRef.current = resetQueue.lifecycle;
+    imageQueueRef.current = resetQueue.queue;
+    setImageQueue(resetQueue.queue);
+    setActiveImagePromptId(null);
     setPrompts([]);
     setPromptAnalysis(null);
     setPromptBusy(false);
@@ -384,7 +403,7 @@ export function WechatMpWriterPage() {
 
   async function ignorePrompt(prompt: WechatMpImagePrompt, scope: "current" | "future_similar") {
     setError(null);
-    imageQueueRef.current = imageQueueRef.current.filter((id) => id !== prompt.id);
+    imageQueueRef.current = removeQueuedPromptId(imageQueueRef.current, prompt.id);
     setImageQueue([...imageQueueRef.current]);
     try {
       const updated = await ignoreWechatMpPrompt(prompt.article_id, prompt.id, scope);
@@ -436,39 +455,41 @@ export function WechatMpWriterPage() {
     }
   }
 
-  function isPromptImageComplete(prompt: WechatMpImagePrompt) {
-    return prompt.status === "generated"
-      || assets.some((asset) => asset.prompt_id === prompt.id && asset.role !== "cover");
-  }
-
-  const eligibleImagePrompts = prompts.filter((prompt) =>
-    (prompt.status === "prompt_ready" || prompt.status === "failed")
-    && prompt.skill_name !== "none"
-    && !isPromptImageComplete(prompt)
-    && activeImagePromptId !== prompt.id
-    && !imageQueueRef.current.includes(prompt.id)
+  const eligibleImagePromptIds = selectEligibleImagePromptIds(
+    prompts,
+    assets,
+    activeImagePromptId,
+    imageQueueRef.current,
   );
 
   async function runImageQueue() {
     if (imageWorkerRunningRef.current) return;
     imageWorkerRunningRef.current = true;
+    const workerLifecycle = imageQueueLifecycleRef.current;
+    const isCurrentWorker = () => isQueueLifecycleCurrent(workerLifecycle, imageQueueLifecycleRef.current);
     try {
-      while (imageQueueRef.current.length > 0) {
-        const promptId = imageQueueRef.current[0];
+      while (true) {
+        const promptId = nextQueuedPromptId(imageQueueRef.current, workerLifecycle, imageQueueLifecycleRef.current);
+        if (promptId === null) break;
         setActiveImagePromptId(promptId);
         setImageQueue([...imageQueueRef.current]);
         const prompt = promptSnapshotRef.current.find((item) => item.id === promptId);
-        if (!prompt || prompt.skill_name === "none") {
-          imageQueueRef.current = imageQueueRef.current.slice(1);
+        if (!prompt || prompt.article_id !== workerLifecycle.articleId || prompt.skill_name === "none") {
+          imageQueueRef.current = removeQueuedPromptId(imageQueueRef.current, promptId);
+          setImageQueue([...imageQueueRef.current]);
           continue;
         }
         try {
           const savedPrompt = await updateWechatMpPrompt(prompt.article_id, prompt.id, { editable_prompt: prompt.editable_prompt });
+          if (!isCurrentWorker()) return;
           setPrompts((items) => items.map((item) => item.id === savedPrompt.id ? savedPrompt : item));
           const asset = await generateWechatMpImage(prompt.id, { image_model: imageModel, size: "16:9" });
+          if (!isCurrentWorker()) return;
           setAssets((items) => [asset, ...items.filter((item) => item.prompt_id !== prompt.id)]);
           setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, status: "generated" } : item));
-          setArticle(await fetchWechatMpArticle(prompt.article_id));
+          const refreshedArticle = await fetchWechatMpArticle(prompt.article_id);
+          if (!isCurrentWorker()) return;
+          setArticle(refreshedArticle);
           setNotice(
             asset.model_name === "deterministic-layout-v1"
               ? `段落 #${prompt.section_id} 结构图已按原文精确渲染，未调用生图模型。`
@@ -477,37 +498,41 @@ export function WechatMpWriterPage() {
                 : `段落 #${prompt.section_id} 正文配图已生成并计入实际费用。`
           );
         } catch {
-          setError(`段落 #${prompt.section_id} 图片生成失败，请确认图片模型配置。`);
-          setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, status: "failed" } : item));
+          if (isCurrentWorker()) {
+            setError(`段落 #${prompt.section_id} 图片生成失败，请确认图片模型配置。`);
+            setPrompts((items) => items.map((item) => item.id === prompt.id ? { ...item, status: "failed" } : item));
+          }
         } finally {
-          imageQueueRef.current = imageQueueRef.current.slice(1);
-          setImageQueue([...imageQueueRef.current]);
+          imageQueueRef.current = removeQueuedPromptId(imageQueueRef.current, promptId);
+          if (isCurrentWorker()) setImageQueue([...imageQueueRef.current]);
         }
       }
     } finally {
       imageWorkerRunningRef.current = false;
-      setActiveImagePromptId(null);
-      setImageQueue([]);
+      if (isCurrentWorker()) {
+        setActiveImagePromptId(null);
+        setImageQueue([...imageQueueRef.current]);
+      }
+      if (imageQueueRef.current.length > 0) void runImageQueue();
     }
   }
 
   function enqueueImage(prompt: WechatMpImagePrompt) {
     if (prompt.skill_name === "none") return;
     if (activeImagePromptId === prompt.id || imageQueueRef.current.includes(prompt.id)) return;
-    imageQueueRef.current = [...imageQueueRef.current, prompt.id];
+    imageQueueRef.current = appendUniquePromptIds(imageQueueRef.current, [prompt.id]);
     setImageQueue([...imageQueueRef.current]);
     setNotice(imageWorkerRunningRef.current ? "已加入图片生成队列。" : "开始按队列生成正文图片。");
     void runImageQueue();
   }
 
   function enqueueAllImages() {
-    const promptIds = eligibleImagePrompts
-      .map((prompt) => prompt.id)
-      .filter((promptId) => !imageQueueRef.current.includes(promptId));
-    if (promptIds.length === 0) return;
-    imageQueueRef.current = [...imageQueueRef.current, ...promptIds];
+    const previousQueueLength = imageQueueRef.current.length;
+    imageQueueRef.current = appendUniquePromptIds(imageQueueRef.current, eligibleImagePromptIds);
+    const addedCount = imageQueueRef.current.length - previousQueueLength;
+    if (addedCount === 0) return;
     setImageQueue([...imageQueueRef.current]);
-    setNotice(`已将 ${promptIds.length} 张正文配图加入串行生成队列。`);
+    setNotice(`已将 ${addedCount} 张正文配图加入串行生成队列。`);
     void runImageQueue();
   }
 
@@ -655,12 +680,12 @@ export function WechatMpWriterPage() {
           <Button
             type="primary"
             icon={<PictureOutlined />}
-            disabled={eligibleImagePrompts.length === 0}
+            disabled={eligibleImagePromptIds.length === 0}
             onClick={enqueueAllImages}
           >
             {activeImagePromptId !== null || imageQueue.length > 0
               ? `正在按队列生成（剩余 ${imageQueue.length}）`
-              : `一键生成全部正文图片（${eligibleImagePrompts.length}）`}
+              : `一键生成全部正文图片（${eligibleImagePromptIds.length}）`}
           </Button>
           <Card size="small" title="公众号封面" extra={<Tag>{coverAsset ? "已生成" : "未生成"}</Tag>}>
             <Row gutter={[16, 12]} align="stretch">

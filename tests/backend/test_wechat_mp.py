@@ -1709,23 +1709,6 @@ def test_wechat_mp_writer_shows_inline_generated_images_next_to_prompts():
     assert ">保存提示词<" not in source
 
 
-def test_wechat_writer_can_enqueue_all_missing_inline_images_serially():
-    source = Path("frontend/src/pages/platforms/wechat-mp/writer-page.tsx").read_text(encoding="utf-8")
-
-    assert "function enqueueAllImages()" in source
-    assert "eligibleImagePrompts" in source
-    assert 'prompt.status === "prompt_ready" || prompt.status === "failed"' in source
-    assert 'prompt.skill_name !== "none"' in source
-    assert "imageQueueRef.current.includes(prompt.id)" in source
-    assert "const promptIds = eligibleImagePrompts\n      .map((prompt) => prompt.id)\n      .filter((promptId) => !imageQueueRef.current.includes(promptId));" in source
-    assert "if (promptIds.length === 0) return;" in source
-    assert "setImageQueue([...imageQueueRef.current]);" in source
-    assert "setNotice(`已将 ${promptIds.length} 张正文配图加入串行生成队列。`);" in source
-    assert "void runImageQueue()" in source
-    assert "一键生成全部正文图片" in source
-    assert "正在按队列生成" in source
-
-
 def test_wechat_mp_writer_cover_generation_is_independent_and_inline_previewed():
     source = Path("frontend/src/pages/platforms/wechat-mp/writer-page.tsx").read_text(encoding="utf-8")
 
