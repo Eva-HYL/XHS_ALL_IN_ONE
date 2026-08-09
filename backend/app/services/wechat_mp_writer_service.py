@@ -5,12 +5,13 @@ import os
 from typing import Any
 
 import requests
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
-from backend.app.models import WechatMpArticle, WechatMpArticleMaterial, WechatMpMaterial
+from backend.app.models import WechatMpArticle, WechatMpArticleMaterial, WechatMpAsset, WechatMpMaterial
 from backend.app.schemas.wechat_mp import WechatMpArticleCreateRequest
 from backend.app.services.usage_recording_service import record_text_usage
+from backend.app.services.wechat_mp_cost_service import add_article_cost
 from backend.app.services.wechat_mp_character_service import (
     XIAOMAO_SKILL_NAME,
     canonicalize_character_prompt,
@@ -213,7 +214,9 @@ def prepare_wechat_writing_brief(
     }
 
 
-def generate_wechat_article(*, db: Session, user_id: int, request: WechatMpArticleCreateRequest) -> WechatMpArticle:
+def _prepare_article_generation(
+    *, db: Session, user_id: int, request: WechatMpArticleCreateRequest,
+) -> tuple[dict[str, Any], str, str, list[WechatMpMaterial]]:
     from backend.app.services.wechat_mp_model_service import resolve_wechat_mp_model
 
     illustration_skill = request.illustration_skill or XIAOMAO_SKILL_NAME
@@ -235,6 +238,15 @@ def generate_wechat_article(*, db: Session, user_id: int, request: WechatMpArtic
         character,
         result["cover_brief"],
         include_character=character is not None,
+    )
+    return result, cover_brief, illustration_skill, selected_materials
+
+
+def generate_wechat_article(*, db: Session, user_id: int, request: WechatMpArticleCreateRequest) -> WechatMpArticle:
+    result, cover_brief, illustration_skill, selected_materials = _prepare_article_generation(
+        db=db,
+        user_id=user_id,
+        request=request,
     )
     try:
         article = WechatMpArticle(
@@ -279,3 +291,71 @@ def generate_wechat_article(*, db: Session, user_id: int, request: WechatMpArtic
     except (KeyError, TypeError, ValueError) as exc:
         db.rollback()
         raise ValueError("WeChat MP writer response is invalid") from exc
+
+
+def regenerate_wechat_article(
+    *, db: Session, user_id: int, article: WechatMpArticle, request: WechatMpArticleCreateRequest,
+) -> WechatMpArticle:
+    from backend.app.services.wechat_mp_image_prompt_service import reset_inline_illustrations
+    from backend.app.services.wechat_mp_revision_service import invalidate_synced_drafts
+
+    result, cover_brief, illustration_skill, selected_materials = _prepare_article_generation(
+        db=db,
+        user_id=user_id,
+        request=request,
+    )
+    try:
+        next_html = render_wechat_html(result["markdown_body"], image_placeholders=[])
+        reset_inline_illustrations(
+            db,
+            article,
+            html_body=next_html,
+            preserve_prompt_identity=False,
+        )
+        current_covers = db.scalars(select(WechatMpAsset).where(
+            WechatMpAsset.user_id == user_id,
+            WechatMpAsset.article_id == article.id,
+            WechatMpAsset.role == "cover",
+            WechatMpAsset.status == "generated",
+        )).all()
+        for cover in current_covers:
+            cover.status = "stale"
+
+        db.execute(delete(WechatMpArticleMaterial).where(
+            WechatMpArticleMaterial.user_id == user_id,
+            WechatMpArticleMaterial.article_id == article.id,
+        ))
+        article.title = result["title"]
+        article.markdown_body = result["markdown_body"]
+        article.html_body = next_html
+        article.digest = result["digest"]
+        article.cover_brief = cover_brief
+        article.illustration_skill = illustration_skill
+        for material in selected_materials:
+            db.add(WechatMpArticleMaterial(
+                user_id=user_id,
+                article_id=article.id,
+                material_id=material.id,
+            ))
+
+        invalidate_synced_drafts(db, article, next_status="layout_ready")
+        usage = record_text_usage(
+            db=db,
+            user_id=user_id,
+            pipeline_run_id=None,
+            step="write_article",
+            model=result["model_name"],
+            input_tokens=int(result["input_tokens"]),
+            output_tokens=int(result["output_tokens"]),
+            platform="wechat_mp",
+            resource_type="wechat_mp_article",
+            resource_id=article.id,
+            commit=False,
+        )
+        add_article_cost(article, usage.cost_yuan)
+        db.commit()
+        db.refresh(article)
+        return article
+    except Exception:
+        db.rollback()
+        raise

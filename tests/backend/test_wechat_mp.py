@@ -2202,6 +2202,207 @@ def test_create_wechat_mp_article_can_use_material_library_items(api_client, aut
     assert item["used_article_count"] == 1
 
 
+def test_regenerate_wechat_mp_article_replaces_current_revision_and_retires_outputs(
+    api_client, auth_headers, monkeypatch
+):
+    from decimal import Decimal
+
+    from backend.app.models import (
+        UsageRecord,
+        User,
+        WechatMpAccount,
+        WechatMpArticle,
+        WechatMpArticleMaterial,
+        WechatMpArticleSection,
+        WechatMpAsset,
+        WechatMpDraftSync,
+        WechatMpImagePrompt,
+        WechatMpMaterial,
+    )
+    from backend.app.services import wechat_mp_writer_service as writer
+    from backend.app.services.wechat_mp_character_service import ensure_builtin_character
+
+    client, session_factory = api_client
+    session = session_factory()
+    try:
+        owner = session.query(User).filter_by(username="wechat-owner").one()
+        ensure_builtin_character(session, owner.id)
+        account = WechatMpAccount(
+            user_id=owner.id,
+            name="重新生成测试号",
+            app_id="wx-regenerate",
+            encrypted_app_secret="encrypted",
+        )
+        old_material = WechatMpMaterial(user_id=owner.id, title="旧素材", content="旧内容")
+        new_material = WechatMpMaterial(user_id=owner.id, title="新素材", content="新内容")
+        article = WechatMpArticle(
+            user_id=owner.id,
+            title="旧标题",
+            markdown_body="## 旧正文\n旧内容",
+            html_body='<h2>旧正文</h2><p><img src="/api/files/media/old-inline.png" /></p>',
+            digest="旧摘要",
+            cover_brief="旧封面",
+            status="synced_to_wechat",
+            illustration_skill="xiaomao-illustrations",
+            revision=4,
+            cost_estimate={"currency": "CNY", "total_yuan": "0.1000", "calls": 2},
+        )
+        session.add_all([account, old_material, new_material, article])
+        session.flush()
+        section = WechatMpArticleSection(
+            user_id=owner.id,
+            article_id=article.id,
+            section_index=0,
+            summary="旧段落",
+            source_excerpt="旧段落",
+        )
+        session.add(section)
+        session.flush()
+        prompt = WechatMpImagePrompt(
+            user_id=owner.id,
+            article_id=article.id,
+            section_id=section.id,
+            skill_name="xiaomao-illustrations",
+            prompt="旧提示词",
+            editable_prompt="旧提示词",
+            status="generated",
+        )
+        session.add(prompt)
+        session.flush()
+        inline_asset = WechatMpAsset(
+            user_id=owner.id,
+            article_id=article.id,
+            prompt_id=prompt.id,
+            role="inline_illustration",
+            file_path="/tmp/old-inline.png",
+            public_url="/api/files/media/old-inline.png",
+            prompt="旧提示词",
+            skill_name="xiaomao-illustrations",
+            model_name="test-image-model",
+            status="generated",
+        )
+        cover_asset = WechatMpAsset(
+            user_id=owner.id,
+            article_id=article.id,
+            prompt_id=None,
+            role="cover",
+            file_path="/tmp/old-cover.png",
+            public_url="/api/files/media/old-cover.png",
+            prompt="旧封面",
+            skill_name="xiaomao-illustrations",
+            model_name="test-image-model",
+            status="generated",
+        )
+        draft_sync = WechatMpDraftSync(
+            user_id=owner.id,
+            account_id=account.id,
+            article_id=article.id,
+            wechat_media_id="old-media-id",
+            article_revision=article.revision,
+            status="synced",
+        )
+        session.add_all([
+            inline_asset,
+            cover_asset,
+            draft_sync,
+            WechatMpArticleMaterial(
+                user_id=owner.id,
+                article_id=article.id,
+                material_id=old_material.id,
+            ),
+        ])
+        session.commit()
+        article_id = article.id
+        old_revision = article.revision
+        inline_asset_id = inline_asset.id
+        cover_asset_id = cover_asset.id
+        new_material_id = new_material.id
+    finally:
+        session.close()
+
+    def fake_call(*, title_hint, model_name, **kwargs):
+        return {
+            "title": title_hint,
+            "markdown_body": "## 新正文\n重新生成后的内容",
+            "digest": "新摘要",
+            "cover_brief": "小猫指向新的知识结构",
+            "input_tokens": 100,
+            "output_tokens": 200,
+            "model_name": model_name,
+        }
+
+    monkeypatch.setattr(writer, "_call_writer_model", fake_call)
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{article_id}/regenerate",
+        json={
+            "title": "新标题",
+            "topic": "新主题",
+            "source_material": "补充想法",
+            "material_ids": [new_material_id],
+            "target_reader": "项目经理",
+            "tone": "清晰",
+            "illustration_skill": "xiaomao-illustrations",
+        },
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == article_id
+    assert response.json()["revision"] == old_revision + 1
+    assert response.json()["title"] == "新标题"
+    assert "重新生成后的内容" in response.json()["markdown_body"]
+
+    session = session_factory()
+    try:
+        stored = session.get(WechatMpArticle, article_id)
+        assert session.query(WechatMpArticle).filter_by(user_id=stored.user_id).count() == 1
+        assert session.query(WechatMpImagePrompt).filter_by(article_id=article_id).count() == 0
+        assert session.query(WechatMpArticleSection).filter_by(article_id=article_id).count() == 0
+        assert session.get(WechatMpAsset, inline_asset_id).prompt_id is None
+        assert session.get(WechatMpAsset, cover_asset_id).status == "stale"
+        assert session.query(WechatMpDraftSync).filter_by(article_id=article_id).one().status == "stale"
+        links = session.query(WechatMpArticleMaterial).filter_by(article_id=article_id).all()
+        assert [link.material_id for link in links] == [new_material_id]
+        assert session.query(UsageRecord).filter_by(
+            platform="wechat_mp",
+            step="write_article",
+            resource_id=article_id,
+        ).count() == 1
+        assert stored.cost_estimate["calls"] == 3
+        assert Decimal(stored.cost_estimate["total_yuan"]) > Decimal("0.1000")
+    finally:
+        session.close()
+
+
+def test_regenerate_wechat_mp_article_hides_foreign_article(
+    api_client, auth_headers, created_wechat_article, monkeypatch
+):
+    from backend.app.services import wechat_mp_writer_service as writer
+
+    client, _ = api_client
+    other = client.post(
+        "/api/auth/register",
+        json={"username": "wechat-regenerate-other", "password": "secret123"},
+    )
+    other_headers = {"Authorization": f"Bearer {other.json()['access_token']}"}
+    model_called = False
+
+    def fake_call(**kwargs):
+        nonlocal model_called
+        model_called = True
+        raise AssertionError("foreign article must be rejected before model invocation")
+
+    monkeypatch.setattr(writer, "_call_writer_model", fake_call)
+    response = client.post(
+        f"/api/platforms/wechat-mp/articles/{created_wechat_article.id}/regenerate",
+        json={"title": "不能修改", "topic": "不能修改"},
+        headers=other_headers,
+    )
+
+    assert response.status_code == 404
+    assert model_called is False
+
+
 def test_generate_prompts_defaults_to_xiaomao_skill(api_client, auth_headers, created_wechat_article, monkeypatch):
     from backend.app.services import wechat_mp_image_prompt_service as prompt_service
 

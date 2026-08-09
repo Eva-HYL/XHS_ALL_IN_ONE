@@ -50,6 +50,7 @@ from backend.app.services.wechat_mp_writer_service import (
     WechatMpWritingBriefSourceError,
     generate_wechat_article,
     prepare_wechat_writing_brief,
+    regenerate_wechat_article,
 )
 from backend.app.services.wechat_mp_prompt_ignore_service import ignore_prompt, restore_prompt
 
@@ -172,6 +173,29 @@ def prepare_writing_brief(
 @router.get("/{article_id}", response_model=WechatMpArticleResponse)
 def get_article(article_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return _repair_saved_article_html(db, _get_owned_article(db, current_user, article_id))
+
+
+@router.post("/{article_id}/regenerate", response_model=WechatMpArticleResponse)
+def regenerate_article(
+    article_id: int,
+    payload: WechatMpArticleCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    article = _get_owned_article(db, current_user, article_id)
+    try:
+        return regenerate_wechat_article(
+            db=db,
+            user_id=current_user.id,
+            article=article,
+            request=payload,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except WechatMpIllustrationSkillError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 
 @router.get("/{article_id}/layout-preview", response_model=WechatMpLayoutPreviewResponse)
