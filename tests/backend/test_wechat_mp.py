@@ -6084,7 +6084,7 @@ def test_wechat_writer_hides_none_badges_and_persists_confirmed_character_select
     assert "character.skill_name !== \"none\"" in source
     assert "value: character.skill_name" in source
     assert "item.skill_name === skillName" in source
-    assert "setError(errorMessage(err, `段落 #${prompt.section_id} 图片生成失败，请确认图片模型配置。`))" in source
+    assert "setError(`段落 #${prompt.section_id} 图片生成失败，请确认图片模型配置。`)" in source
     assert "四视图已确认" in source
     assert "待确认四视图" in source
 

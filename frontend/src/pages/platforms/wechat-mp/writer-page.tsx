@@ -155,6 +155,7 @@ export function WechatMpWriterPage() {
   useLayoutEffect(() => {
     activePromptArticleIdRef.current = articleId || null;
     promptGenerationTokenRef.current += 1;
+    briefGenerationTokenRef.current += 1;
     const resetQueue = resetImageQueueForArticle(
       imageQueueRef.current,
       imageQueueLifecycleRef.current,
@@ -167,6 +168,7 @@ export function WechatMpWriterPage() {
     setPrompts([]);
     setPromptAnalysis(null);
     setPromptBusy(false);
+    setBriefBusy(false);
   }, [articleId]);
 
   useEffect(() => {

@@ -63,3 +63,15 @@ test("writer page uses the material-first brief entry and removes the redundant 
   assert.doesNotMatch(writerSource, /下一步：生成文章/);
   assert.doesNotMatch(writerSource, /2\. 生成文章/);
 });
+
+test("switching articles invalidates an in-flight writing brief request", () => {
+  const writerSource = readFileSync(
+    new URL("../src/pages/platforms/wechat-mp/writer-page.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(
+    writerSource,
+    /useLayoutEffect\(\(\) => \{[\s\S]*?briefGenerationTokenRef\.current \+= 1;[\s\S]*?\}, \[articleId\]\);/,
+  );
+});
