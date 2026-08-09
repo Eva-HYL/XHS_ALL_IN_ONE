@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "test:wechat-image-queue": "node --test --experimental-strip-types tests/wechat-mp-image-queue.test.ts",
+    "test:wechat-writing-flow": "node --test --experimental-strip-types tests/wechat-mp-writing-flow.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

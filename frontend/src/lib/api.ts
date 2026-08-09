@@ -99,7 +99,9 @@ import type {
   WechatMpLayoutStyle,
   WechatMpMaterial,
   WechatMpMaterialPayload,
-  WechatMpPublishJob
+  WechatMpPublishJob,
+  WechatMpWritingBrief,
+  WechatMpWritingBriefRequest,
 } from "../types";
 
 const http = axios.create({
@@ -1068,6 +1070,11 @@ export async function fetchWechatMpArticle(articleId: number): Promise<WechatMpA
 
 export async function createWechatMpArticle(payload: CreateWechatMpArticlePayload): Promise<WechatMpArticle> {
   const response = await http.post<WechatMpArticle>("/platforms/wechat-mp/articles", payload, { timeout: WECHAT_MP_ARTICLE_TIMEOUT_MS });
+  return response.data;
+}
+
+export async function prepareWechatMpWritingBrief(payload: WechatMpWritingBriefRequest): Promise<WechatMpWritingBrief> {
+  const response = await http.post<WechatMpWritingBrief>("/platforms/wechat-mp/articles/writing-brief", payload);
   return response.data;
 }
 

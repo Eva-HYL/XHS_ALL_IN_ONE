@@ -828,6 +828,23 @@ export type CreateWechatMpArticlePayload = {
   illustration_skill?: string;
 };
 
+export type WechatMpWritingBriefRequest = {
+  material_ids: number[];
+  idea: string;
+};
+
+export type WechatMpWritingBrief = {
+  title: string;
+  topic: string;
+  target_reader: string;
+  tone: string;
+  cost_estimate: {
+    currency: string;
+    total_yuan: string;
+    calls: number;
+  };
+};
+
 export interface WechatMpArticle {
   id: number;
   title: string;
