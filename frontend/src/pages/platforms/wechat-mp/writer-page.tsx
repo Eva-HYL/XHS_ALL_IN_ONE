@@ -18,6 +18,7 @@ import {
   generateWechatMpImage,
   generateWechatMpPrompts,
   ignoreWechatMpPrompt,
+  prepareWechatMpWritingBrief,
   regenerateWechatMpPrompt,
   restoreWechatMpPrompt,
   updateWechatMpArticle,
@@ -32,6 +33,7 @@ import type {
   WechatMpIllustrationCharacter,
   WechatMpMaterial,
   WechatMpPromptAnalysis,
+  WechatMpWritingBrief,
 } from "../../../types";
 import {
   appendUniquePromptIds,
@@ -43,6 +45,14 @@ import {
 } from "./image-queue";
 import type { ImageQueueLifecycle } from "./image-queue";
 import { WechatMpLayout } from "./wechat-mp-layout";
+import {
+  hasWritingSource,
+  hasMaterialSelectionChanged,
+  isWritingBriefReady,
+  isWritingBriefStale,
+  WECHAT_WRITER_STEPS,
+  writingSourceFingerprint,
+} from "./writing-flow";
 
 const { Text, Paragraph } = Typography;
 const { TextArea } = Input;
@@ -105,19 +115,24 @@ export function WechatMpWriterPage() {
   const [assets, setAssets] = useState<WechatMpAsset[]>([]);
   const [materials, setMaterials] = useState<WechatMpMaterial[]>([]);
   const [characters, setCharacters] = useState<WechatMpIllustrationCharacter[]>([]);
+  const [draftMaterialIds, setDraftMaterialIds] = useState<number[]>([]);
   const [selectedMaterialIds, setSelectedMaterialIds] = useState<number[]>([]);
   const [imageModels, setImageModels] = useState<ModelConfig[]>([]);
   const [imageModel, setImageModel] = useState<string | undefined>();
   const [imageEstimate, setImageEstimate] = useState<WechatMpImageCostEstimate | null>(null);
   const [title, setTitle] = useState("");
   const [topic, setTopic] = useState("");
-  const [material, setMaterial] = useState("");
+  const [idea, setIdea] = useState("");
   const [reader, setReader] = useState("");
   const [tone, setTone] = useState("");
   const [editTitle, setEditTitle] = useState("");
   const [editMarkdown, setEditMarkdown] = useState("");
   const [skill, setSkill] = useState(DEFAULT_SKILL);
   const [busy, setBusy] = useState(false);
+  const [briefBusy, setBriefBusy] = useState(false);
+  const [briefVisible, setBriefVisible] = useState(false);
+  const [briefSourceFingerprint, setBriefSourceFingerprint] = useState<string | null>(null);
+  const [briefCost, setBriefCost] = useState<WechatMpWritingBrief["cost_estimate"] | null>(null);
   const [promptBusy, setPromptBusy] = useState(false);
   const [coverBusy, setCoverBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -131,6 +146,9 @@ export function WechatMpWriterPage() {
   const promptSnapshotRef = useRef<WechatMpImagePrompt[]>([]);
   const activePromptArticleIdRef = useRef<number | null>(null);
   const promptGenerationTokenRef = useRef(0);
+  const briefGenerationTokenRef = useRef(0);
+  const selectedMaterialIdsRef = useRef<number[]>([]);
+  const ideaRef = useRef("");
   const articleId = Number(params.get("article"));
   const focusPromptId = Number(params.get("prompt")) || null;
 
@@ -200,7 +218,7 @@ export function WechatMpWriterPage() {
         setPrompts(loadedPrompts);
         setPromptAnalysis(null);
         setAssets(activeArticleAssets(articleId, loadedPrompts, loadedAssets.items));
-        setWorkflowStep(focusPromptId && loadedPrompts.some((prompt) => prompt.id === focusPromptId) ? 4 : loadedPrompts.length > 0 ? 4 : 2);
+        setWorkflowStep(focusPromptId && loadedPrompts.some((prompt) => prompt.id === focusPromptId) ? 3 : loadedPrompts.length > 0 ? 3 : 1);
         if (focusPromptId && loadedPrompts.some((prompt) => prompt.id === focusPromptId)) {
           setNotice(`已定位到 prompt-${focusPromptId}，请生成或重新生成对应正文图片后再同步草稿。`);
         }
@@ -212,11 +230,65 @@ export function WechatMpWriterPage() {
   }, [articleId, focusPromptId]);
 
   useEffect(() => {
-    if (!focusPromptId || workflowStep !== 4) return;
+    if (!focusPromptId || workflowStep !== 3) return;
     window.setTimeout(() => {
       document.getElementById(`wechat-prompt-${focusPromptId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, 120);
   }, [focusPromptId, workflowStep, prompts.length]);
+
+  function updateIdea(nextIdea: string) {
+    ideaRef.current = nextIdea;
+    setIdea(nextIdea);
+  }
+
+  async function prepareBrief(nextMaterialIds: number[] = selectedMaterialIdsRef.current) {
+    const nextIdea = ideaRef.current;
+    if (!hasWritingSource(nextMaterialIds, nextIdea)) {
+      setError("请先选择素材或输入一句话想法。");
+      return;
+    }
+    const requestFingerprint = writingSourceFingerprint(nextMaterialIds, nextIdea);
+    const requestToken = briefGenerationTokenRef.current + 1;
+    briefGenerationTokenRef.current = requestToken;
+    setBriefBusy(true);
+    setError(null);
+    try {
+      const next = await prepareWechatMpWritingBrief({
+        material_ids: nextMaterialIds,
+        idea: nextIdea.trim(),
+      });
+      const currentFingerprint = writingSourceFingerprint(
+        selectedMaterialIdsRef.current,
+        ideaRef.current,
+      );
+      if (briefGenerationTokenRef.current !== requestToken || currentFingerprint !== requestFingerprint) return;
+      setTitle(next.title);
+      setTopic(next.topic);
+      setReader(next.target_reader);
+      setTone(next.tone);
+      setBriefCost(next.cost_estimate);
+      setBriefSourceFingerprint(requestFingerprint);
+      setBriefVisible(true);
+      setNotice("写作简报已自动整理，可修改后直接生成文章。");
+    } catch (err) {
+      if (briefGenerationTokenRef.current !== requestToken) return;
+      setBriefVisible(true);
+      setError(errorMessage(err, "写作简报生成失败，当前输入已保留，可重试或手动填写。"));
+    } finally {
+      if (briefGenerationTokenRef.current === requestToken) setBriefBusy(false);
+    }
+  }
+
+  function confirmMaterialSelection() {
+    const nextMaterialIds = [...draftMaterialIds];
+    selectedMaterialIdsRef.current = nextMaterialIds;
+    setSelectedMaterialIds(nextMaterialIds);
+    if (nextMaterialIds.length > 0) {
+      void prepareBrief(nextMaterialIds);
+    } else {
+      setNotice("未选择素材，可以输入一句话想法后智能补全写作简报。");
+    }
+  }
 
   function applyCreatedArticle(next: WechatMpArticle, message: string) {
     setArticle(next);
@@ -226,8 +298,10 @@ export function WechatMpWriterPage() {
     setPrompts([]);
     setPromptAnalysis(null);
     setAssets([]);
+    setDraftMaterialIds([]);
     setSelectedMaterialIds([]);
-    setWorkflowStep(2);
+    selectedMaterialIdsRef.current = [];
+    setWorkflowStep(1);
     setNotice(message);
   }
 
@@ -251,8 +325,12 @@ export function WechatMpWriterPage() {
   async function createArticle() {
     const expectedTitle = title.trim();
     const expectedTopic = topic.trim();
+    if (!hasWritingSource(selectedMaterialIds, idea)) {
+      setError("请先选择素材或输入一句话想法。");
+      return;
+    }
     if (!expectedTitle || !expectedTopic) {
-      setError("请填写标题和主题。");
+      setError("请先补全文章标题和主题。");
       return;
     }
     const startedAtMs = Date.now();
@@ -287,7 +365,7 @@ export function WechatMpWriterPage() {
       const next = await createWechatMpArticle({
         title: expectedTitle,
         topic: expectedTopic,
-        source_material: material,
+        source_material: idea,
         material_ids: selectedMaterialIds,
         target_reader: reader,
         tone,
@@ -372,7 +450,7 @@ export function WechatMpWriterPage() {
       setPrompts(result.items);
       setPromptAnalysis(result.analysis);
       setArticle(refreshedArticle);
-      setWorkflowStep(4);
+      setWorkflowStep(3);
       setNotice(skill === "none"
         ? "已跳过正文提示词和正文生图费用。"
         : result.items.length === 0
@@ -552,13 +630,19 @@ export function WechatMpWriterPage() {
     }
   }
 
-  const activeStep = !article ? 0 : prompts.length === 0 ? 2 : 4;
   const estimatedCost = imageEstimate?.pricing_available
     ? `预计每张 ¥${imageEstimate.estimated_yuan}`
     : "当前模型暂无价格估算";
   const coverAsset = assets.find((asset) => asset.role === "cover");
   const inlineImageCount = assets.filter((asset) => asset.role !== "cover").length;
-  const stepItems = ["输入主题/素材", "生成文章", "编辑与预览", "生成提示词", "编辑提示词并生图", "同步草稿/发布"].map((stepTitle) => ({ title: stepTitle }));
+  const stepItems = WECHAT_WRITER_STEPS.map((stepTitle) => ({ title: stepTitle }));
+  const sourceReady = hasWritingSource(selectedMaterialIds, idea);
+  const briefReady = isWritingBriefReady(title, topic);
+  const briefStale = isWritingBriefStale(briefSourceFingerprint, selectedMaterialIds, idea);
+  const materialSelectionChanged = hasMaterialSelectionChanged(draftMaterialIds, selectedMaterialIds);
+  const selectedMaterials = selectedMaterialIds
+    .map((id) => materials.find((item) => item.id === id))
+    .filter((item): item is WechatMpMaterial => Boolean(item));
   const coverCharacter = article ? resolveCharacterMention(characters, null, article.illustration_skill, article.cover_brief) : null;
   const characterMentionBadge = coverCharacter ? (
     <Tooltip title={<div><strong>{coverCharacter.name}</strong><div>{coverCharacter.is_available ? "四视图已确认" : "待确认四视图"}</div><div>{coverCharacter.prompt}</div></div>}>
@@ -569,73 +653,117 @@ export function WechatMpWriterPage() {
   ) : null;
 
   return <WechatMpLayout>
-    <PageHeader eyebrow="WeChat MP / Writer" title="文章写作" description="六步完成公众号文章、配图和草稿同步发布。默认插画技能为小猫。" />
+    <PageHeader eyebrow="WeChat MP / Writer" title="文章写作" description="先确定素材或想法，五步完成公众号文章、配图和发布。" />
     <Steps current={workflowStep} size="small" items={stepItems} style={{ marginBottom: 16 }} />
     {error && <Alert type="error" message={error} showIcon closable onClose={() => setError(null)} style={{ marginBottom: 16 }} />}
     {notice && <Alert type="success" message={notice} showIcon closable onClose={() => setNotice(null)} style={{ marginBottom: 16 }} />}
 
-    {workflowStep === 0 && <Card title="1. 输入主题与素材" style={{ marginBottom: 16 }}>
-      <Row gutter={[12, 12]}>
-        <Col xs={24} md={12}><Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="文章标题" /></Col>
-        <Col xs={24} md={12}>
-          <Select
-            value={skill}
-            onChange={setSkill}
-            style={{ width: "100%" }}
-            options={(characters.length ? characters : [
-              { name: "小猫插画", skill_name: DEFAULT_SKILL, prompt: "", is_builtin: true },
-              { name: "none（跳过正文配图）", skill_name: "none", prompt: "", is_builtin: true },
-            ] as WechatMpIllustrationCharacter[]).map((character) => ({
-              value: character.skill_name,
-              label: `${character.name}${character.is_available === false ? "（待确认四视图）" : character.is_builtin ? "" : "（自定义）"}`,
-              disabled: character.skill_name !== "none" && character.is_available === false,
-            }))}
-          />
-          <Text type="secondary" style={{ display: "block", marginTop: 6 }}>
-            需要新增或调整形象，请到 <Link to="/platforms/wechat-mp/characters">形象管理</Link>。
-          </Text>
-        </Col>
-        <Col span={24}><TextArea value={topic} onChange={(event) => setTopic(event.target.value)} placeholder="文章主题与核心观点" rows={2} /></Col>
-        <Col xs={24} md={12}><Input value={reader} onChange={(event) => setReader(event.target.value)} placeholder="目标读者（可选）" /></Col>
-        <Col xs={24} md={12}><Input value={tone} onChange={(event) => setTone(event.target.value)} placeholder="语气风格（可选）" /></Col>
-        <Col span={24}>
+    {workflowStep === 0 && <Card title="1. 选择素材与写作要求" style={{ marginBottom: 16 }}>
+      <Space direction="vertical" size={16} style={{ width: "100%" }}>
+        <Card
+          size="small"
+          title="先选写作素材（可选）"
+          extra={<Link to="/platforms/wechat-mp/assets">管理资料库</Link>}
+          style={{ borderColor: "rgba(22, 119, 255, 0.35)" }}
+        >
+          <Paragraph type="secondary">可以选择一份或多份资料；确认整组选项后，系统只调用一次模型自动整理标题等内容。</Paragraph>
           <Select
             mode="multiple"
             allowClear
-            value={selectedMaterialIds}
-            onChange={setSelectedMaterialIds}
-            placeholder="从资料库选择素材（可多选，会自动带入生成文章）"
+            showSearch
+            optionFilterProp="label"
+            value={draftMaterialIds}
+            onChange={setDraftMaterialIds}
+            placeholder="从资料库选择素材（可多选）"
             style={{ width: "100%" }}
             options={materials.map((item) => ({
               value: item.id,
               label: `${item.title} · ${item.usage_status === "used" ? `已写过 ${item.used_article_count} 篇` : "未使用"}`,
             }))}
           />
-        </Col>
-        <Col span={24}><TextArea value={material} onChange={(event) => setMaterial(event.target.value)} placeholder="参考素材、事实和要点（可选）" rows={4} /></Col>
-      </Row>
-      <Text type="secondary">正文生成与提示词费用将在模型调用前按已配置价格展示；微信排版本身不收模型费。</Text>
-      <div style={{ marginTop: 16 }}>
-        <Button type="primary" icon={<ArrowRightOutlined />} disabled={!title.trim() || !topic.trim()} onClick={() => setWorkflowStep(1)}>下一步：生成文章</Button>
-      </div>
-    </Card>}
-
-    {workflowStep === 1 && <Card title="2. 生成文章" style={{ marginBottom: 16 }}>
-      <Space direction="vertical" size={12} style={{ width: "100%" }}>
-        <Paragraph>系统会根据标题、主题、目标读者、语气和参考素材生成公众号文章，并同步生成微信安全排版预览。</Paragraph>
-        <Card size="small">
-          <Text strong>{title}</Text>
-          <Paragraph type="secondary" style={{ marginTop: 8 }}>{topic}</Paragraph>
-          <Tag>{skill}</Tag>
+          {materials.length === 0 && <Text type="secondary" style={{ display: "block", marginTop: 8 }}>暂无资料，也可以直接输入想法开始写作。</Text>}
+          <Space style={{ marginTop: 12 }} wrap>
+            <Button
+              type="primary"
+              loading={briefBusy}
+              disabled={!materialSelectionChanged || briefBusy || busy}
+              onClick={confirmMaterialSelection}
+            >
+              {draftMaterialIds.length > 0 ? `使用选中素材（${draftMaterialIds.length}）` : "确认不使用素材"}
+            </Button>
+            {selectedMaterials.map((item) => <Tag key={item.id} color="blue">{item.title}</Tag>)}
+          </Space>
         </Card>
-        <Space>
-          <Button icon={<ArrowLeftOutlined />} onClick={() => setWorkflowStep(0)}>返回修改输入</Button>
-          <Button type="primary" icon={<EditOutlined />} loading={busy} onClick={() => void createArticle()}>生成文章</Button>
-        </Space>
+
+        <Card size="small" title={selectedMaterialIds.length > 0 ? "补充写作角度（可选）" : "没有素材？直接写一句想法"}>
+          <TextArea
+            value={idea}
+            onChange={(event) => updateIdea(event.target.value)}
+            placeholder={selectedMaterialIds.length > 0 ? "例如：突出考试中的易错关系" : "例如：写一篇关于第一本推理小说如何影响我的文章"}
+            rows={3}
+          />
+          <Space style={{ marginTop: 12 }} wrap>
+            <Button
+              icon={<EditOutlined />}
+              loading={briefBusy}
+              disabled={!sourceReady || briefBusy || busy}
+              onClick={() => void prepareBrief(selectedMaterialIds)}
+            >
+              {briefVisible ? "重新整理写作简报" : "智能补全写作简报"}
+            </Button>
+            <Button disabled={!sourceReady || briefBusy || busy} onClick={() => setBriefVisible(true)}>手动填写简报</Button>
+          </Space>
+        </Card>
+
+        {briefBusy && <Alert type="info" showIcon message="正在根据当前素材与想法整理写作简报…" />}
+        {briefVisible && <Card
+          size="small"
+          title="可编辑写作简报"
+          extra={<Tag color={briefStale ? "gold" : briefReady ? "green" : "default"}>{briefStale ? "来源已变化" : briefReady ? "可以生成" : "待补全"}</Tag>}
+        >
+          {briefStale && <Alert type="warning" showIcon message="写作来源已变化，当前人工修改不会被覆盖；需要时请重新整理简报。" style={{ marginBottom: 12 }} />}
+          <Row gutter={[12, 12]}>
+            <Col xs={24} md={12}><Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="文章标题" /></Col>
+            <Col xs={24} md={12}>
+              <Select
+                value={skill}
+                onChange={setSkill}
+                style={{ width: "100%" }}
+                options={(characters.length ? characters : [
+                  { name: "小猫插画", skill_name: DEFAULT_SKILL, prompt: "", is_builtin: true },
+                  { name: "none（跳过正文配图）", skill_name: "none", prompt: "", is_builtin: true },
+                ] as WechatMpIllustrationCharacter[]).map((character) => ({
+                  value: character.skill_name,
+                  label: `${character.name}${character.is_available === false ? "（待确认四视图）" : character.is_builtin ? "" : "（自定义）"}`,
+                  disabled: character.skill_name !== "none" && character.is_available === false,
+                }))}
+              />
+              <Text type="secondary" style={{ display: "block", marginTop: 6 }}>
+                需要新增或调整形象，请到 <Link to="/platforms/wechat-mp/characters">形象管理</Link>。
+              </Text>
+            </Col>
+            <Col span={24}><TextArea value={topic} onChange={(event) => setTopic(event.target.value)} placeholder="文章主题与核心观点" rows={3} /></Col>
+            <Col xs={24} md={12}><Input value={reader} onChange={(event) => setReader(event.target.value)} placeholder="目标读者（可选）" /></Col>
+            <Col xs={24} md={12}><Input value={tone} onChange={(event) => setTone(event.target.value)} placeholder="语气风格（可选）" /></Col>
+          </Row>
+          <Space direction="vertical" size={8} style={{ width: "100%", marginTop: 16 }}>
+            {briefCost && <Text type="secondary">本次写作简报实际费用：¥{briefCost.total_yuan}，已计入账单中心。</Text>}
+            <Text type="secondary">正文会使用已确认素材和这份简报生成；微信安全排版本身不收模型费。</Text>
+            <Button
+              type="primary"
+              icon={<EditOutlined />}
+              loading={busy}
+              disabled={!sourceReady || !briefReady || briefBusy || busy}
+              onClick={() => void createArticle()}
+            >
+              生成文章
+            </Button>
+          </Space>
+        </Card>}
       </Space>
     </Card>}
 
-    {article && workflowStep === 2 && <Card title="3. 编辑与预览" extra={<Space><Tag>修订 {article.revision}</Tag><Tag>{article.status}</Tag></Space>}>
+    {article && workflowStep === 1 && <Card title="2. 编辑与预览" extra={<Space><Tag>修订 {article.revision}</Tag><Tag>{article.status}</Tag></Space>}>
       <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
           <Space direction="vertical" size={12} style={{ width: "100%" }}>
@@ -643,7 +771,7 @@ export function WechatMpWriterPage() {
             <TextArea value={editMarkdown} onChange={(event) => setEditMarkdown(event.target.value)} rows={16} placeholder="Markdown 正文" />
             <Space>
               <Button type="primary" icon={<SaveOutlined />} loading={busy} onClick={() => void saveArticle()}>保存标题与正文</Button>
-              <Button icon={<ArrowRightOutlined />} onClick={() => setWorkflowStep(3)}>下一步：生成提示词</Button>
+              <Button icon={<ArrowRightOutlined />} onClick={() => setWorkflowStep(2)}>下一步：生成提示词</Button>
             </Space>
           </Space>
         </Col>
@@ -658,17 +786,17 @@ export function WechatMpWriterPage() {
       </Row>
     </Card>}
 
-    {article && workflowStep === 3 && <Card title="4. 生成配图提示词">
+    {article && workflowStep === 2 && <Card title="3. 生成配图提示词">
         <Paragraph>文章已排版完成。现在分析正文内容，生成值得配图的提示词。</Paragraph>
         <Paragraph>当前技能：<Text code>{skill}</Text>。<Text code>none</Text> 会跳过正文提示词和正文图片；公众号封面仍可生成。</Paragraph>
         <Paragraph type="secondary">提示词预估：非 <Text code>none</Text> 技能按文本模型 token 计费；<Text code>none</Text> 不产生正文提示词和正文生图费用。</Paragraph>
         <Space>
-          <Button icon={<ArrowLeftOutlined />} onClick={() => setWorkflowStep(2)}>返回编辑文章</Button>
+          <Button icon={<ArrowLeftOutlined />} onClick={() => setWorkflowStep(1)}>返回编辑文章</Button>
           <Button type="primary" icon={<PictureOutlined />} loading={promptBusy} onClick={() => void makePrompts()}>{prompts.length > 0 ? "重新生成提示词" : "生成提示词"}</Button>
         </Space>
       </Card>}
 
-    {article && workflowStep === 4 && <Card title="5. 编辑提示词并生成图片">
+    {article && workflowStep === 3 && <Card title="4. 编辑提示词并生成图片">
         <Space direction="vertical" size={12} style={{ width: "100%" }}>
           {promptAnalysis && <Alert
             type="info"
@@ -803,13 +931,13 @@ export function WechatMpWriterPage() {
             }
           )}
           <Space>
-            <Button icon={<ArrowLeftOutlined />} onClick={() => setWorkflowStep(3)}>返回生成提示词</Button>
-            <Button type="primary" icon={<ArrowRightOutlined />} onClick={() => setWorkflowStep(5)}>下一步：同步草稿/发布</Button>
+            <Button icon={<ArrowLeftOutlined />} onClick={() => setWorkflowStep(2)}>返回生成提示词</Button>
+            <Button type="primary" icon={<ArrowRightOutlined />} onClick={() => setWorkflowStep(4)}>下一步：同步草稿/发布</Button>
           </Space>
         </Space>
       </Card>}
 
-    {article && workflowStep === 5 && <Card title="6. 同步草稿与发布">
+    {article && workflowStep === 4 && <Card title="5. 同步草稿与发布">
         <Paragraph>写作流程已完成。发布前需要至少生成封面；如果正文仍有未生成占位符，同步草稿时会提示具体缺少的 prompt。</Paragraph>
         <Space wrap>
           <Tag color={coverAsset ? "green" : "orange"}>{coverAsset ? "封面已生成" : "还未生成封面"}</Tag>
@@ -818,7 +946,7 @@ export function WechatMpWriterPage() {
         </Space>
         <div style={{ marginTop: 16 }}>
           <Space>
-            <Button icon={<ArrowLeftOutlined />} onClick={() => setWorkflowStep(4)}>返回生图</Button>
+            <Button icon={<ArrowLeftOutlined />} onClick={() => setWorkflowStep(3)}>返回生图</Button>
             <Button icon={<SendOutlined />} href={`/platforms/wechat-mp/publish?article=${article.id}`}>前往发布中心</Button>
           </Space>
         </div>

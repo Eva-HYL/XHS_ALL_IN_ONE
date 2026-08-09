@@ -10,6 +10,11 @@ export function hasWritingSource(materialIds: number[], idea: string): boolean {
   return materialIds.length > 0 || idea.trim().length > 0;
 }
 
+export function hasMaterialSelectionChanged(draftIds: number[], confirmedIds: number[]): boolean {
+  return draftIds.length !== confirmedIds.length
+    || draftIds.some((id, index) => id !== confirmedIds[index]);
+}
+
 export function writingSourceFingerprint(materialIds: number[], idea: string): string {
   return `${materialIds.join(",")}|${idea.trim()}`;
 }
