@@ -19,6 +19,7 @@ import {
   generateWechatMpPrompts,
   ignoreWechatMpPrompt,
   prepareWechatMpWritingBrief,
+  regenerateWechatMpArticle,
   regenerateWechatMpPrompt,
   restoreWechatMpPrompt,
   updateWechatMpArticle,
@@ -79,7 +80,9 @@ function activeArticleAssets(
 ): WechatMpAsset[] {
   const activePromptIds = new Set(prompts.map((prompt) => prompt.id));
   return assets.filter((asset) =>
-    asset.article_id === articleId && (asset.role === "cover" || (asset.prompt_id !== null && activePromptIds.has(asset.prompt_id)))
+    asset.status === "generated"
+    && asset.article_id === articleId
+    && (asset.role === "cover" || (asset.prompt_id !== null && activePromptIds.has(asset.prompt_id)))
   );
 }
 
@@ -300,9 +303,6 @@ export function WechatMpWriterPage() {
     setPrompts([]);
     setPromptAnalysis(null);
     setAssets([]);
-    setDraftMaterialIds([]);
-    setSelectedMaterialIds([]);
-    selectedMaterialIdsRef.current = [];
     setWorkflowStep(1);
     setNotice(message);
   }
@@ -324,7 +324,16 @@ export function WechatMpWriterPage() {
     return true;
   }
 
+  async function recoverRegeneratedArticle(articleId: number, previousRevision: number): Promise<boolean> {
+    const next = await fetchWechatMpArticle(articleId);
+    if (next.revision <= previousRevision) return false;
+    applyCreatedArticle(next, "文章已重新生成，已自动进入编辑步骤。");
+    return true;
+  }
+
   async function createArticle() {
+    const articleToRegenerate = article;
+    const previousRevision = articleToRegenerate?.revision ?? null;
     const expectedTitle = title.trim();
     const expectedTopic = topic.trim();
     if (!hasWritingSource(selectedMaterialIds, idea)) {
@@ -345,7 +354,9 @@ export function WechatMpWriterPage() {
     };
     const tryRecover = async () => {
       try {
-        const ok = await recoverCreatedArticle(expectedTitle, startedAtMs);
+        const ok = articleToRegenerate && previousRevision !== null
+          ? await recoverRegeneratedArticle(articleToRegenerate.id, previousRevision)
+          : await recoverCreatedArticle(expectedTitle, startedAtMs);
         if (!ok) return;
         recovered = true;
         clearRecoveryTimers();
@@ -356,7 +367,9 @@ export function WechatMpWriterPage() {
     };
     setBusy(true);
     setError(null);
-    setNotice("文章生成中；完成后进入编辑与预览。若模型响应较慢，页面会自动检测已生成文章。");
+    setNotice(articleToRegenerate
+      ? "文章重新生成中；完成后将替换当前版本并返回编辑与预览。"
+      : "文章生成中；完成后进入编辑与预览。若模型响应较慢，页面会自动检测已生成文章。");
     recoveryDelayId = window.setTimeout(() => {
       recoveryIntervalId = window.setInterval(() => {
         void tryRecover();
@@ -364,7 +377,7 @@ export function WechatMpWriterPage() {
       void tryRecover();
     }, ARTICLE_RECOVERY_DELAY_MS);
     try {
-      const next = await createWechatMpArticle({
+      const payload = {
         title: expectedTitle,
         topic: expectedTopic,
         source_material: idea,
@@ -372,23 +385,45 @@ export function WechatMpWriterPage() {
         target_reader: reader,
         tone,
         illustration_skill: skill,
-      });
+      };
+      const next = articleToRegenerate
+        ? await regenerateWechatMpArticle(articleToRegenerate.id, payload)
+        : await createWechatMpArticle(payload);
       if (recovered) return;
-      applyCreatedArticle(next, "文章和微信排版已生成。请检查正文，再进入提示词步骤。");
+      applyCreatedArticle(next, articleToRegenerate
+        ? "当前文章已重新生成，微信排版和修订号已刷新。"
+        : "文章和微信排版已生成。请检查正文，再进入提示词步骤。");
     } catch (err) {
       try {
-        if (await recoverCreatedArticle(expectedTitle, startedAtMs)) {
+        const recoverySucceeded = articleToRegenerate && previousRevision !== null
+          ? await recoverRegeneratedArticle(articleToRegenerate.id, previousRevision)
+          : await recoverCreatedArticle(expectedTitle, startedAtMs);
+        if (recoverySucceeded) {
           recovered = true;
           return;
         }
       } catch {
         // Keep the original create error visible if the recovery lookup also fails.
       }
-      setError(errorMessage(err, "文章工作流生成失败，请确认文本模型配置。"));
+      setError(errorMessage(err, articleToRegenerate
+        ? "文章重新生成失败，原文章和当前输入已保留。"
+        : "文章工作流生成失败，请确认文本模型配置。"));
     } finally {
       clearRecoveryTimers();
       if (!recovered) setBusy(false);
     }
+  }
+
+  function returnToWritingRequirements() {
+    if (!article) return;
+    if (!briefVisible) {
+      setTitle(article.title);
+      setTopic(article.digest || article.title);
+      setSkill(article.illustration_skill);
+      setBriefVisible(true);
+    }
+    setWorkflowStep(0);
+    setNotice("已返回写作要求；修改后会在同一篇文章上重新生成。");
   }
 
   async function saveArticle() {
@@ -758,7 +793,7 @@ export function WechatMpWriterPage() {
               disabled={!sourceReady || !briefReady || briefBusy || busy}
               onClick={() => void createArticle()}
             >
-              生成文章
+              {article ? "重新生成文章" : "生成文章"}
             </Button>
           </Space>
         </Card>}
@@ -771,7 +806,8 @@ export function WechatMpWriterPage() {
           <Space direction="vertical" size={12} style={{ width: "100%" }}>
             <Input value={editTitle} onChange={(event) => setEditTitle(event.target.value)} placeholder="公众号标题" />
             <TextArea value={editMarkdown} onChange={(event) => setEditMarkdown(event.target.value)} rows={16} placeholder="Markdown 正文" />
-            <Space>
+            <Space wrap>
+              <Button icon={<ArrowLeftOutlined />} disabled={busy} onClick={returnToWritingRequirements}>返回修改写作要求</Button>
               <Button type="primary" icon={<SaveOutlined />} loading={busy} onClick={() => void saveArticle()}>保存标题与正文</Button>
               <Button icon={<ArrowRightOutlined />} onClick={() => setWorkflowStep(2)}>下一步：生成提示词</Button>
             </Space>

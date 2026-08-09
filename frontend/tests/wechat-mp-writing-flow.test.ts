@@ -75,3 +75,26 @@ test("switching articles invalidates an in-flight writing brief request", () => 
     /useLayoutEffect\(\(\) => \{[\s\S]*?briefGenerationTokenRef\.current \+= 1;[\s\S]*?\}, \[articleId\]\);/,
   );
 });
+
+test("edit preview can return and regenerate the same article without clearing its writing source", () => {
+  const writerSource = readFileSync(
+    new URL("../src/pages/platforms/wechat-mp/writer-page.tsx", import.meta.url),
+    "utf8",
+  );
+  const apiSource = readFileSync(
+    new URL("../src/lib/api.ts", import.meta.url),
+    "utf8",
+  );
+  const applyCreatedArticle = writerSource.match(
+    /function applyCreatedArticle[\s\S]*?\n  }\n\n  async function recoverCreatedArticle/,
+  )?.[0] ?? "";
+
+  assert.match(apiSource, /export async function regenerateWechatMpArticle/);
+  assert.match(writerSource, /返回修改写作要求/);
+  assert.match(writerSource, /regenerateWechatMpArticle/);
+  assert.match(writerSource, /recoverRegeneratedArticle/);
+  assert.match(writerSource, /article \? "重新生成文章" : "生成文章"/);
+  assert.doesNotMatch(applyCreatedArticle, /setDraftMaterialIds\(\[\]\)/);
+  assert.doesNotMatch(applyCreatedArticle, /setSelectedMaterialIds\(\[\]\)/);
+  assert.match(writerSource, /asset\.status === "generated"/);
+});
