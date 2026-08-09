@@ -24,6 +24,19 @@ class WechatMpArticleCreateRequest(BaseModel):
     illustration_skill: str = "xiaomao-illustrations"
 
 
+class WechatMpWritingBriefRequest(BaseModel):
+    material_ids: list[int] = Field(default_factory=list)
+    idea: str = Field(default="", max_length=10000)
+
+
+class WechatMpWritingBriefResponse(BaseModel):
+    title: str
+    topic: str
+    target_reader: str
+    tone: str
+    cost_estimate: dict
+
+
 class WechatMpIllustrationCharacterCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     prompt: str = Field(min_length=1)

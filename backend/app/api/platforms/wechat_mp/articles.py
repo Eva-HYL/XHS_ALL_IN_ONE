@@ -21,6 +21,8 @@ from backend.app.schemas.wechat_mp import (
     WechatMpImagePromptResponse,
     WechatMpPromptGenerationResponse,
     WechatMpPromptIgnoreRuleResponse,
+    WechatMpWritingBriefRequest,
+    WechatMpWritingBriefResponse,
 )
 from backend.app.services.wechat_mp_image_service import (
     WechatMpImageValidationError,
@@ -44,7 +46,11 @@ from backend.app.services.wechat_mp_character_service import (
     resolve_character_by_skill,
 )
 from backend.app.services.wechat_mp_layout_service import apply_wechat_layout_style, get_wechat_layout_styles, normalize_wechat_layout_style, render_wechat_html
-from backend.app.services.wechat_mp_writer_service import generate_wechat_article
+from backend.app.services.wechat_mp_writer_service import (
+    WechatMpWritingBriefSourceError,
+    generate_wechat_article,
+    prepare_wechat_writing_brief,
+)
 from backend.app.services.wechat_mp_prompt_ignore_service import ignore_prompt, restore_prompt
 
 
@@ -138,6 +144,29 @@ def list_articles(current_user: User = Depends(get_current_user), db: Session = 
 @router.get("/layout-styles")
 def list_layout_styles(current_user: User = Depends(get_current_user)):
     return get_wechat_layout_styles()
+
+
+@router.post("/writing-brief", response_model=WechatMpWritingBriefResponse)
+def prepare_writing_brief(
+    payload: WechatMpWritingBriefRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if not payload.material_ids and not payload.idea.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请先选择素材或输入一句话想法")
+    try:
+        return prepare_wechat_writing_brief(
+            db=db,
+            user_id=current_user.id,
+            material_ids=payload.material_ids,
+            idea=payload.idea,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except WechatMpWritingBriefSourceError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
 
 
 @router.get("/{article_id}", response_model=WechatMpArticleResponse)

@@ -2046,6 +2046,93 @@ def test_writer_requests_a_visual_cover_scene_instead_of_a_title_repetition():
     assert "主题结构是主体，角色只作辅助" in _WRITER_PROMPT
 
 
+def test_prepare_wechat_writing_brief_uses_material_and_records_usage(api_client, auth_headers, monkeypatch):
+    from backend.app.models import UsageRecord
+    from backend.app.services import wechat_mp_writer_service as writer
+
+    captured = {}
+
+    def fake_call(*, idea, source_material, model_name, **kwargs):
+        captured.update(idea=idea, source_material=source_material)
+        return {
+            "title": "范围管理高频考点",
+            "topic": "梳理范围流程与易错关系",
+            "target_reader": "软考考生",
+            "tone": "清晰紧凑",
+            "input_tokens": 40,
+            "output_tokens": 20,
+            "model_name": model_name,
+        }
+
+    monkeypatch.setattr(writer, "_call_writing_brief_model", fake_call, raising=False)
+    client, session_factory = api_client
+    material = client.post(
+        "/api/platforms/wechat-mp/materials",
+        json={"title": "范围资料", "content": "规划→收集→定义→WBS→确认→控制"},
+        headers=auth_headers,
+    ).json()
+    response = client.post(
+        "/api/platforms/wechat-mp/articles/writing-brief",
+        json={"material_ids": [material["id"]], "idea": "突出考试区别"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["title"] == "范围管理高频考点"
+    assert "范围资料" in captured["source_material"]
+    assert captured["idea"] == "突出考试区别"
+    session = session_factory()
+    try:
+        assert session.query(UsageRecord).filter_by(platform="wechat_mp", step="prepare_writing_brief").count() == 1
+    finally:
+        session.close()
+
+
+def test_prepare_wechat_writing_brief_accepts_idea_without_material(api_client, auth_headers, monkeypatch):
+    from backend.app.services import wechat_mp_writer_service as writer
+
+    monkeypatch.setattr(writer, "_call_writing_brief_model", lambda **kwargs: {
+        "title": "一个人的阅读史",
+        "topic": "从第一本推理小说谈阅读记忆",
+        "target_reader": "普通读者",
+        "tone": "克制",
+        "input_tokens": 10,
+        "output_tokens": 10,
+        "model_name": kwargs["model_name"],
+    }, raising=False)
+    client, _ = api_client
+    response = client.post(
+        "/api/platforms/wechat-mp/articles/writing-brief",
+        json={"material_ids": [], "idea": "写我读的第一本推理小说"},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["topic"] == "从第一本推理小说谈阅读记忆"
+
+
+def test_prepare_wechat_writing_brief_rejects_empty_source(api_client, auth_headers):
+    client, _ = api_client
+    response = client.post(
+        "/api/platforms/wechat-mp/articles/writing-brief",
+        json={"material_ids": [], "idea": "   "},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 400
+
+
+def test_prepare_wechat_writing_brief_hides_unavailable_material(api_client, auth_headers):
+    client, _ = api_client
+    response = client.post(
+        "/api/platforms/wechat-mp/articles/writing-brief",
+        json={"material_ids": [999999], "idea": ""},
+        headers=auth_headers,
+    )
+
+    assert response.status_code == 404
+
+
 def test_create_wechat_mp_article_can_use_material_library_items(api_client, auth_headers, monkeypatch):
     from backend.app.models import WechatMpArticleMaterial
     from backend.app.services import wechat_mp_writer_service as writer

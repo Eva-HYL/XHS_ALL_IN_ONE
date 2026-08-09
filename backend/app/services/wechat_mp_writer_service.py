@@ -24,6 +24,15 @@ JSON 必须包含 title、markdown_body、digest、cover_brief。正文使用 Ma
 cover_brief 必须描述可直接绘制的封面场景，明确主题物、结构关系和主角动作，不能只复述文章标题。
 封面应让主题结构是主体，角色只作辅助；不要输出画幅、尺寸、水印、签名或让模型渲染标题的指令。"""
 
+_WRITING_BRIEF_PROMPT = """你是微信公众号选题编辑。根据用户想法和资料整理一份精简写作简报，并只返回 JSON。
+JSON 必须包含 title、topic、target_reader、tone，四个字段都必须是中文字符串。
+title 是可直接使用的文章标题；topic 概括文章主题、核心观点和写作范围；target_reader 描述目标读者；tone 描述语气和表达风格。
+只依据输入资料提炼，不虚构资料中没有的事实，不输出正文、大纲、Markdown 或额外字段。"""
+
+
+class WechatMpWritingBriefSourceError(ValueError):
+    pass
+
 
 def _selected_material_ids(material_ids: list[int]) -> list[int]:
     seen = set()
@@ -112,6 +121,93 @@ def _call_writer_model(
         "input_tokens": int(usage.get("prompt_tokens", 0)),
         "output_tokens": int(usage.get("completion_tokens", 0)),
         "model_name": model_name,
+    }
+
+
+def _call_writing_brief_model(
+    *, idea: str, source_material: str, model_name: str, base_url: str = "", api_key: str = "",
+) -> dict[str, Any]:
+    """Call the text model through a narrow seam that brief tests can replace."""
+    base_url = (base_url or os.getenv("WECHAT_MP_WRITER_BASE_URL", "")).rstrip("/")
+    api_key = api_key or os.getenv("WECHAT_MP_WRITER_API_KEY", "")
+    if not base_url or not api_key:
+        raise ValueError("WeChat MP writer model is not configured")
+    try:
+        response = requests.post(
+            f"{base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={
+                "model": model_name,
+                "messages": [
+                    {"role": "system", "content": _WRITING_BRIEF_PROMPT},
+                    {"role": "user", "content": json.dumps({
+                        "idea": idea,
+                        "source_material": source_material,
+                    }, ensure_ascii=False)},
+                ],
+                "response_format": {"type": "json_object"},
+            },
+            timeout=120,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        result = json.loads(payload["choices"][0]["message"]["content"])
+    except (requests.RequestException, ValueError, KeyError, IndexError, TypeError, json.JSONDecodeError) as exc:
+        raise ValueError("WeChat MP writing brief model returned malformed JSON") from exc
+    required = ("title", "topic", "target_reader", "tone")
+    if not isinstance(result, dict) or not all(isinstance(result.get(key), str) for key in required):
+        raise ValueError("WeChat MP writing brief response is missing fields")
+    if not result["title"].strip() or not result["topic"].strip():
+        raise ValueError("WeChat MP writing brief response is empty")
+    usage = payload.get("usage") or {}
+    return {
+        **result,
+        "input_tokens": int(usage.get("prompt_tokens", 0)),
+        "output_tokens": int(usage.get("completion_tokens", 0)),
+        "model_name": model_name,
+    }
+
+
+def prepare_wechat_writing_brief(
+    *, db: Session, user_id: int, material_ids: list[int], idea: str,
+) -> dict[str, Any]:
+    from backend.app.services.wechat_mp_model_service import resolve_wechat_mp_model
+
+    selected_materials = _load_selected_materials(db, user_id, material_ids)
+    source_material = _compose_source_material("", selected_materials)
+    normalized_idea = idea.strip()
+    if not normalized_idea and not source_material.strip():
+        raise WechatMpWritingBriefSourceError("请先选择素材或输入一句话想法")
+    model = resolve_wechat_mp_model(db=db, user_id=user_id, model_type="text")
+    result = _call_writing_brief_model(
+        idea=normalized_idea,
+        source_material=source_material,
+        model_name=model.model_name,
+        base_url=model.base_url,
+        api_key=model.api_key,
+    )
+    usage = record_text_usage(
+        db=db,
+        user_id=user_id,
+        pipeline_run_id=None,
+        step="prepare_writing_brief",
+        model=result["model_name"],
+        input_tokens=int(result["input_tokens"]),
+        output_tokens=int(result["output_tokens"]),
+        platform="wechat_mp",
+        resource_type="wechat_mp_writing_brief",
+        resource_id=None,
+    )
+    return {
+        "title": result["title"].strip()[:255],
+        "topic": result["topic"].strip(),
+        "target_reader": result["target_reader"].strip(),
+        "tone": result["tone"].strip(),
+        "cost_estimate": {
+            "currency": "CNY",
+            "total_yuan": str(usage.cost_yuan),
+            "calls": 1,
+        },
     }
 
 
