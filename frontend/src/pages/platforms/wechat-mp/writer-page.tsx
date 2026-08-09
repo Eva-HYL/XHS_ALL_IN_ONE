@@ -442,9 +442,8 @@ export function WechatMpWriterPage() {
   }
 
   const eligibleImagePrompts = prompts.filter((prompt) =>
-    prompt.skill_name !== "none"
-    && prompt.status !== "ignored"
-    && prompt.status !== "generated"
+    (prompt.status === "prompt_ready" || prompt.status === "failed")
+    && prompt.skill_name !== "none"
     && !isPromptImageComplete(prompt)
     && activeImagePromptId !== prompt.id
     && !imageQueueRef.current.includes(prompt.id)
@@ -502,7 +501,9 @@ export function WechatMpWriterPage() {
   }
 
   function enqueueAllImages() {
-    const promptIds = eligibleImagePrompts.map((prompt) => prompt.id);
+    const promptIds = eligibleImagePrompts
+      .map((prompt) => prompt.id)
+      .filter((promptId) => !imageQueueRef.current.includes(promptId));
     if (promptIds.length === 0) return;
     imageQueueRef.current = [...imageQueueRef.current, ...promptIds];
     setImageQueue([...imageQueueRef.current]);
