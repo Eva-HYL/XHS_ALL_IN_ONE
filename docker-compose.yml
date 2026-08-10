@@ -8,7 +8,7 @@ services:
     build: .
     container_name: spider-xhs
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
       - ./data:/app/data
       - ./config:/app/config
@@ -38,6 +38,17 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.xhs-platforms.rule=Host(`anyflow.link`)
+      - traefik.http.routers.xhs-platforms.entrypoints=websecure
+      - traefik.http.routers.xhs-platforms.tls=true
+      - traefik.http.routers.xhs-platforms.tls.certresolver=myresolver
+      - traefik.http.routers.xhs-platforms.service=xhs-platforms
+      - traefik.http.services.xhs-platforms.loadbalancer.server.port=8000
+    networks:
+      - default
+      - proxy
 
   # --------------------------------------------------------------------------
   # MySQL (optional, for production deployments)
@@ -67,3 +78,7 @@ services:
 
 # volumes:
 #   mysql_data:
+
+networks:
+  proxy:
+    external: true

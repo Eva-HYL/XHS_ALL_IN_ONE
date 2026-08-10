@@ -17,6 +17,12 @@ def test_health_endpoint_returns_ok():
     assert response.json() == {"status": "ok", "service": "spider-xhs"}
 
 
+def test_api_root_returns_service_status():
+    response = client.get("/api")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "service": "spider-xhs"}
+
+
 def test_platforms_endpoint_exposes_product_registry():
     response = client.get("/api/platforms")
     assert response.status_code == 200

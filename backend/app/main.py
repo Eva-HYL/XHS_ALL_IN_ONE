@@ -59,6 +59,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.get("/api", tags=["health"])
     @app.get("/api/health", tags=["health"])
     def health() -> dict:
         return {"status": "ok", "service": "spider-xhs"}
