@@ -43,7 +43,7 @@ services:
       - traefik.http.routers.xhs-platforms.rule=Host(`anyflow.link`)
       - traefik.http.routers.xhs-platforms.entrypoints=websecure
       - traefik.http.routers.xhs-platforms.tls=true
-      - traefik.http.routers.xhs-platforms.tls.certresolver=myresolver
+      - traefik.http.routers.xhs-platforms.tls.certresolver=platformresolver
       - traefik.http.routers.xhs-platforms.service=xhs-platforms
       - traefik.http.services.xhs-platforms.loadbalancer.server.port=8000
     networks:
